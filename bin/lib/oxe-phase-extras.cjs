@@ -15,8 +15,25 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const git = (root, args) => spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+const git = (root, args) => spawnSync('git', ['-c', 'core.quotepath=false', ...args], { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
 const money = (n) => Math.round((Number(n) || 0) * 10000) / 10000;
+const isDone = (t) => Boolean(t && (t.done === true || t.status === 'done'));
+const isInactive = (t) => Boolean(t && (t.superseded || t.merged_into || t.status === 'superseded'));
+const normPath = (f) => String(typeof f === 'string' ? f : (f && f.path) || '').replace(/\\/g, '/').replace(/^\.\//, '').trim();
+
+function matchesCriterion(a, b) {
+  const x = String(a || '').trim().toUpperCase();
+  const y = String(b || '').trim().toUpperCase();
+  return Boolean(x && y && (x === y || x.startsWith(`${y}.`) || y.startsWith(`${x}.`)));
+}
+
+function taskVerifyCommands(t) {
+  const v = t && t.verify;
+  if (!v) return [];
+  if (typeof v === 'string') return [v];
+  if (Array.isArray(v)) return v.map(String);
+  return [...(Array.isArray(v.commands) ? v.commands.map(String) : []), ...(v.command ? [String(v.command)] : [])];
+}
 
 // ── (a) cost ──────────────────────────────────────────────────────────────────────────────────────────────────
 function costReport(events, doc, changes) {
@@ -34,14 +51,17 @@ function costReport(events, doc, changes) {
     if (attempt > 1) { r.retry_cost_usd += Number(p.cost_usd) || 0; r.retry_ms += Number(p.elapsed_ms) || 0; }
   }
   for (const r of tasks.values()) { r.cost_usd = money(r.cost_usd); r.retry_cost_usd = money(r.retry_cost_usd); }
-  const planTasks = (doc && Array.isArray(doc.tasks) ? doc.tasks : []).filter(Boolean);
-  const done = planTasks.filter((t) => t.done === true);
-  const pending = planTasks.filter((t) => t.done !== true && !['external_delivery', 'verify_only'].includes(t.kind));
+  const planTasks = (doc && Array.isArray(doc.tasks) ? doc.tasks : []).filter((t) => t && !isInactive(t));
+  const done = planTasks.filter(isDone);
+  const pending = planTasks.filter((t) => !isDone(t) && !['external_delivery', 'verify_only'].includes(t.kind));
   const doneCosts = done.map((t) => tasks.get(t.id)).filter(Boolean);
   const avg = doneCosts.length ? doneCosts.reduce((a, r) => a + r.cost_usd, 0) / doneCosts.length : null;
   const avgMs = doneCosts.length ? doneCosts.reduce((a, r) => a + r.ms, 0) / doneCosts.length : null;
-  const crs = (changes || []).map((cr) => {
-    const ids = new Set([...(cr.tasks || []), ...planTasks.filter((t) => (t.acceptance || []).some((a) => (cr.criteria || []).includes(a)) && t.reopened && t.reopened.some((x) => x.by === cr.id)).map((t) => t.id)]);
+  const crs = (changes || []).filter(Boolean).map((cr) => {
+    const ids = new Set([
+      ...(cr.tasks || []),
+      ...planTasks.filter((t) => (t.acceptance || []).some((a) => (cr.criteria || []).some((c) => matchesCriterion(a, c))) && t.reopened && t.reopened.some((x) => x.by === cr.id)).map((t) => t.id),
+    ]);
     const cost = [...ids].reduce((a, id) => a + ((tasks.get(id) || {}).cost_usd || 0), 0);
     return { cr: cr.id, class: cr.class, tasks: [...ids], cost_usd: money(cost) };
   }).filter((c) => c.tasks.length);
@@ -60,10 +80,12 @@ const QFILE = (root) => path.join(root, '.oxe', 'QUARANTINE.json');
 function readQuarantine(root) { try { return JSON.parse(fs.readFileSync(QFILE(root), 'utf8')); } catch { return { schema_version: 1, entries: [] }; } }
 function quarantine(root, entry) {
   const q = readQuarantine(root);
-  const key = `${entry.task || ''}|${entry.command}`;
+  if (!entry || !String(entry.command || '').trim()) return q;
+  const cmd = String(entry.command).trim();
+  const key = `${entry.task || ''}|${cmd}`;
   const prev = q.entries.find((e) => `${e.task || ''}|${e.command}` === key);
   if (prev) { prev.count = (prev.count || 1) + 1; prev.last_at = entry.at; prev.evidence = entry.evidence || prev.evidence; }
-  else q.entries.push({ ...entry, count: 1, first_at: entry.at, last_at: entry.at });
+  else q.entries.push({ ...entry, command: cmd, count: 1, first_at: entry.at, last_at: entry.at });
   fs.mkdirSync(path.dirname(QFILE(root)), { recursive: true });
   fs.writeFileSync(QFILE(root), `${JSON.stringify(q, null, 2)}\n`);
   return q;
@@ -71,9 +93,12 @@ function quarantine(root, entry) {
 function quarantineWarnings(root, doc) {
   const q = readQuarantine(root);
   const out = [];
-  for (const e of q.entries) {
-    const users = ((doc && doc.tasks) || []).filter((t) => t && !t.done && [...((t.verify && t.verify.commands) || []), (t.verify && t.verify.command) || ''].some((c) => String(c).includes(e.command.slice(0, 60))));
-    if (users.length) out.push(`verify em quarentena (instável ${e.count}×, último ${e.last_at}): \`${e.command.slice(0, 80)}\` — usado por ${users.map((t) => t.id).join(', ')}; estabilize o teste ou isole o que ele depende de ordem/tempo`);
+  for (const e of q.entries || []) {
+    const cmd = String((e && e.command) || '').trim();
+    const needle = cmd.slice(0, 60);
+    if (!needle) continue;
+    const users = ((doc && doc.tasks) || []).filter((t) => t && !isDone(t) && !isInactive(t) && taskVerifyCommands(t).some((c) => c.includes(needle)));
+    if (users.length) out.push(`verify em quarentena (instável ${e.count}×, último ${e.last_at}): \`${cmd.slice(0, 80)}\` — usado por ${users.map((t) => t.id).join(', ')}; estabilize o teste ou isole o que ele depende de ordem/tempo`);
   }
   return out;
 }
@@ -82,14 +107,28 @@ function quarantineWarnings(root, doc) {
 function regressionImpact(root, checks, doc) {
   const testScope = require('./oxe-test-scope.cjs');
   const touchedBy = new Map();
-  for (const t of ((doc && doc.tasks) || []).filter((x) => x && !x.done)) for (const f of t.files || []) touchedBy.set(String(f).replace(/\\/g, '/'), [...(touchedBy.get(String(f).replace(/\\/g, '/')) || []), t.id]);
+  for (const t of ((doc && doc.tasks) || []).filter((x) => x && !isDone(x) && !isInactive(x))) {
+    for (const raw of t.files || []) {
+      const f = normPath(raw);
+      if (!f) continue;
+      const list = touchedBy.get(f) || [];
+      if (!list.includes(t.id)) touchedBy.set(f, [...list, t.id]);
+    }
+  }
   const hits = [];
+  const seen = new Set();
   for (const c of checks || []) {
-    const tests = [...new Set((String(c.command || '').match(/[\w./\\-]+\.(?:test|spec)\.[cm]?[jt]sx?\b/g) || []).map((f) => f.replace(/\\/g, '/')))];
+    if (!c) continue;
+    const tests = [...new Set((String(c.command || '').match(/[\w./\\-]+\.(?:test|spec)\.[cm]?[jt]sx?\b/g) || []).map((f) => f.replace(/\\/g, '/').replace(/^\.\//, '')))];
     for (const tf of tests) {
       for (const r of [{ path: tf, kind: 'test' }, ...testScope.testRequirements(root, tf)]) {
+        const key = `${c.id || ''}|${r.path}`;
+        if (seen.has(key)) continue;
         const ids = touchedBy.get(r.path);
-        if (ids) hits.push({ check: c.id, phase: c.regression_phase || null, file: r.path, tasks: ids });
+        if (ids) {
+          seen.add(key);
+          hits.push({ check: c.id, phase: c.regression_phase || null, file: r.path, tasks: ids });
+        }
       }
     }
   }
@@ -101,20 +140,25 @@ function rehearseRollback(root, base) {
   if (!base) return { ok: true, skipped: 'sem base_commit' };
   const commits = (git(root, ['rev-list', `${base}..HEAD`]).stdout || '').split(/\r?\n/).filter(Boolean);
   if (!commits.length) return { ok: true, commits: 0 };
-  const wt = path.join(root, '.oxe', 'rollback-ws', `r-${Date.now().toString(36)}`);
-  fs.mkdirSync(path.dirname(wt), { recursive: true });
+  const wsDir = path.join(root, '.oxe', 'rollback-ws');
+  fs.mkdirSync(wsDir, { recursive: true });
+  const stamp = Date.now().toString(36);
+  let wt = path.join(wsDir, `r-${stamp}`);
+  let seq = 1;
+  while (fs.existsSync(wt)) wt = path.join(wsDir, `r-${stamp}-${seq++}`);
   const add = git(root, ['worktree', 'add', '-q', '--detach', wt, 'HEAD']);
   if (add.status !== 0) return { ok: false, error: `worktree: ${add.stderr.trim()}` };
   try {
     const merges = (git(root, ['rev-list', '--merges', `${base}..HEAD`]).stdout || '').trim();
     const r = merges
       ? { status: 1, stderr: 'a fase tem merges: reverta-os com -m <pai> à mão' }
-      : spawnSync('git', ['revert', '--no-commit', '--no-edit', `${base}..HEAD`], { cwd: wt, encoding: 'utf8', windowsHide: true, env: { ...process.env, GIT_EDITOR: 'true' } });
+      : spawnSync('git', ['-c', 'core.quotepath=false', 'revert', '--no-commit', '--no-edit', `${base}..HEAD`], { cwd: wt, encoding: 'utf8', windowsHide: true, env: { ...process.env, GIT_EDITOR: 'true' } });
     const conflicts = (git(wt, ['diff', '--name-only', '--diff-filter=U']).stdout || '').split(/\r?\n/).filter(Boolean);
     return { ok: r.status === 0 && !conflicts.length, commits: commits.length, conflicts, error: r.status === 0 ? null : String(r.stderr || '').trim().split(/\r?\n/).slice(-2).join(' · ') };
   } finally {
     git(wt, ['revert', '--abort']);
     git(root, ['worktree', 'remove', '--force', wt]); // no links inside: a plain checkout of HEAD
+    try { fs.rmSync(wt, { recursive: true, force: true }); } catch { /* ignore */ }
     git(root, ['worktree', 'prune']);
   }
 }

@@ -205,6 +205,8 @@ function planJson(phase) {
 
 function pack(phase) {
   return {
+    // as plan build writes it once its own checks pass (OXB-C25)
+    ready: true,
     tasks: phase.tasks.map((t) => ({
       id: t.id, mode: 'mutating', exact_paths: t.files, write_set: 'closed',
       symbols: t.symbols.map(([file, name]) => ({ kind: 'function', name, path: file })),

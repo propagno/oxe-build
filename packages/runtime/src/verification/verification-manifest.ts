@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import type { VerificationStatus } from '../models/verification-result';
 import type { CheckResult } from './verification-compiler';
+import { isRunnerTimeoutOnly } from './runner-timeout';
 
 export type VerificationProfile = 'quick' | 'standard' | 'critical';
 
@@ -31,6 +32,8 @@ export interface ManifestCheck {
   tests_executed?: number | null;
   /** Why a check did not pass (e.g. `no_tests_executed`, `test_file_missing: …`). */
   error?: string | null;
+  /** The check failed on a runner timeout only and ran once more by itself: the first outcome and the rerun's. */
+  rerun?: CheckResult['rerun'];
 }
 
 export interface VerificationManifest {
@@ -107,10 +110,21 @@ const PROFILE_REQUIRED_CHECKS: Record<VerificationProfile, FailureClass[]> = {
   critical: ['deterministic', 'policy_failure', 'evidence_missing', 'flaky'],
 };
 
+const INFRA_SIGNATURE = /\b(dial tcp|connectex|forcibly closed by the remote host|WSAE[A-Z]+|remote end hung up|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|socket hang up|TLS handshake timeout|getaddrinfo|i\/o timeout|A connection attempt failed|HTTP (502|503|504)|API rate limit)\b/i;
+
 export function classifyFailure(result: CheckResult): FailureClass | null {
   if (result.status === 'pass' || result.status === 'skip') return null;
   if (result.error && (result.error.toLowerCase().includes('timeout') || result.error.toLowerCase().includes('timed out'))) return 'timeout';
+  // A test runner's per-test timeout with no failed assertion is load or a slow start, never "deterministic": flaky
+  // when the rerun came out different, timeout when it timed out again.
+  if (result.runner_timeout || (result.rerun && result.rerun.reason === 'runner_timeout')) {
+    return result.rerun && result.rerun.status !== result.rerun.first.status ? 'flaky' : 'timeout';
+  }
+  if (isRunnerTimeoutOnly(`${result.stdout}\n${result.stderr}`)) return 'timeout';
   if (result.exit_code === null && result.error) return 'env_setup';
+  // a network / infrastructure signature in the output (the runner, gh, a registry) is env_setup, never a defect of
+  // the code (OxeSpace 14/11: gh "dial tcp … connectex" from remote-verify was called "deterministic")
+  if (INFRA_SIGNATURE.test(`${result.stdout || ''}\n${result.stderr || ''}\n${result.error || ''}`)) return 'env_setup';
   if (result.stderr.toLowerCase().includes('policy') || result.stderr.toLowerCase().includes('denied')) {
     return 'policy_failure';
   }
@@ -144,6 +158,7 @@ export function buildManifest(
     skip_reason: r.skip_reason ?? null,
     tests_executed: r.tests_executed ?? null,
     error: r.status === 'pass' ? null : r.error ? r.error.slice(0, 500) : null,
+    ...(r.rerun ? { rerun: r.rerun } : {}),
   }));
 
   const isManual = (c: ManifestCheck): boolean => c.status === 'skip' && c.skip_reason === 'needs_structured_check';
@@ -189,7 +204,7 @@ export function buildRiskLedger(
       work_item_id: manifest.work_item_id,
       check_id: check.check_id,
       failure_class: check.failure_class,
-      description: `Check ${check.check_id} ${check.status}: ${check.failure_class}`,
+      description: `Check ${check.check_id} ${check.status}: ${check.failure_class}${check.rerun ? ` (timeout do runner; rodou de novo sozinho: ${check.rerun.first.status} → ${check.rerun.status})` : ''}`,
       severity: check.failure_class === 'policy_failure' || check.failure_class === 'deterministic'
         ? 'high'
         : check.failure_class === 'evidence_missing'

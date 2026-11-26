@@ -45,6 +45,8 @@ export interface NodePolicy {
      * preflight then blocked the whole run.
      */
     external_dependency?: string[];
+    /** Internal runtime waits held by the plan itself (`scope_insufficient:` / `waiting_shared_files:`), never an external delivery. */
+    runtime_wait?: string[];
     /**
      * No agent, no cost: the node only runs its verify (`kind: verify_only` / `external_delivery`, work delivered by
      * another path). Green completes it; red leaves it waiting.

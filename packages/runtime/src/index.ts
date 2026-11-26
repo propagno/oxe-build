@@ -12,6 +12,7 @@ export * from './evidence/index';
 export {
   compile as compileVerification,
   runCheck,
+  isRunnerTimeoutOnly,
   runSuite,
   executeSuite,
   verifyRun,
@@ -19,6 +20,7 @@ export {
   extractCommandFromHowToVerify,
   looksLikeShellCommand,
   sha256File,
+  frozenFileMatches,
 } from './verification/verification-compiler';
 export * from './verification/test-report-parsers';
 export type {

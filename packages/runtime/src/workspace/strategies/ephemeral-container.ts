@@ -1,5 +1,7 @@
 import { execFileSync, spawnSync } from 'child_process';
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import type { WorkspaceManager, WorkspaceRequest } from '../workspace-manager';
 import type { WorkspaceLease, SnapshotRef } from '../../models/workspace';
 import { GitWorktreeManager } from './git-worktree';
@@ -10,6 +12,43 @@ export interface ContainerOptions {
   extraEnv?: Record<string, string>;
   /** Gracefully fall back to git_worktree if Docker is unavailable */
   fallback?: boolean;
+  /** Network isolation mode inside the container (default 'none'). */
+  networkMode?: 'none' | 'bridge';
+  /** Mount control-plane folders (.oxe, .github/workflows) read-only inside the container (default true). */
+  readOnlyControlPlane?: boolean;
+  /** Optional resource limits (e.g. '2g', '2'). */
+  memoryLimit?: string;
+  cpus?: string;
+}
+
+/** Build hardened `docker run` arguments with network isolation, control-plane read-only mounts, and resource caps. */
+export function buildDockerRunArgs(projectRoot: string, opts: ContainerOptions): string[] {
+  const envArgs = Object.entries(opts.extraEnv ?? {}).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
+  const networkArgs = ['--network', opts.networkMode || 'none'];
+  const resourceArgs = [
+    ...(opts.memoryLimit ? ['--memory', opts.memoryLimit] : []),
+    ...(opts.cpus ? ['--cpus', opts.cpus] : []),
+  ];
+  const roMounts: string[] = [];
+  if (opts.readOnlyControlPlane !== false) {
+    for (const rel of ['.oxe', '.github/workflows']) {
+      const abs = path.join(projectRoot, rel);
+      if (fs.existsSync(abs)) {
+        roMounts.push('-v', `${abs}:${opts.mountPath.replace(/\/+$/, '')}/${rel}:ro`);
+      }
+    }
+  }
+  return [
+    'run', '-d', '--rm',
+    ...networkArgs,
+    ...resourceArgs,
+    '-v', `${projectRoot}:${opts.mountPath}`,
+    ...roMounts,
+    '-w', opts.mountPath,
+    ...envArgs,
+    opts.image,
+    'sleep', '3600',
+  ];
 }
 
 function isDockerAvailable(): boolean {
@@ -48,17 +87,11 @@ export class EphemeralContainerManager implements WorkspaceManager {
   async allocate(req: WorkspaceRequest): Promise<WorkspaceLease> {
     if (this.useFallback) return this.fallbackManager.allocate(req);
 
-    const wsId = `ws-container-${req.work_item_id}-a${req.attempt_number}`;
-    const envArgs = Object.entries(this.opts.extraEnv ?? {}).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
-
-    const result = spawnSync('docker', [
-      'run', '-d',
-      '-v', `${this.projectRoot}:${this.opts.mountPath}`,
-      '-w', this.opts.mountPath,
-      ...envArgs,
-      this.opts.image,
-      'sleep', '3600',
-    ], { encoding: 'utf8' });
+    const safeWorkItem = String(req.work_item_id).replace(/[^A-Za-z0-9._-]/g, '-');
+    const suffix = crypto.randomBytes(3).toString('hex');
+    const wsId = `ws-container-${safeWorkItem}-a${req.attempt_number}-${suffix}`;
+    const dockerArgs = buildDockerRunArgs(this.projectRoot, this.opts);
+    const result = spawnSync('docker', dockerArgs, { encoding: 'utf8', windowsHide: true });
 
     if (result.status !== 0) {
       if (this.opts.fallback !== false) {

@@ -192,6 +192,9 @@ function summarizeImplementationPack(filePath, planTasks) {
   }
   if (data.ready === false) {
     criticalGaps.push('IMPLEMENTATION-PACK.json com ready=false');
+  } else if (data.ready !== true) {
+    // OXB-C25: a missing flag is a named gap, never an empty "not_ready"
+    criticalGaps.push('implementation_pack:ready missing — IMPLEMENTATION-PACK.json sem "ready": true (rode oxe-cc plan pack ready --by <papel>)');
   }
   if (Array.isArray(data.critical_gaps) && data.critical_gaps.length) {
     criticalGaps.push(...data.critical_gaps.map((gap) => `IMPLEMENTATION-PACK.json: ${String(gap)}`));
@@ -307,7 +310,15 @@ function specRequiresVisualInput(specPath) {
   if (/##+\s*entradas visuais e interpreta[çc][ãa]o/i.test(raw) && !/not_applicable|não aplicável|nao aplicavel/i.test(raw)) {
     return true;
   }
-  return /\b(visual-?inputs?|visual attachment|screenshot|mockup|imagem anexada|anexo visual)\b/i.test(text);
+  // the prose only: a code span, a fenced block or a path (tests/…/oxe107-device-screenshot.test.ts) names a file,
+  // not a visual input of the spec (OxeSpace 14/11, F3 preflight)
+  const prose = text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`[^`\n]*`/g, ' ')
+    .replace(/[\w.-]*[/\\][\w./\\-]+/g, ' ')
+    .replace(/\b[\w-]+\.(test|spec)\.[a-z]+\b/g, ' ')
+    .replace(/[\w-]*-(screenshot|mockup)[\w.-]*|[\w.-]*(screenshot|mockup)-[\w.-]*/g, ' ');
+  return /(^|[^\w-])(visual-?inputs?|visual attachment|screenshot|mockup|imagem anexada|anexo visual)($|[^\w-])/i.test(prose);
 }
 
 function normalizeInspectionStatus(value) {
@@ -324,7 +335,9 @@ function summarizeVisualInputs(paths = {}) {
   const json = readJsonIfExists(jsonPath);
   const mdExists = Boolean(readTextIfExists(mdPath));
   const exists = Boolean(json.ok || mdExists);
-  const applicable = specRequires || exists;
+  // an explicit "not_applicable" in VISUAL-INPUTS.json ends it (a phase with no visual input says so once)
+  const declaredNa = json.ok && json.data && /^not_applicable$/i.test(String(json.data.visualInputReadiness || json.data.status || ''));
+  const applicable = !declaredNa && (specRequires || exists);
   /** @type {string[]} */
   const criticalGaps = [];
   if (!applicable) {
@@ -514,14 +527,23 @@ function buildExecutionRationality(paths = {}) {
   const planTasks = parsePlanTasks(paths.plan || null);
   const externalRefs = readExternalRefs(paths.planAgents || null);
   const implementationPack = summarizeImplementationPack(paths.implementationPackJson || null, planTasks);
-  const referenceAnchors = summarizeReferenceAnchors(paths.referenceAnchors || null, externalRefs);
-  const fixturePack = summarizeFixturePack(paths.fixturePackJson || null, planTasks, implementationPack);
+  let referenceAnchors = summarizeReferenceAnchors(paths.referenceAnchors || null, externalRefs);
+  let fixturePack = summarizeFixturePack(paths.fixturePackJson || null, planTasks, implementationPack);
+  // lean: REFERENCE-ANCHORS and FIXTURE-PACK are optional files. Absent, they are not a gap (unless the plan cites
+  // external references, which only the anchors resolve); present, they are validated as always.
+  if (paths.lean) {
+    const absent = (file) => !file || !fs.existsSync(file);
+    if (absent(paths.referenceAnchors) && externalRefs.length === 0) referenceAnchors = { ...referenceAnchors, ready: true, criticalGaps: [], missingCriticalCount: 0, optional_absent: true };
+    if (absent(paths.fixturePackJson)) fixturePack = { ...fixturePack, ready: true, criticalGaps: [], optional_absent: true };
+  }
   const visualInputs = summarizeVisualInputs({
     spec: paths.spec || null,
     visualInputsJson: paths.visualInputsJson || null,
     visualInputsMd: paths.visualInputsMd || null,
   });
-  const applicable = Boolean(paths.plan && fs.existsSync(paths.plan));
+  // `assumeApplicable`: plan lint lists what the preflight WILL require once PLAN.md exists — a hand-written PLAN.json
+  // without PLAN.md learned of the packs only on the second round.
+  const applicable = Boolean((paths.plan && fs.existsSync(paths.plan)) || paths.assumeApplicable);
   const criticalExecutionGaps = applicable
     ? Array.from(
       new Set([

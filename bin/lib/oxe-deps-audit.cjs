@@ -44,9 +44,21 @@ function nativeOf(lock) {
   return out;
 }
 
+const PKG_NAME_RE = /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
+const NON_REGISTRY_SPEC_RE = /^(?:workspace:|file:|link:|portal:|git(?:\+|s?:)|github:|gitlab:|bitbucket:|https?:)/i;
+
+function resolveRegistryTarget(name, spec) {
+  const s = String(spec || '').trim();
+  if (NON_REGISTRY_SPEC_RE.test(s)) return null;
+  const alias = /^npm:((?:@[^/@]+\/)?[^@]+)/i.exec(s);
+  return alias ? alias[1] : name;
+}
+
 function realRegistry(name) {
-  const r = spawnSync('npm', ['view', name, 'name'], { encoding: 'utf8', windowsHide: true, shell: process.platform === 'win32', timeout: 30000 });
-  return r.status === 0 && String(r.stdout || '').trim() === name;
+  const clean = String(name || '').trim();
+  if (!PKG_NAME_RE.test(clean)) return false;
+  const r = spawnSync('npm', ['view', clean, 'name'], { encoding: 'utf8', windowsHide: true, shell: process.platform === 'win32', timeout: 30000 });
+  return r.status === 0 && String(r.stdout || '').trim() === clean;
 }
 
 function realAudit(lockText) {
@@ -71,7 +83,9 @@ function realAudit(lockText) {
 
 /** @returns {{ ran: boolean, blocks: string[], new_packages, missing, lookalikes, new_advisories, native_added, native_removed }} */
 function auditDeps(root, base, options = {}) {
-  const changed = (git(root, ['diff', '--name-only', base, '--', 'package.json', 'package-lock.json']).stdout || '').split(/\r?\n/).filter(Boolean);
+  const trackedDiff = (git(root, ['diff', '--name-only', base, '--', 'package.json', 'package-lock.json']).stdout || '').split(/\r?\n/).filter(Boolean);
+  const untracked = (git(root, ['ls-files', '--others', '--exclude-standard', '--', 'package.json', 'package-lock.json']).stdout || '').split(/\r?\n/).filter(Boolean);
+  const changed = [...new Set([...trackedDiff, ...untracked])];
   const res = { ran: changed.length > 0, blocks: [], new_packages: [], missing: [], lookalikes: [], new_advisories: [], native_added: [], native_removed: [] };
   if (!res.ran) return res;
   const pkgBefore = parse(git(root, ['show', `${base}:package.json`]).stdout || '');
@@ -82,8 +96,10 @@ function auditDeps(root, base, options = {}) {
   res.new_packages = Object.keys(now).filter((n) => !(n in before));
   const registry = options.registry || realRegistry;
   for (const n of res.new_packages) {
-    if (!registry(n)) { res.missing.push(n); res.blocks.push(`pacote ${n} não existe no registro`); continue; }
-    const near = POPULAR.find((p) => p !== n && lev(p, n.replace(/^@[^/]+\//, '')) === 1);
+    const target = resolveRegistryTarget(n, now[n]);
+    if (!target) continue;
+    if (!PKG_NAME_RE.test(target) || !registry(target)) { res.missing.push(n); res.blocks.push(`pacote ${n} não existe no registro`); continue; }
+    const near = POPULAR.find((p) => p !== target && lev(p, target.replace(/^@[^/]+\//, '')) === 1);
     if (near) res.lookalikes.push({ name: n, like: near });
   }
   const lockBefore = git(root, ['show', `${base}:package-lock.json`]).stdout || '';
@@ -92,11 +108,11 @@ function auditDeps(root, base, options = {}) {
   const audit = options.audit || realAudit;
   const advBefore = audit(lockBefore);
   const advNow = audit(lockNow);
-  const blockOn = new Set(options.block || ['high', 'critical']);
+  const blockOn = new Set((options.block || ['high', 'critical']).map((s) => String(s).toLowerCase()));
   for (const [k, v] of Object.entries(advNow)) {
     if (k in advBefore) continue;
     res.new_advisories.push(v);
-    if (blockOn.has(String(v.severity))) res.blocks.push(`advisory ${v.severity} nova em ${v.name}${v.id ? ` (${v.id})` : ''}${v.title ? `: ${v.title}` : ''}`);
+    if (blockOn.has(String((v && v.severity) || '').toLowerCase())) res.blocks.push(`advisory ${v.severity} nova em ${v.name}${v.id ? ` (${v.id})` : ''}${v.title ? `: ${v.title}` : ''}`);
   }
   const nb = nativeOf(parse(lockBefore));
   const nn = nativeOf(parse(lockNow));

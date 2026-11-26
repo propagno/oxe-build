@@ -19,6 +19,8 @@ export interface TaskResult {
     /** OXB-185: turns used and the cap of the attempt, when it ended at the cap. */
     turns_used?: number;
     turns_cap?: number;
+    /** OXB-C28-1: a policy refusal whose trigger came from tool outputs of earlier turns (not from the pack). */
+    policy_trigger?: 'tool_output' | 'prompt';
     /** Every verify segment's output with headers (1.21.2, OXB-066), for the attempt log. */
     verify_log?: string;
 }
@@ -58,6 +60,18 @@ export interface SchedulerOptions {
         quota?: string[];
     };
     /**
+     * OxeSpace 15/11 (Celular F3 T9): a refusal by the model's usage policy is never retried automatically — but a
+     * classifier false positive passed on a plain retry before. With this (runtime execute --retry-policy-once, chosen by
+     * a person) each task gets ONE more attempt after a policy refusal, even past its max_retries.
+     */
+    retryPolicyOnce?: boolean;
+    /** OXB-C28-1: one automatic clean retry for a refusal triggered by tool outputs (default on; false = off). */
+    policyAutoRetry?: boolean;
+    /** Tasks this run already saw refused by policy (a later execute): their attempt 1 IS the one extra attempt. */
+    policyRefusedBefore?: string[];
+    /** Tasks whose one extra policy attempt was already spent in this run: blocked before any attempt (no model call). */
+    policyRetryExhausted?: string[];
+    /**
      * OXB-138: a task that exhausts its attempts is DEFERRED and the run goes on with every task that does not depend on
      * it (its dependents end `blocked_by_deferred`). false keeps the old stop-at-the-failed-wave behavior.
      */
@@ -74,6 +88,8 @@ export interface SchedulerOptions {
     maxQuotaWaitMs?: number;
     /** OXB-204: max consecutive automatic 429 waits per attempt before pausing as quota (default: 3). */
     maxQuotaWaits?: number;
+    /** OXB-C1 (#6): run every top-level `&&` verify segment and report all red segments at once instead of stopping at the first failure. */
+    allSegments?: boolean;
     /** Injectable sleep for deterministic tests. */
     sleep?: (ms: number) => Promise<void>;
 }
@@ -150,6 +166,11 @@ export interface SchedulerContext {
     auditTrail?: AuditTrail;
     quota?: RunQuota;
     budget?: RunBudget;
+    /**
+     * OxeSpace 14/11: a `runtime pause` from another process. Checked before every node starts: the task in progress
+     * finishes, the next one never starts. Returns the reason when a pause was requested, else null.
+     */
+    pauseRequested?: () => string | null;
     policyActor?: string;
     onEvent?: (event: OxeEvent) => void;
     options?: SchedulerOptions;
@@ -196,6 +217,8 @@ export declare class Scheduler {
     private runNode;
     /** Abort keeps the progress made so far: an aborted run is recoverable, not a blank slate. */
     private abortRun;
+    /** A pause requested from outside (`runtime pause`) takes effect before the next node, never in the middle of one. */
+    private checkRequestedPause;
     /** OXB-120: pause the run for a failure that is not the task's (environment / quota). */
     private pauseForFailure;
     pause(): void;
@@ -249,7 +272,21 @@ export interface VerifySegmentRun {
     check?: CheckResult;
     /** OXB-162: failed after an earlier segment of the same attempt passed the same files; rerun once. */
     flaky_suspect?: boolean;
+    /** OXB-C28-2: the segments (1-based) that ran in this one remote round trip; index is the failing (or last) one. */
+    merged?: number[];
 }
+/**
+ * OXB-C28-2: consecutive `… remote-verify … -- <cmd>` segments with the same runner prefix run as ONE remote job
+ * (`<prefix> -- "echo ===OXE-SEG-1=== && cmd1 && echo ===OXE-SEG-2=== && cmd2"`) — one push/queue/CI round trip
+ * instead of one per segment (polish2 T3: 8 segments, 2–5 min each). The markers name the failing segment.
+ * `members` are 0-based indexes into `segments`.
+ */
+export declare function groupRemoteSegments(segments: string[]): Array<{
+    command: string;
+    members: number[];
+}>;
+/** OXB-C28-2: the 0-based segment of a merged remote run that failed — the last marker the remote log printed. */
+export declare function remoteFailedMember(output: string, members: number[]): number;
 export interface VerifyNodeResult {
     status: string;
     gaps?: string[];
@@ -280,6 +317,6 @@ export declare function describeVerifyFailure(command: string | null | undefined
     index: number;
     total: number;
     command: string;
-} | null): string;
+} | null, segments?: VerifySegmentRun[]): string;
 /** Normalized failure fingerprint: timings, timestamps, hashes and temp paths removed. */
 export declare function verifyFailureSignature(check: CheckResult | undefined): string | null;

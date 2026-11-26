@@ -5,6 +5,8 @@ import { spawnSync } from 'child_process';
 import { parseTestReport, extractTestFileArgs, missingProofs, extractTestResults } from './test-report-parsers';
 import { shellInvocation, childProcessEnv, decodeConsoleOutput } from '../executor/shell-argv';
 import { checkExpectedExports } from './contract-exports';
+import { isRunnerTimeoutOnly } from './runner-timeout';
+export { isRunnerTimeoutOnly } from './runner-timeout';
 import type { ExpectedExport } from './contract-exports';
 import type { EvidenceType } from '../models/evidence';
 import type { VerificationStatus } from '../models/verification-result';
@@ -99,6 +101,8 @@ export interface CheckResult {
   duration_ms: number;
   error: string | null;
   evidence_refs?: string[];
+  /** Bench B55: the command already ran in this suite (same cwd/timeout); this check was judged on that output. */
+  reused_run?: boolean;
   /** Why a check was skipped (`needs_structured_check` = criterion has no executable verification). */
   skip_reason?: string | null;
   /** OXB-072: killed by the check timeout (status `error`, never `fail`). */
@@ -107,6 +111,13 @@ export interface CheckResult {
   tests_executed?: number | null;
   /** Evidence id of the structured summary record (kept out of `evidence_refs` so coverage counts real output only). */
   summary_evidence_ref?: string | null;
+  /**
+   * A failure whose only cause was a test runner's own per-test timeout ("Test timed out in 5000ms") — no assertion
+   * failed. Such a check is run once more by itself; `first` is the original outcome, the result is the rerun's.
+   */
+  rerun?: { reason: 'runner_timeout'; first: { status: VerificationStatus; duration_ms: number; error: string | null }; status: VerificationStatus; duration_ms: number } | null;
+  /** The failure was only a runner timeout (on the rerun too, when there was one). */
+  runner_timeout?: boolean;
 }
 
 export interface ExecutedVerificationSuite {
@@ -156,6 +167,22 @@ interface ParsedPlanLike {
   tasks: ParsedTaskLike[];
   /** PLAN.json `acceptance_tests` with the hashes frozen when the run was compiled. */
   acceptanceTests?: AcceptanceTestLike[];
+}
+
+/**
+ * OxeSpace 14/11 (OxeCode F3 close): the frozen regression of closed phases stores hashes taken with LF; with
+ * core.autocrlf the working copy is CRLF and every file read as "acceptance_tampered" although none differed from
+ * origin/main. A frozen file matches when its bytes, its LF form or its CRLF form hash to the frozen sha (the same
+ * line-ending rule as commit-task's frozen check).
+ */
+export function frozenFileMatches(absPath: string, sha: string): boolean {
+  let raw: Buffer;
+  try { raw = fs.readFileSync(absPath); } catch { return false; }
+  const h = (b: Buffer | string) => crypto.createHash('sha256').update(b).digest('hex');
+  if (h(raw) === sha) return true;
+  const text = raw.toString('utf8');
+  const lf = text.replace(/\r\n/g, '\n');
+  return h(lf) === sha || h(lf.replace(/\n/g, '\r\n')) === sha;
 }
 
 export function sha256File(absPath: string): string | null {
@@ -312,10 +339,52 @@ export function compile(
   };
 }
 
+/**
+ * Runs a check. A failure caused only by a test runner's per-test timeout (machine load, not the code: the same file
+ * passed alone in 4 s) is run once more by itself before it counts; both outcomes are kept.
+ */
 export async function runCheck(
   check: AcceptanceCheck,
   cwd: string,
   timeoutMs = 60_000
+): Promise<CheckResult> {
+  const first = await runCheckOnce(check, cwd, timeoutMs);
+  if (first.status !== 'fail' || !isRunnerTimeoutOnly(`${first.stdout}\n${first.stderr}`)) return first;
+  // the rerun is a real second run, never the memoized output of the first
+  const second = await runCheckOnce(check, cwd, timeoutMs, { fresh: true });
+  const stillTimeoutOnly = second.status === 'fail' && isRunnerTimeoutOnly(`${second.stdout}\n${second.stderr}`);
+  return {
+    ...second,
+    runner_timeout: stillTimeoutOnly,
+    rerun: {
+      reason: 'runner_timeout',
+      first: { status: first.status, duration_ms: first.duration_ms, error: first.error },
+      status: second.status,
+      duration_ms: second.duration_ms,
+    },
+  };
+}
+
+/**
+ * Bench B55 (Restitui F4: verify > 10 min, 111 checks): the regression of every closed phase and the phase's own checks
+ * ran the SAME command (`npm test`, the same scoped file) again and again on the same tree. Within one suite run an
+ * identical command (same cwd and timeout) runs once; every check that names it is still judged on its own (frozen
+ * files, files_exist, proves, unit report) against that output. OXE_VERIFY_NO_REUSE=1 turns it off.
+ */
+type CommandRun = { status: number | null; stdout: Buffer; stderr: Buffer; error?: Error; start: number; duration_ms: number };
+let commandMemo: Map<string, CommandRun> | null = null;
+
+function withCommandMemo<T>(fn: () => Promise<T>): Promise<T> {
+  if (commandMemo || process.env.OXE_VERIFY_NO_REUSE === '1') return fn();
+  commandMemo = new Map();
+  return fn().finally(() => { commandMemo = null; });
+}
+
+async function runCheckOnce(
+  check: AcceptanceCheck,
+  cwd: string,
+  timeoutMs = 60_000,
+  opts: { fresh?: boolean } = {}
 ): Promise<CheckResult> {
   if (typeof check.timeout_ms === 'number' && check.timeout_ms > 0) timeoutMs = check.timeout_ms;
   const frozen = check.frozen_files ?? [];
@@ -323,7 +392,7 @@ export async function runCheck(
     const missing = frozen.filter((f) => !fs.existsSync(path.resolve(cwd, f.path)));
     const tampered = missing.length > 0
       ? []
-      : frozen.filter((f) => f.sha256 !== null && sha256File(path.resolve(cwd, f.path)) !== f.sha256);
+      : frozen.filter((f) => f.sha256 !== null && !frozenFileMatches(path.resolve(cwd, f.path), f.sha256));
     const unlocked = frozen.filter((f) => f.sha256 === null);
     if (missing.length > 0 || tampered.length > 0 || unlocked.length > 0) {
       return {
@@ -413,23 +482,35 @@ export async function runCheck(
     };
   }
 
-  const start = Date.now();
+  let start = Date.now();
   try {
-    // Use a shell so the full command string is interpreted (handles quotes, &&, node -e "...").
-    // The child never inherits node:test context: it would emit a serialized protocol, not TAP.
-    const shell = shellInvocation(check.command);
-    const result = spawnSync(shell.file, shell.args, {
-      cwd,
-      env: childProcessEnv(),
-      timeout: timeoutMs,
-      maxBuffer: 2 * 1024 * 1024,
-      windowsVerbatimArguments: shell.windowsVerbatimArguments,
-    });
+    const memoKey = `${path.resolve(cwd)}|${timeoutMs}|${check.command}`;
+    const cached = commandMemo && !opts.fresh ? commandMemo.get(memoKey) : undefined;
+    let result: CommandRun;
+    if (cached) {
+      result = cached;
+      start = cached.start;
+    } else {
+      // Use a shell so the full command string is interpreted (handles quotes, &&, node -e "...").
+      // The child never inherits node:test context: it would emit a serialized protocol, not TAP.
+      const shell = shellInvocation(check.command);
+      const spawned = spawnSync(shell.file, shell.args, {
+        cwd,
+        env: childProcessEnv(),
+        timeout: timeoutMs,
+        // a Gradle/Android build prints a lot before and around the test lines: 2 MB cut it (ENOBUFS)
+        maxBuffer: 32 * 1024 * 1024,
+        windowsVerbatimArguments: shell.windowsVerbatimArguments,
+      });
+      result = { status: spawned.status, stdout: spawned.stdout as unknown as Buffer, stderr: spawned.stderr as unknown as Buffer, error: spawned.error, start, duration_ms: Date.now() - start };
+      if (commandMemo) commandMemo.set(memoKey, result);
+    }
 
-    const duration_ms = Date.now() - start;
+    const duration_ms = cached ? 0 : result.duration_ms;
     // OXB-150: gradle/maven report per-test results in JUnit XML files (build/test-results, target/surefire-reports),
     // not on stdout; the reports this command wrote are appended so counts and `proves` see each test.
-    const junitXml = /\b(gradlew(\.bat)?|gradle|mvnw?(\.cmd)?)\b/.test(check.command) ? junitReportsSince(cwd, start) : '';
+    // also a wrapper script named after it (gradle152.mjs): no word boundary after "gradle"
+    const junitXml = /\b(gradlew|gradle|mvnw?)/i.test(check.command) ? junitReportsSince(cwd, start) : '';
     const stdout = decodeConsoleOutput(result.stdout as unknown as Buffer) + (junitXml ? `\n${junitXml}` : '');
     const stderr = decodeConsoleOutput(result.stderr as unknown as Buffer);
     const report = parseTestReport(`${stdout}\n${stderr}`);
@@ -487,6 +568,7 @@ ${stderr}`);
       duration_ms,
       error,
       tests_executed: report.tests_executed,
+      ...(cached ? { reused_run: true } : {}),
     };
   } catch (err) {
     return {
@@ -507,11 +589,13 @@ export async function runSuite(
   cwd: string,
   timeoutMs = 60_000
 ): Promise<CheckResult[]> {
-  const results: CheckResult[] = [];
-  for (const check of suite.checks) {
-    results.push(await runCheck(check, cwd, timeoutMs));
-  }
-  return results;
+  return withCommandMemo(async () => {
+    const results: CheckResult[] = [];
+    for (const check of suite.checks) {
+      results.push(await runCheck(check, cwd, timeoutMs));
+    }
+    return results;
+  });
 }
 
 export async function executeSuite(
@@ -532,6 +616,7 @@ export async function executeSuite(
   const timeoutMs = options.timeoutMs ?? 60_000;
   const attemptNumber = options.attemptNumber ?? 1;
 
+  await withCommandMemo(async () => {
   for (const check of suite.checks) {
     const provider = options.pluginRegistry?.verifierProviderFor(check.type);
     let result: CheckResult;
@@ -585,6 +670,7 @@ export async function executeSuite(
     results.push(result);
     verificationResults.push(verificationResult);
   }
+  });
 
   const manifest = buildManifest(options.runId, results, {
     workItemId: options.workItemId,

@@ -29,7 +29,7 @@ const inside = (root, p) => { const r = norm(root); const x = norm(p); return x 
 
 function globRe(glob) {
   let re = '';
-  const g = String(glob).replace(/\\/g, '/').toLowerCase();
+  const g = String(glob).replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
   for (let i = 0; i < g.length; i += 1) {
     const c = g[i];
     if (c === '*') { if (g[i + 1] === '*') { re += '.*'; i += 1; if (g[i + 1] === '/') i += 1; } else re += '[^/]*'; }
@@ -38,6 +38,8 @@ function globRe(glob) {
   }
   return new RegExp(`(^|/)${re}($|/)`, 'i');
 }
+
+const asPatterns = (v) => (Array.isArray(v) ? v : v != null ? [v] : []).filter((s) => typeof s === 'string' && s.trim() !== '').map((s) => s.trim());
 
 function findProjectRoot(start) {
   let dir = path.resolve(start || process.cwd());
@@ -64,8 +66,10 @@ function shellPaths(cmd) {
 
 function writeTargetsOfShell(cmd) {
   const out = [];
-  for (const m of String(cmd || '').matchAll(/(?:^|[^>&0-9])>>?\s*["']?([^\s"'`;|&]+)/g)) if (!/^&?\d$/.test(m[1]) && m[1] !== '/dev/null' && m[1].toLowerCase() !== 'nul') out.push(m[1]);
-  for (const m of String(cmd || '').matchAll(/\btee\s+(?:-a\s+)?["']?([^\s"'`;|&]+)/g)) out.push(m[1]);
+  for (const m of String(cmd || '').matchAll(/(?:^|[^>&0-9=-])(?:\d+)?>>?\s*["']?([^\s"'`;|&]+)/g)) {
+    if (!/^&?\d+$/.test(m[1]) && m[1] !== '/dev/null' && m[1].toLowerCase() !== 'nul') out.push(m[1]);
+  }
+  for (const m of String(cmd || '').matchAll(/\btee\s+(?:-[A-Za-z]+\s+)*(?:--\s+)?["']?([^\s"'`;|&]+)/g)) out.push(m[1]);
   return out;
 }
 
@@ -79,9 +83,9 @@ function decide(call, ctx) {
   const rules = Array.isArray(ctx.config.policy_rules) ? ctx.config.policy_rules.filter((r) => r && typeof r === 'object') : [];
   const guards = ctx.config.guards || {};
   const root = guards.root ? path.resolve(ctx.root, guards.root) : ctx.root;
-  const denyRead = rules.filter((r) => r.kind === 'path' && r.deny_read).map((r) => ({ id: r.id || r.deny_read, re: globRe(r.deny_read), message: r.message || r.deny_read }));
-  const denyWrite = rules.filter((r) => r.kind === 'path' && r.deny_write).map((r) => ({ id: r.id || r.deny_write, re: globRe(r.deny_write), message: r.message || r.deny_write }));
-  const denyCmd = rules.filter((r) => r.kind === 'command' && r.deny).map((r) => ({ id: r.id || r.deny, re: new RegExp(r.deny, 'i'), message: r.message || r.deny }));
+  const denyRead = rules.filter((r) => r.kind === 'path').flatMap((r) => asPatterns(r.deny_read).map((pat) => ({ id: r.id || pat, re: globRe(pat), message: r.message || pat })));
+  const denyWrite = rules.filter((r) => r.kind === 'path').flatMap((r) => asPatterns(r.deny_write).map((pat) => ({ id: r.id || pat, re: globRe(pat), message: r.message || pat })));
+  const denyCmd = rules.filter((r) => r.kind === 'command').flatMap((r) => asPatterns(r.deny).map((pat) => ({ id: r.id || pat, re: new RegExp(pat, 'i'), message: r.message || pat })));
   const abs = (p) => (path.isAbsolute(p) ? p : path.resolve(cwd, p));
   // a directory path ("…/oxespace") must match "…/oxespace/**" too
   const forms = (p) => { const a = norm(abs(p)); const b = String(p).replace(/\\/g, '/').toLowerCase(); return [a, `${a}/`, b, `${b}/`]; };
@@ -113,8 +117,15 @@ function decide(call, ctx) {
       if (!inside(root, abs(t))) return { block: true, rule: 'write_outside_root', reason: `o comando escreve fora da raiz (${root}): ${t}` };
     }
     for (const prot of guards.protected_checkouts || []) {
-      if (inside(path.resolve(ctx.root, prot), cwd) && /\bgit\s+(checkout|switch|stash|reset|clean|restore)\b/.test(cmd)) {
-        return { block: true, rule: 'protected_checkout', reason: `checkout protegido (${prot}): git ${/\bgit\s+(\w+)/.exec(cmd)[1]} não é permitido aqui` };
+      const protDir = path.resolve(ctx.root, prot);
+      for (const gm of cmd.matchAll(/\bgit\s+((?:-[^\s;|&]+(?:\s+(?!-)(?:"[^"]*"|'[^']*'|[^\s;|&'"]+))?\s+)*)(checkout|switch|stash|reset|clean|restore)\b/g)) {
+        const flagPart = gm[1] || '';
+        const cMatch = /(?:^|\s)-C\s+(?:"([^"]+)"|'([^']+)'|([^\s"']+))/.exec(flagPart);
+        const cArg = cMatch ? (cMatch[1] || cMatch[2] || cMatch[3]) : null;
+        const gitTarget = cArg ? abs(cArg) : cwd;
+        if (inside(protDir, gitTarget)) {
+          return { block: true, rule: 'protected_checkout', reason: `checkout protegido (${prot}): git ${gm[2]} não é permitido aqui` };
+        }
       }
     }
     if (/\bgit\s+push\b/.test(cmd) && !/\b--delete\b/.test(cmd)) {
@@ -135,6 +146,7 @@ function decide(call, ctx) {
 function recordBlock(root, call, d) {
   try {
     const file = path.join(root, '.oxe', 'OXE-EVENTS.ndjson');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.appendFileSync(file, `${JSON.stringify({ type: 'PolicyBlocked', timestamp: new Date().toISOString(), payload: { tool: call.tool_name, rule: d.rule, reason: d.reason } })}\n`);
   } catch { /* the block still holds */ }
 }

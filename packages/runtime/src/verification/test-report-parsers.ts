@@ -152,7 +152,8 @@ const ANSI_RE = /\x1b\[[0-9;]*m/g;
 /**
  * Names of the tests a runner reported as passed / failed (1.20 "executed proof"). Supported outputs: TAP
  * (`node --test`, `ok 1 - name`), vitest `--reporter=verbose` (`✓ file > suite > name 5ms`), jest `--verbose`
- * and mocha (`✓ name`), pytest `-v` (`path::name PASSED`) and JUnit XML `<testcase name=…>`.
+ * and mocha (`✓ name`), pytest `-v` (`path::name PASSED`), Gradle testLogging (`Class > method PASSED`) and JUnit XML
+ * `<testcase name=…>`.
  * Default (non-verbose) vitest/jest output lists no passed names: the plan must use a verbose reporter.
  */
 export function extractTestResults(output: string): TestResultNames {
@@ -175,6 +176,11 @@ export function extractTestResults(output: string): TestResultNames {
       add(failed, m[1]);
     } else if ((m = line.match(/^(\S+::\S.*?)\s+(PASSED|FAILED|ERROR)\b/))) {
       add(m[2] === 'PASSED' ? passed : failed, m[1].split('::').slice(1).join('::'));
+    } else if ((m = line.match(/(?:^|\s)([\w$.]+(?:\s+>\s+[^>]+?)+)\s+(PASSED|FAILED|SKIPPED)(?:\s+\([^)]*\))?$/))) {
+      // Gradle testLogging / a testlog init script: `VtScreenScrollTest > theFilledScreenIsFiveRows PASSED` (JVM,
+      // Kotlin), nested classes as more ` > ` segments, an optional `(0.1s)`, and the job/timestamp prefix of a CI
+      // log relayed by `gh run view --log`. SKIPPED is neither passed nor failed.
+      if (m[2] !== 'SKIPPED') add(m[2] === 'PASSED' ? passed : failed, m[1]);
     }
   }
   for (const m of text.matchAll(/<testcase\b[^>]*\bname="([^"]+)"[^>]*?(\/>|>([\s\S]*?)<\/testcase>)/g)) {

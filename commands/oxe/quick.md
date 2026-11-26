@@ -17,7 +17,7 @@ oxe_tool_profile: mixed
 oxe_confidence_policy: rubric
 oxe_context_tier: standard
 oxe_contract_version: 2.0.0
-oxe_semantics_hash: ea0c06ca7b5c87bb
+oxe_semantics_hash: 8db1209bce74ce2e
 ---
 
 <!-- oxe-reasoning-contract:start -->
@@ -31,7 +31,7 @@ oxe_semantics_hash: ea0c06ca7b5c87bb
 - **Política de confiança:** rubrica
 - **Tier de contexto padrão:** padrão
 - **Versão do contrato:** 2.0.0
-- **Checksum semântico:** `ea0c06ca7b5c87bb`
+- **Checksum semântico:** `8db1209bce74ce2e`
 - **Entrada de contexto prioritária:** `.oxe/context/packs/quick.md` e `.oxe/context/packs/quick.json`
 - **Regra pack-first:** ler o context pack primeiro; se estiver stale, incompleto ou ausente, cair para leitura direta com fallback explícito.
 - **Inspeção estruturada:** `oxe-cc context inspect --workflow quick --json`
@@ -39,14 +39,14 @@ oxe_semantics_hash: ea0c06ca7b5c87bb
 - Não deixar decisões importantes para quem implementar depois.
 - Explicitar confiança e condição objetiva para replanejar.
 - **Seções esperadas:** Objetivo · Plano · Validação · Riscos · Assumptions · Confiança
-- **Bloqueios formais:** missing:state · missing:spec
+- **Bloqueios formais:** missing:state
 - **Referência canónica:** `oxe/workflows/references/reasoning-planning.md`
 
 <!-- oxe-reasoning-contract:end -->
 
 <!-- oxe-workflow-resolution:start -->
 
-**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/quick.md ou oxe/workflows/quick.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/quick.md ou oxe/workflows/quick.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir (um worktree sem .oxe/, um repo sem a cópia dos workflows), rodar `oxe-cc workflow path quick` (sem `oxe-cc` no PATH: `npx oxe-cc@<oxe_version de .oxe/oxe-version.json> workflow path quick` — nunca o `npx oxe-cc` sem versão, que pega outra release): ele devolve o workflow do pacote oxe-cc instalado. Aplicar esse ficheiro e avisar uma vez: "este repositório não tem .oxe/workflows; para fixar a versão, rode oxe-cc install --oxe-only .". Só se o comando também falhar, reportar os paths tentados e parar.
 
 <!-- oxe-workflow-resolution:end -->
 

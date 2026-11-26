@@ -51,6 +51,40 @@ describe('phase gates: declaração', () => {
     assert.equal(check.phase_gate, 'typecheck');
   });
 
+  it('os gates internos do oxe-build (stub-check) rodam aqui: o phase_gates_runner remoto não os envolve (OxeSpace 14/11)', () => {
+    const stub = path.join(__dirname, '..', 'bin', 'lib', 'oxe-stub-check.cjs').replace(/\\/g, '/');
+    const remote = 'node C:/deps/scripts/remote-verify.mjs -- {command}';
+    const checks = gates.gateChecks([
+      { id: 'stub-check', when: 'phase_verify', command: `node "${stub}" --phase --since abc123` },
+      { id: 'typecheck', when: 'phase_verify', command: 'npm run typecheck' },
+      { id: 'own', when: 'phase_verify', command: `node "${stub}" --phase`, runner: 'lock -- {command}' },
+    ], 'phase_verify', { defaultRunner: remote });
+    assert.equal(checks[0].command, `node "${stub}" --phase --since abc123`, 'internal: local');
+    assert.equal(checks[1].command, 'node C:/deps/scripts/remote-verify.mjs -- npm run typecheck', 'a repo command: remote');
+    assert.equal(checks[2].command, `lock -- node "${stub}" --phase`, 'an explicit gate.runner still applies');
+  });
+
+  it('a gate that already starts with the runner (or runs the runner script) is not wrapped twice (OxeSpace 15/11, Celular F3)', () => {
+    const remote = 'node C:/deps/scripts/remote-verify.mjs -- {command}';
+    const checks = gates.gateChecks([
+      { id: 'android-unit', when: 'phase_verify', command: 'node C:\\deps\\scripts\\remote-verify.mjs -- node gradle152.mjs test' },
+      { id: 'other-path', when: 'phase_verify', command: 'node "D:/elsewhere/remote-verify.mjs" -- npm test' },
+      { id: 'plain', when: 'phase_verify', command: 'node gradle152.mjs lint' },
+    ], 'phase_verify', { defaultRunner: remote });
+    assert.equal(checks[0].command, 'node C:\\deps\\scripts\\remote-verify.mjs -- node gradle152.mjs test');
+    assert.equal(checks[1].command, 'node "D:/elsewhere/remote-verify.mjs" -- npm test', 'same runner script elsewhere: not wrapped');
+    assert.equal(checks[2].command, 'node C:/deps/scripts/remote-verify.mjs -- node gradle152.mjs lint', 'a plain gate is still wrapped');
+    // a chain where the runner script is not first; a generic runner name matches only by its full path
+    const chained = gates.gateChecks([{ id: 'c', when: 'phase_verify', command: 'node scripts/prep.mjs && node C:/deps/scripts/remote-verify.mjs -- npm test' }], 'phase_verify', { defaultRunner: remote });
+    assert.equal(chained[0].command, 'node scripts/prep.mjs && node C:/deps/scripts/remote-verify.mjs -- npm test');
+    const generic = gates.gateChecks([
+      { id: 'g1', when: 'phase_verify', command: 'node src/index.js --check' },
+      { id: 'g2', when: 'phase_verify', command: 'node tools/lock/index.js -- npm test' },
+    ], 'phase_verify', { defaultRunner: 'node tools/lock/index.js -- {command}' });
+    assert.equal(generic[0].command, 'node tools/lock/index.js -- node src/index.js --check', 'another index.js is wrapped');
+    assert.equal(generic[1].command, 'node tools/lock/index.js -- npm test', 'the same full path is not');
+  });
+
   it('o lint avisa quando o repo tem gates e o plano não declara nenhum', () => {
     const dir = tmpDir();
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ scripts: { typecheck: 'tsc --noEmit', test: 'vitest' } }));
@@ -96,6 +130,38 @@ describe('phase gates: CI anexado', () => {
     assert.equal(gates.ciRunStatus(rec, { spawn: fake({ status: 'completed', conclusion: 'failure' }) }).state, 'red');
     assert.equal(gates.ciRunStatus(rec, { spawn: fake({ status: 'completed', conclusion: 'success', headSha: '4fdc80ef00' }) }).state, 'stale');
     assert.equal(gates.ciRunStatus(rec, { spawn: fake({ status: 'completed', conclusion: 'success', headSha: 'ae6b79b9ff' }) }).ok, true);
+  });
+
+  it('a GREEN attached run resolves the open constraint CR of a red ci gate; a red one leaves it open (OxeSpace 15/11, Celular F3 CR-F3-1)', () => {
+    const tmp = project({ ...basePlan, phase_gates: [{ id: 'ci-android', kind: 'ci' }, { id: 'typecheck', command: 'node t/gate.js' }] });
+    const pdir = path.join(tmp, '.oxe', 'program');
+    const cr = change.recordChange({ programDir: pdir, program: null, plan: null, class: 'constraint', summary: "gate do projeto 'ci-android' reprovou", by: 'phase_gate:ci-android', gate: 'ci-android' }).cr;
+    const other = change.recordChange({ programDir: pdir, program: null, plan: null, class: 'constraint', summary: "gate do projeto 'typecheck' reprovou", by: 'phase_gate:typecheck', gate: 'typecheck' }).cr;
+    const fake = (payload) => () => ({ status: 0, stdout: JSON.stringify(payload), stderr: '' });
+    const red = op.runtimeCiAttach(tmp, null, { run: '41', spawn: fake({ status: 'completed', conclusion: 'failure' }) });
+    assert.equal(red.resolved_changes, undefined);
+    assert.equal(change.listChanges(pdir).find((c) => c.id === cr.id).status, 'open');
+    const green = op.runtimeCiAttach(tmp, null, { run: '42', spawn: fake({ status: 'completed', conclusion: 'success' }) });
+    assert.deepEqual(green.resolved_changes, [cr.id]);
+    assert.equal(change.listChanges(pdir).find((c) => c.id === cr.id).status, 'resolved');
+    assert.equal(change.listChanges(pdir).find((c) => c.id === other.id).status, 'open', 'a non-ci gate CR is not touched');
+  });
+
+  it('multi-repo: the run is checked in the gate repo, and a run of one repo never settles another repo gate', () => {
+    const tmp = project({ ...basePlan, phase_gates: [{ id: 'ci-android', kind: 'ci', repo: 'org/celular' }, { id: 'ci-api', kind: 'ci', repo: 'org/api' }] });
+    const pdir = path.join(tmp, '.oxe', 'program');
+    const mk = (g) => change.recordChange({ programDir: pdir, program: null, plan: null, class: 'constraint', summary: `gate do projeto '${g}' reprovou`, by: `phase_gate:${g}`, gate: g }).cr;
+    const android = mk('ci-android');
+    const api = mk('ci-api');
+    const seen = [];
+    const spawn = (cmd, args) => { seen.push(args[args.indexOf('-R') + 1]); return { status: 0, stdout: JSON.stringify({ status: 'completed', conclusion: 'success' }), stderr: '' }; };
+    const r = op.runtimeCiAttach(tmp, null, { run: 'https://github.com/org/celular/actions/runs/77', spawn });
+    assert.deepEqual(r.resolved_changes, [android.id]);
+    assert.equal(change.listChanges(pdir).find((c) => c.id === api.id).status, 'open', 'org/api gate untouched by an org/celular run');
+    // an id with no repo: each gate is checked in its own repo
+    const r2 = op.runtimeCiAttach(tmp, null, { run: '78', spawn });
+    assert.deepEqual(r2.resolved_changes, [api.id]);
+    assert.ok(seen.includes('org/api'));
   });
 });
 

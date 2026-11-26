@@ -37,6 +37,8 @@ export interface TaskResult {
   /** OXB-185: turns used and the cap of the attempt, when it ended at the cap. */
   turns_used?: number;
   turns_cap?: number;
+  /** OXB-C28-1: a policy refusal whose trigger came from tool outputs of earlier turns (not from the pack). */
+  policy_trigger?: 'tool_output' | 'prompt';
   /** Every verify segment's output with headers (1.21.2, OXB-066), for the attempt log. */
   verify_log?: string;
 }
@@ -75,6 +77,18 @@ export interface SchedulerOptions {
   /** OXB-120: project patterns (regex sources) added to the built-in environment / quota classifiers. */
   failureClasses?: { environment?: string[]; quota?: string[] };
   /**
+   * OxeSpace 15/11 (Celular F3 T9): a refusal by the model's usage policy is never retried automatically — but a
+   * classifier false positive passed on a plain retry before. With this (runtime execute --retry-policy-once, chosen by
+   * a person) each task gets ONE more attempt after a policy refusal, even past its max_retries.
+   */
+  retryPolicyOnce?: boolean;
+  /** OXB-C28-1: one automatic clean retry for a refusal triggered by tool outputs (default on; false = off). */
+  policyAutoRetry?: boolean;
+  /** Tasks this run already saw refused by policy (a later execute): their attempt 1 IS the one extra attempt. */
+  policyRefusedBefore?: string[];
+  /** Tasks whose one extra policy attempt was already spent in this run: blocked before any attempt (no model call). */
+  policyRetryExhausted?: string[];
+  /**
    * OXB-138: a task that exhausts its attempts is DEFERRED and the run goes on with every task that does not depend on
    * it (its dependents end `blocked_by_deferred`). false keeps the old stop-at-the-failed-wave behavior.
    */
@@ -91,6 +105,8 @@ export interface SchedulerOptions {
   maxQuotaWaitMs?: number;
   /** OXB-204: max consecutive automatic 429 waits per attempt before pausing as quota (default: 3). */
   maxQuotaWaits?: number;
+  /** OXB-C1 (#6): run every top-level `&&` verify segment and report all red segments at once instead of stopping at the first failure. */
+  allSegments?: boolean;
   /** Injectable sleep for deterministic tests. */
   sleep?: (ms: number) => Promise<void>;
 }
@@ -172,6 +188,11 @@ export interface SchedulerContext {
   auditTrail?: AuditTrail;
   quota?: RunQuota;
   budget?: RunBudget;
+  /**
+   * OxeSpace 14/11: a `runtime pause` from another process. Checked before every node starts: the task in progress
+   * finishes, the next one never starts. Returns the reason when a pause was requested, else null.
+   */
+  pauseRequested?: () => string | null;
   policyActor?: string;
   onEvent?: (event: OxeEvent) => void;
   options?: SchedulerOptions;
@@ -342,6 +363,9 @@ export class Scheduler {
       );
       if (deferMode) {
         for (const id of failed.slice(failedBefore)) this.emit(ctx, { type: 'WorkItemDeferred', work_item_id: id, payload: { task: id } });
+        // OXB-C28-1: a deferred task is a decision of the run, not a stall — without this a wave whose only task was
+        // deferred after > staleProgressMs aborted the run (no_progress_timeout) and took the independent tasks along
+        if (failed.length > failedBefore || waveIds.some((id) => status.get(id) === 'blocked')) this.recordProgress();
       }
 
       // Sync journal after each wave
@@ -363,9 +387,10 @@ export class Scheduler {
       }
     }
 
-    // Any remaining pending nodes become blocked
+    // Any remaining pending nodes become blocked — not on a pause: they are the work the resume picks up (OxeSpace
+    // 15/11, OxeCode F4: a requested pause after T17 marked T18 "upstream_wave_failed" and printed FAIL)
     for (const [id, s] of status) {
-      if (s === 'pending') {
+      if (s === 'pending' && !this.paused) {
         status.set(id, 'blocked');
         blocked.push(id);
         this.emit(ctx, {
@@ -499,7 +524,7 @@ export class Scheduler {
     }
 
     for (const [id, s] of status) {
-      if (s === 'pending') {
+      if (s === 'pending' && !this.paused) {
         status.set(id, 'blocked');
         blocked.push(id);
         this.emit(ctx, {
@@ -575,64 +600,69 @@ export class Scheduler {
     failed: string[],
     blocked: string[]
   ): Promise<boolean> {
-    const eligible: string[] = [];
-    const depsNotMet: string[] = [];
+    // OXB-C19 (#2): re-evaluate intra-wave dependencies as nodes complete so a resumed/checkpointed task
+    // unblocks subsequent eligible tasks in the same wave instead of marking them blocked up-front.
+    const warnedEmptyScope = new Set<string>();
+    while (!this.cancelled && !this.paused) {
+      const eligible: string[] = [];
+      for (const id of nodeIds) {
+        if (status.get(id) !== 'pending') continue;
+        const node = graph.nodes.get(id)!;
+        const depsMet = node.depends_on.every((dep) => status.get(dep) === 'completed');
+        if (depsMet) eligible.push(id);
+      }
+      if (eligible.length === 0) break;
 
-    for (const id of nodeIds) {
-      if (status.get(id) === 'completed') continue; // already done in recovery
-      const node = graph.nodes.get(id)!;
-      const depsMet = node.depends_on.every((dep) => status.get(dep) === 'completed');
-      if (depsMet) {
-        eligible.push(id);
+      for (const id of eligible) {
+        if (warnedEmptyScope.has(id)) continue;
+        const node = graph.nodes.get(id)!;
+        // OXB-068: a verify_only / external-dependency node has an enforced empty scope (checked by the caller), not a
+        // "may write files" warning.
+        const externalNode = Boolean(node.policy.verify_only) || (node.policy.external_dependency?.length ?? 0) > 0;
+        if (node.mutation_scope.length === 0 && nodeMayMutate(node) && !externalNode) {
+          warnedEmptyScope.add(id);
+          this.emit(ctx, {
+            type: 'PolicyWarning',
+            work_item_id: id,
+            payload: {
+              reason: 'empty_mutation_scope',
+              detail: 'node may write files but declares no mutation_scope; running serially and without scope checks',
+            },
+          });
+        }
+      }
+
+      const readOnly = eligible.filter((id) => this.isConcurrentSafe(id, graph, ctx));
+      const mutations = eligible.filter((id) => !readOnly.includes(id));
+
+      if (readOnly.length > 0) {
+        await Promise.all(
+          readOnly.map((id) => this.runNode(id, graph, ctx, status, completed, failed, blocked))
+        );
+      }
+
+      if (ctx.parallel && mutations.length > 1) {
+        await this.runMutationsInParallel(mutations, graph, ctx, status, completed, failed, blocked);
       } else {
-        depsNotMet.push(id);
+        for (const id of mutations) {
+          this.checkRequestedPause(ctx);
+          if (this.cancelled || this.paused) break;
+          await this.runNode(id, graph, ctx, status, completed, failed, blocked);
+        }
       }
     }
 
-    for (const id of depsNotMet) {
-      status.set(id, 'blocked');
-      blocked.push(id);
-      this.emit(ctx, {
-        type: 'WorkItemBlocked',
-        work_item_id: id,
-        payload: { reason: 'dependency_not_met' },
-      });
-    }
-
-    for (const id of eligible) {
-      const node = graph.nodes.get(id)!;
-      // OXB-068: a verify_only / external-dependency node has an enforced empty scope (checked by the caller), not a
-      // "may write files" warning.
-      const externalNode = Boolean(node.policy.verify_only) || (node.policy.external_dependency?.length ?? 0) > 0;
-      if (node.mutation_scope.length === 0 && nodeMayMutate(node) && !externalNode) {
+    if (!this.cancelled && !this.paused) {
+      for (const id of nodeIds) {
+        if (status.get(id) !== 'pending') continue;
+        status.set(id, 'blocked');
+        blocked.push(id);
         this.emit(ctx, {
-          type: 'PolicyWarning',
+          type: 'WorkItemBlocked',
           work_item_id: id,
-          payload: {
-            reason: 'empty_mutation_scope',
-            detail: 'node may write files but declares no mutation_scope; running serially and without scope checks',
-          },
+          payload: { reason: 'dependency_not_met' },
         });
       }
-    }
-
-    const readOnly = eligible.filter((id) => this.isConcurrentSafe(id, graph, ctx));
-    const mutations = eligible.filter((id) => !readOnly.includes(id));
-
-    if (readOnly.length > 0) {
-      await Promise.all(
-        readOnly.map((id) => this.runNode(id, graph, ctx, status, completed, failed, blocked))
-      );
-    }
-
-    if (ctx.parallel && mutations.length > 1) {
-      await this.runMutationsInParallel(mutations, graph, ctx, status, completed, failed, blocked);
-      return failed.length > 0;
-    }
-
-    for (const id of mutations) {
-      if (this.cancelled || this.paused) break;
-      await this.runNode(id, graph, ctx, status, completed, failed, blocked);
     }
 
     return failed.length > 0;
@@ -660,6 +690,9 @@ export class Scheduler {
     let lastSignature = '';
     while (!this.cancelled && !this.paused) {
       if (Date.now() - this.runStartMs > maxRunMs) break;
+      // a requested pause stops new starts; the nodes already running finish (awaited below)
+      this.checkRequestedPause(ctx);
+      if (this.paused) break;
       const waiting: Array<{ id: string; reason: string }> = [];
       const ready: string[] = [];
       for (const id of order) {
@@ -719,6 +752,12 @@ export class Scheduler {
     const running = new Map<string, { scope: string[]; done: Promise<void> }>();
     let memoryWarned = false;
     while ((pending.length > 0 || running.size > 0) && !this.cancelled) {
+      // a requested pause: nothing new starts; what is running finishes
+      this.checkRequestedPause(ctx);
+      if (this.paused) {
+        if (running.size) await Promise.all([...running.values()].map((r) => r.done));
+        break;
+      }
       for (const id of [...pending]) {
         if (running.size >= max) break;
         const scope = graph.nodes.get(id)!.mutation_scope;
@@ -773,10 +812,16 @@ export class Scheduler {
     // 1.20c: the same verify failure twice (normalized output) = suspect ruler or stuck executor: stop paying retries.
     let lastVerifySignature: string | null = null;
     let verifySuspect = false;
-    const maxAttempts = node.policy.max_retries + 1;
+    let maxAttempts = node.policy.max_retries + 1;
+    let policyRetried = Boolean((ctx.options as SchedulerOptions | undefined)?.policyRefusedBefore?.includes(nodeId));
     // 1.21.1 (OXB-047): work that arrives by another path never pays an agent and never becomes a human gate.
     // An explicit human gate (PLAN.json `gate`) still comes first: the attempt loop requests it as before.
     const humanGatePending = node.policy.requires_human_approval && !this.hasApprovedGate(node, ctx);
+    if (!humanGatePending && (node.policy.runtime_wait?.length ?? 0) > 0) {
+      const waits = node.policy.runtime_wait ?? [];
+      this.blockNode(nodeId, ctx, status, blocked, 'waiting_runtime_precondition', waits.join(', '));
+      return;
+    }
     if (!humanGatePending && (node.policy.verify_only || (node.policy.external_dependency?.length ?? 0) > 0)) {
       await this.runExternalNode(node, ctx, status, completed, failed, blocked);
       return;
@@ -786,13 +831,33 @@ export class Scheduler {
       this.blockNode(nodeId, ctx, status, blocked, 'quota_exceeded', quotaBlocked);
       return;
     }
+    // cross-review 15/11: --retry-policy-once in a 3rd execute of the same run would pay attempt 1 again for a task
+    // whose one extra policy attempt was already spent — blocked before any model call
+    if ((ctx.options as SchedulerOptions | undefined)?.retryPolicyOnce && (ctx.options as SchedulerOptions | undefined)?.policyRetryExhausted?.includes(nodeId)) {
+      this.blockNode(nodeId, ctx, status, blocked, 'policy_retry_exhausted', 'a tentativa extra de política desta tarefa já foi usada neste run: mude o prompt (oxe-cc runtime execute --task <id> --print-prompt) ou o escopo antes de tentar de novo');
+      return;
+    }
 
     const maxQuotaWaitMs = (ctx.options as SchedulerOptions | undefined)?.maxQuotaWaitMs ?? 5 * 60_000;
     const maxQuotaWaits = (ctx.options as SchedulerOptions | undefined)?.maxQuotaWaits ?? 3;
     const sleepFn = (ctx.options as SchedulerOptions | undefined)?.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
     let quotaWaits = 0;
+    // OxeSpace 15/11 (OxeChat F4 T9): a pause requested during an attempt holds the next one — the attempt boundary is a
+    // boundary too, not only the next node. The task stays PENDING (never blocked) for the execute after resume. Checked
+    // before the retry quota / RetryScheduled and after a rate-limit wait (cross-review R34).
+    const holdForPause = (next: number): boolean => {
+      this.checkRequestedPause(ctx);
+      if (!this.paused) return false;
+      this.emit(ctx, { type: 'PolicyWarning', work_item_id: nodeId, payload: { reason: 'paused_before_attempt', attempt: next, detail: `runtime pause: a tentativa ${next} não começa` } });
+      status.set(nodeId, 'pending');
+      return true;
+    };
+    let iteration = 0;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      iteration += 1;
+      // a real iteration count: a rate-limit wait re-enters with the same attempt number (R34)
+      if (iteration > 1 && holdForPause(attempt)) return;
       const attemptId = `${nodeId}-a${attempt}`;
       const attemptModel = ctx.modelFor ? ctx.modelFor(nodeId, attempt, attempt > 1 ? (lastResult?.failure_class ?? null) : null) : null;
 
@@ -879,8 +944,10 @@ export class Scheduler {
         // OXB-026: the verify judges the work, not the end of the LLM conversation. An attempt that ran out of turns
         // after writing in its scope is verified before it is classified: green completes the task, red goes to the
         // informed retry. Discarding it unverified paid a whole second attempt for finished work.
+        // a context-cap close (R44) is the same: work written, the verify decides before another paid attempt
+        const contextCap = lastResult.completed_by === 'context_cap';
         const turnLimitWithWork = !lastResult.success
-          && lastResult.completed_by === 'turn_limit_exhausted'
+          && (lastResult.completed_by === 'turn_limit_exhausted' || contextCap)
           && Boolean(node.verify?.command)
           && (lastResult.evidence?.length ?? 0) > 0;
 
@@ -893,9 +960,9 @@ export class Scheduler {
             lastResult = {
               success: false,
               // OXB-185: out of turns, the red verify is a consequence — the class stays turns_exhausted.
-              failure_class: turnLimitWithWork ? 'turns_exhausted' : 'verify',
+              failure_class: turnLimitWithWork ? (contextCap ? lastResult.failure_class : 'turns_exhausted') : 'verify',
               evidence: lastResult.evidence,
-              output: `${turnLimitWithWork ? `turns_exhausted: ${lastResult.turns_used ?? '?'}/${lastResult.turns_cap ?? '?'} turnos usados sem finish_task; o verify do trabalho parcial:\n` : ''}${describeVerifyFailure(node.verify.command, verifyResult.check, verifyResult.gaps, verifyResult.segment)}`,
+              output: `${turnLimitWithWork ? (contextCap ? `contexto cheio no turno ${lastResult.turns_used ?? '?'}; o verify do trabalho parcial:\n` : `turns_exhausted: ${lastResult.turns_used ?? '?'}/${lastResult.turns_cap ?? '?'} turnos usados sem finish_task; o verify do trabalho parcial:\n`) : ''}${describeVerifyFailure(node.verify.command, verifyResult.check, verifyResult.gaps, verifyResult.segment, verifyResult.segments)}`,
               verify_log: buildVerifyLog(verifyResult.segments),
               ...(turnLimitWithWork ? { turns_used: lastResult.turns_used, turns_cap: lastResult.turns_cap } : {}),
             };
@@ -981,7 +1048,7 @@ export class Scheduler {
                 await ctx.parallel!.discard(integration.files);
                 return {
                   ok: false as const,
-                  output: `Verify on the integrated tree failed (it passed in the task's worktree; another task's change may conflict).\n${describeVerifyFailure(node.verify.command, integrated.check, integrated.gaps, integrated.segment)}`,
+                  output: `Verify on the integrated tree failed (it passed in the task's worktree; another task's change may conflict).\n${describeVerifyFailure(node.verify.command, integrated.check, integrated.gaps, integrated.segment, integrated.segments)}`,
                 };
               }
               this.emit(ctx, {
@@ -1042,7 +1109,35 @@ export class Scheduler {
           this.blockNode(nodeId, ctx, status, blocked, 'waiting_answer', tailLines(lastResult.output || '', 3));
           return;
         }
-        if (lastResult.failure_class === 'policy') break;
+        if (lastResult.failure_class === 'policy') {
+          // OXB-C28-1: a refusal triggered by tool outputs of earlier turns (not the pack) gets ONE automatic clean
+          // retry — a fresh context (the pack and the tree) has none of those outputs. execute.policy_auto_retry: false
+          // turns it off. A prompt-triggered refusal still needs --retry-policy-once.
+          const autoPolicy = !policyRetried && lastResult.policy_trigger === 'tool_output'
+            && (ctx.options as SchedulerOptions | undefined)?.policyAutoRetry !== false
+            && !(ctx.options as SchedulerOptions | undefined)?.retryPolicyOnce;
+          if (!autoPolicy && (!(ctx.options as SchedulerOptions | undefined)?.retryPolicyOnce || policyRetried)) break;
+          policyRetried = true;
+          if (holdForPause(attempt + 1)) return;
+          // the run's retry quota counts this attempt too (cross-review 15/11)
+          const policyRetryBlocked = this.consumeRetryQuota(ctx);
+          if (policyRetryBlocked) {
+            this.blockNode(nodeId, ctx, status, blocked, 'quota_exceeded', policyRetryBlocked);
+            return;
+          }
+          if (attempt >= maxAttempts) maxAttempts = attempt + 1;
+          this.emit(ctx, {
+            type: 'RetryScheduled',
+            work_item_id: nodeId,
+            attempt_id: attemptId,
+            // output_tail: the refused attempt keeps its log (attempts/<task>-<n>.log) with the trigger candidates
+            payload: { task: nodeId, attempt_number: attempt, next_attempt: attempt + 1, reason: autoPolicy ? 'policy_auto_retry' : 'policy_retry_once', output_tail: tailLines(lastResult.output || '', 60) },
+          });
+          // a clean retry: the refusal text (and the CLI hint) never goes back into the model's prompt — it would feed
+          // the classifier and instruct the model with a human command (cross-review 15/11)
+          lastError = null;
+          continue;
+        }
         // The output of a red verify (or of an attempt that ran out of turns / made no progress) is the project's test
         // log: a test called "resets the form" or an error at line 429 is logic, not the provider.
         const executorLevelFailure = !lastResult.failure_class || ['env', 'llm', 'timeout', 'quota'].includes(String(lastResult.failure_class));
@@ -1064,6 +1159,7 @@ export class Scheduler {
             });
             await sleepFn(waitMs);
             this.recordProgress();
+            if (holdForPause(attempt)) return; // a pause during the wait: no paid call after it (R34)
             attempt -= 1;
             continue;
           }
@@ -1073,9 +1169,12 @@ export class Scheduler {
           return;
         }
         quotaWaits = 0;
-        if (execClass?.kind === 'environment') {
-          this.pauseForFailure(ctx, nodeId, 'environment', execClass.diagnosis, null);
-          this.blockNode(nodeId, ctx, status, blocked, 'paused_environment', execClass.diagnosis);
+        // cross-review 15/11: the http adapter reports a refused credential / missing endpoint (401/403/404) as
+        // `environment` itself — configuration, not a reason to pay another attempt
+        if (execClass?.kind === 'environment' || lastResult.failure_class === 'environment') {
+          const diag = execClass?.kind === 'environment' ? execClass.diagnosis : tailLines(lastResult.output || '', 3);
+          this.pauseForFailure(ctx, nodeId, 'environment', diag, null);
+          this.blockNode(nodeId, ctx, status, blocked, 'paused_environment', diag);
           return;
         }
         // OXB-148: a prompt that does not fit fails the same way on a blind retry.
@@ -1094,6 +1193,8 @@ export class Scheduler {
           }
         }
         if (attempt < maxAttempts) {
+          // a pause: no retry quota spent, no RetryScheduled banner (R34)
+          if (holdForPause(attempt + 1)) return;
           const retryBlocked = this.consumeRetryQuota(ctx);
           if (retryBlocked) {
             this.blockNode(nodeId, ctx, status, blocked, 'quota_exceeded', retryBlocked);
@@ -1174,6 +1275,16 @@ export class Scheduler {
       saveJournal(ctx.projectRoot, ctx.runId, this.journal);
     }
     return { run_id: ctx.runId, status: 'aborted', completed, failed, blocked, reason };
+  }
+
+  /** A pause requested from outside (`runtime pause`) takes effect before the next node, never in the middle of one. */
+  private checkRequestedPause(ctx: SchedulerContext): void {
+    if (this.paused || !ctx.pauseRequested) return;
+    let reason: string | null = null;
+    try { reason = ctx.pauseRequested(); } catch { reason = null; }
+    if (!reason) return;
+    this.emit(ctx, { type: 'RunPaused', payload: { reason: 'requested', diagnosis: reason, resume_at: null } });
+    this.pause();
   }
 
   /** OXB-120: pause the run for a failure that is not the task's (environment / quota). */
@@ -1313,20 +1424,29 @@ export class Scheduler {
     // command, `vitest … && tsc --noEmit` failed in tsc but the retry only carried the passing vitest output: the
     // executor never saw the type error (oxespace 1.5.0 T13: 4 attempts, US$ 4.54, 0 completed).
     const segments = splitVerifySegments(node.verify.command);
+    // OXB-C28-2: consecutive remote segments run as one remote job (all_segments keeps one run per segment: it must
+    // see every red segment, and one remote `&&` chain stops at the first)
+    const units = (ctx.options as SchedulerOptions | undefined)?.allSegments
+      ? segments.map((command, i) => ({ command, members: [i] }))
+      : groupRemoteSegments(segments);
     const ran: VerifySegmentRun[] = [];
     const gaps: string[] = [];
     let status = 'passed';
     let failing: VerifySegmentRun | null = null;
-    for (let index = 0; index < segments.length; index++) {
-      const command = segments[index];
+    for (const unit of units) {
+      const index = unit.members[0];
+      const lastMember = unit.members[unit.members.length - 1];
+      const merged = unit.members.length > 1;
+      const command = unit.command;
+      const label = merged ? `${index + 1}-${lastMember + 1}` : `${index + 1}`;
       const suite: AcceptanceCheckSuite = {
         checks: [{
-          id: segments.length > 1 ? `inline-${node.id}-s${index + 1}` : `inline-${node.id}`,
+          id: segments.length > 1 ? `inline-${node.id}-s${label}` : `inline-${node.id}`,
           type: 'custom',
           command,
           evidence_type_expected: 'stdout',
           acceptance_ref: null,
-          description: `Verify ${node.id}${segments.length > 1 ? ` [${index + 1}/${segments.length}]` : ''}`,
+          description: `Verify ${node.id}${segments.length > 1 ? ` [${label}/${segments.length}]${merged ? ' (uma rodada remota)' : ''}` : ''}`,
         }],
         compiled_at: new Date().toISOString(),
         spec_hash: '',
@@ -1354,6 +1474,11 @@ export class Scheduler {
         return null;
       }
       let segmentRun: VerifySegmentRun = { index: index + 1, total: segments.length, command, status: result.status, check: result.check_results?.[0] };
+      if (merged) {
+        const c0 = result.check_results?.[0];
+        const at = result.status === 'passed' ? lastMember : remoteFailedMember(`${c0?.stdout ?? ''}\n${c0?.stderr ?? ''}`, unit.members);
+        segmentRun = { ...segmentRun, index: at + 1, command: segments[at], merged: unit.members.map((m) => m + 1) };
+      }
       // OXB-162: the same command, or test files an earlier segment of THIS attempt already passed, failing now is a
       // flaky suspect: rerun once; green → continue (marked), red → the task fails as before.
       if (result.status === 'failed') {
@@ -1392,20 +1517,32 @@ export class Scheduler {
       gaps.push(...(result.gaps ?? []));
       if (result.status === 'failed') {
         status = 'failed';
-        failing = segmentRun;
-        break;
+        if (!failing) failing = segmentRun;
+        if (!(ctx.options as SchedulerOptions | undefined)?.allSegments) break;
       }
       if (result.status !== 'passed' && status === 'passed') status = result.status;
     }
+    const failedRuns = ran.filter((r) => r.status === 'failed');
     // OXB-171: the failing segment's own output tail rides in the event (the cause was only found by rerunning by hand).
     const failedSegment = failing
       ? { index: failing.index, total: failing.total, command: failing.command, exit_code: failing.check?.exit_code ?? null, output_tail: tailLines(`${failing.check?.stdout ?? ''}\n${failing.check?.stderr ?? ''}\n${failing.check?.error ?? ''}`, 40) }
       : null;
+    const failedSegments = failedRuns.map((f) => ({
+      index: f.index,
+      total: f.total,
+      command: f.command,
+      exit_code: f.check?.exit_code ?? null,
+      output_tail: tailLines(`${f.check?.stdout ?? ''}\n${f.check?.stderr ?? ''}\n${f.check?.error ?? ''}`, 40),
+    }));
     this.emit(ctx, {
       type: 'VerificationCompleted',
       work_item_id: node.id,
       attempt_id: attemptId,
-      payload: { status, ...(failedSegment ? { failed_segment: failedSegment } : {}) },
+      payload: {
+        status,
+        ...(failedSegment ? { failed_segment: failedSegment } : {}),
+        ...(failedSegments.length > 1 ? { failed_segments: failedSegments } : {}),
+      },
     });
     const last = ran[ran.length - 1];
     return {
@@ -1706,12 +1843,30 @@ export function parseRateLimitResetMs(
 /** OXB-171: an agent that says the change it needs is outside its files (pt/en). */
 const OUT_OF_SCOPE_RE = /\b(out of (my |the task'?s? )?scope|outside (of )?(my |the task'?s? )?(scope|files)|not in (my |the task'?s? )?(files|scope)|fora do (meu |)escopo|fora dos arquivos( da tarefa)?|não está (no|nos) (escopo|arquivos)( da tarefa)?|scope_insufficient)\b/i;
 
+/** OXB-C27-1: the output names this file (its path, or a non-generic basename such as sectionsApi.ts). */
+function mentionsFile(output: string, file: string): boolean {
+  const f = String(file || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  if (!f) return false;
+  if (output.includes(f)) return true;
+  const base = f.split('/').pop() || '';
+  if (!base || /^index\.[cm]?[jt]sx?$/i.test(base)) {
+    const tail = f.split('/').slice(-2).join('/');
+    return tail.includes('/') && output.includes(tail);
+  }
+  return new RegExp(`(^|[\\s/\\\\(\\['"\`])${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(:\\d+|[\\s)'"\`]|$)`, 'm').test(output);
+}
+
 function scopeInsufficientReason(nodeId: string, ctx: SchedulerContext, verifyOutput: string, agentOutput: string): Record<string, unknown> | null {
   const req = (ctx.options as SchedulerOptions | undefined)?.outOfScopeRequirements?.[nodeId];
   if (req && req.files.length) {
     const out = String(verifyOutput || '').replace(/\\/g, '/');
     const named = req.tests.filter((t) => out.includes(t) || out.includes(t.split('/').pop() || t));
-    if (named.length) return { reason: 'frozen_test_needs_out_of_scope_file', files: req.files, tests: named };
+    // OXB-C27-1: an import is not a cause. Only when the failure passes through an out-of-scope file (the stack or
+    // the diff names it) is it scope_insufficient; a fixture defect in the test (polish2 T6) is retried and, when it
+    // repeats, becomes verify_suspect naming the test.
+    const said = String(agentOutput || '').replace(/\\/g, '/');
+    const touched = named.length ? req.files.filter((f) => mentionsFile(out, f) || mentionsFile(said, f)) : [];
+    if (touched.length) return { reason: 'frozen_test_needs_out_of_scope_file', files: touched, tests: named };
   }
   if (OUT_OF_SCOPE_RE.test(agentOutput)) return { reason: 'agent_reported_out_of_scope' };
   // OXB-188: the agent left a stub it labels as blocked — the change it needs is outside the scope; never a retry.
@@ -1719,6 +1874,13 @@ function scopeInsufficientReason(nodeId: string, ctx: SchedulerContext, verifyOu
   if (blocked) {
     const files = [...new Set([...blocked[0].matchAll(/precisa de ([^,(]+(?:, [^,(]+)*), fora do escopo/g)].flatMap((m) => m[1].split(', ').map((x) => x.trim())))];
     return { reason: 'blocked_stub', files, detail: blocked[0] };
+  }
+  // The pack names a symbol absent at the base that the attempt did not create (a name guessed from the file): a
+  // plan defect, never fixed by a retry.
+  const packDefect = /plan_defect: o pack nomeia um símbolo que não existe[^\n]*/.exec(String(verifyOutput || ''));
+  if (packDefect) {
+    const files = [...new Set([...packDefect[0].matchAll(/\b[\w$]+ em ([^,:]+?)(?=, |: )/g)].map((m) => m[1].trim()))];
+    return { reason: 'pack_symbol_missing', files, detail: packDefect[0] };
   }
   return null;
 }
@@ -1758,6 +1920,56 @@ export interface VerifySegmentRun {
   check?: CheckResult;
   /** OXB-162: failed after an earlier segment of the same attempt passed the same files; rerun once. */
   flaky_suspect?: boolean;
+  /** OXB-C28-2: the segments (1-based) that ran in this one remote round trip; index is the failing (or last) one. */
+  merged?: number[];
+}
+
+const REMOTE_SEG_RE = /(?:^|[\s/\\"'])remote-verify(?:\.[cm]?js)?["']?(?:\s|$)/i;
+const REMOTE_MARK = (n: number) => `===OXE-SEG-${n}===`;
+
+/** The `<prefix>` and `<inner command>` of a `<… remote-verify.mjs [opts]> -- <command>` segment, or null. */
+function remoteSegmentParts(segment: string): { prefix: string; inner: string } | null {
+  const idx = segment.indexOf(' -- ');
+  if (idx <= 0) return null;
+  const prefix = segment.slice(0, idx).trim();
+  // the prefix is the runner and its own options: the remote-verify script must be in it
+  if (!REMOTE_SEG_RE.test(prefix)) return null;
+  let inner = segment.slice(idx + 4).trim();
+  const q = inner[0];
+  if ((q === '"' || q === "'") && inner.endsWith(q) && inner.length > 1 && !inner.slice(1, -1).includes(q)) inner = inner.slice(1, -1).trim();
+  // only text that survives inside one double-quoted shell argument on both sh and cmd; gradle152 has its own path
+  if (!inner || /["`$\\%!]/.test(inner) || /gradle152\.mjs/i.test(inner)) return null;
+  return { prefix, inner };
+}
+
+/**
+ * OXB-C28-2: consecutive `… remote-verify … -- <cmd>` segments with the same runner prefix run as ONE remote job
+ * (`<prefix> -- "echo ===OXE-SEG-1=== && cmd1 && echo ===OXE-SEG-2=== && cmd2"`) — one push/queue/CI round trip
+ * instead of one per segment (polish2 T3: 8 segments, 2–5 min each). The markers name the failing segment.
+ * `members` are 0-based indexes into `segments`.
+ */
+export function groupRemoteSegments(segments: string[]): Array<{ command: string; members: number[] }> {
+  const out: Array<{ command: string; members: number[]; prefix?: string; inners?: string[] }> = [];
+  segments.forEach((seg, i) => {
+    const parts = remoteSegmentParts(seg);
+    const prev = out[out.length - 1];
+    if (parts && prev && prev.prefix === parts.prefix && prev.inners) {
+      prev.members.push(i);
+      prev.inners.push(parts.inner);
+      return;
+    }
+    out.push(parts ? { command: seg, members: [i], prefix: parts.prefix, inners: [parts.inner] } : { command: seg, members: [i] });
+  });
+  return out.map((u) => (u.members.length > 1 && u.prefix && u.inners
+    ? { command: `${u.prefix} -- "${u.inners.map((c, k) => `echo ${REMOTE_MARK(u.members[k] + 1)} && ${c}`).join(' && ')}"`, members: u.members }
+    : { command: u.command, members: u.members }));
+}
+
+/** OXB-C28-2: the 0-based segment of a merged remote run that failed — the last marker the remote log printed. */
+export function remoteFailedMember(output: string, members: number[]): number {
+  let found = members[0];
+  for (const m of members) if (String(output || '').includes(REMOTE_MARK(m + 1))) found = m;
+  return found;
 }
 
 export interface VerifyNodeResult {
@@ -1812,7 +2024,7 @@ export function buildVerifyLog(segments: VerifySegmentRun[] | undefined, maxLine
     const check = s.check;
     const exit = check?.exit_code != null ? `exit ${check.exit_code}` : check?.error ? check.error : s.status;
     const body = tailLines(`${check?.stdout ?? ''}\n${check?.stderr ?? ''}`, maxLinesPerSegment);
-    return `=== [${s.index}/${s.total}] ${s.command} — ${s.status} (${exit})${s.flaky_suspect ? ' · flaky_suspect (repetido: passou antes nesta tentativa)' : ''} ===\n${body || '(sem saída)'}`;
+    return `=== [${s.index}/${s.total}] ${s.command} — ${s.status} (${exit})${s.flaky_suspect ? ' · flaky_suspect (repetido: passou antes nesta tentativa)' : ''}${s.merged ? ` · uma rodada remota com os segmentos ${s.merged.join(', ')}` : ''} ===\n${body || '(sem saída)'}`;
   }).join('\n\n');
 }
 
@@ -1821,7 +2033,23 @@ export function describeVerifyFailure(
   check: CheckResult | undefined,
   gaps?: string[],
   segment?: { index: number; total: number; command: string } | null,
+  segments?: VerifySegmentRun[],
 ): string {
+  const failedList = (segments ?? []).filter((s) => s.status === 'failed');
+  if (failedList.length > 1) {
+    const blocks = failedList.map((f) => {
+      const r = f.check?.error || (f.check?.exit_code != null ? `exit code ${f.check.exit_code}` : 'failed');
+      const out = tailLines(`${f.check?.stdout ?? ''}\n${f.check?.stderr ?? ''}`, 30);
+      return `Failing segment [${f.index}/${f.total}]: ${f.command} (${r})\n${out ? out.slice(-2500) : '(empty)'}`;
+    });
+    return [
+      'Verification failed after your previous attempt.',
+      `Command: ${command ?? '(none)'}`,
+      `${failedList.length} of ${failedList[0].total} verify segments failed:`,
+      ...blocks,
+      'Fix the code so all failing segments pass. If you are certain a command itself is wrong (not the code), stop and call finish_task explaining why — do not work around it.',
+    ].join('\n');
+  }
   const reason = check?.error || (check?.exit_code != null ? `exit code ${check.exit_code}` : (gaps || []).join('; ') || 'checks did not pass');
   // Only the failing segment's output: the tail of a passing earlier segment never reaches the executor (OXB-066).
   const output = tailLines(`${check?.stdout ?? ''}\n${check?.stderr ?? ''}`, 40);

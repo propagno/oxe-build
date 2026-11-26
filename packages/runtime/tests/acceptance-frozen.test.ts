@@ -41,6 +41,14 @@ describe('teste de aceite congelado no verify', () => {
       fs.writeFileSync(path.join(dir, 'api.js'), 'module.exports = { createApi: () => ({ handle() {} }) };\n');
       assert.equal((await runCheck(check, dir)).status, 'fail');
 
+      // core.autocrlf: frozen with LF, read back as CRLF — the same file, never "tampered" (OxeSpace 14/11, F3 close)
+      fs.writeFileSync(path.join(dir, 'api.js'), 'module.exports = { createApi: () => () => 1 };\n');
+      fs.writeFileSync(path.join(dir, 'accept.test.js'), ACCEPT.replace(/\n/g, '\r\n'));
+      const crlf = await runCheck(check, dir);
+      assert.notEqual(crlf.error, 'acceptance_tampered: accept.test.js');
+      assert.equal(crlf.status, 'pass', `${crlf.error} ${crlf.stderr}`);
+      fs.writeFileSync(path.join(dir, 'accept.test.js'), ACCEPT);
+
       // Executor "ajusta" o teste para passar: adulterado.
       fs.writeFileSync(path.join(dir, 'accept.test.js'), ACCEPT.replace("'function'", "'object'"));
       const tampered = await runCheck(check, dir);
@@ -74,10 +82,19 @@ describe('executor não escreve o aceite do plano', () => {
             tool_calls: [
               { id: 'c1', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: 'test\\acceptance\\a1.test.js', content: 'hacked' }) } },
               { id: 'c2', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: 'api.js', content: 'ok' }) } },
+              // P0-2: malformed JSON is an explicit error to the model, never {} in silence
+              { id: 'c4', type: 'function', function: { name: 'write_file', arguments: '{"path": "api.js", "content": ' } },
+              // cross-review 15/11: whitespace arguments are "no arguments", not malformed JSON
+              { id: 'c5', type: 'function', function: { name: 'write_file', arguments: '   ' } },
+              // cross-review 15/11: a different case reaches the same file on Windows/macOS
+              ...(process.platform === 'win32' || process.platform === 'darwin'
+                ? [{ id: 'c6', type: 'function' as const, function: { name: 'write_file', arguments: JSON.stringify({ path: 'TEST/Acceptance/A1.test.js', content: 'hacked' }) } }]
+                : []),
             ],
+            usage: { input_tokens: 100, output_tokens: 20 },
           };
         }
-        return { content: 'done', finish_reason: 'tool_calls', tool_calls: [{ id: 'c3', type: 'function', function: { name: 'finish_task', arguments: '{"summary":"x"}' } }] };
+        return { content: 'done', usage: { input_tokens: 50, output_tokens: 5 }, finish_reason: 'tool_calls', tool_calls: [{ id: 'c3', type: 'function', function: { name: 'finish_task', arguments: '{"summary":"x"}' } }] };
       };
       const events: LlmExecutorEvent[] = [];
       const node: GraphNode = {
@@ -95,8 +112,19 @@ describe('executor não escreve o aceite do plano', () => {
       assert.equal(result.success, true);
       assert.equal(fs.readFileSync(path.join(dir, 'test', 'acceptance', 'a1.test.js'), 'utf8'), ACCEPT, 'aceite intacto');
       assert.equal(fs.readFileSync(path.join(dir, 'api.js'), 'utf8'), 'ok');
-      const denied = events.find((e) => e.type === 'tool_denied');
+      const denied = events.find((e) => e.type === 'tool_denied' && e.detail?.reason === 'frozen_acceptance_test');
       assert.equal(denied?.detail?.reason, 'frozen_acceptance_test');
+      assert.ok(events.some((e) => e.type === 'tool_denied' && e.detail?.reason === 'invalid_tool_arguments'), 'malformed JSON reported');
+      assert.equal(events.filter((e) => e.type === 'tool_denied' && e.detail?.reason === 'invalid_tool_arguments').length, 1, 'whitespace arguments are not malformed');
+      assert.equal(events.filter((e) => e.type === 'tool_call').length, events.filter((e) => e.type === 'tool_result').length, 'every tool_call has its tool_result');
+      if (process.platform === 'win32' || process.platform === 'darwin') {
+        assert.equal(events.filter((e) => e.type === 'tool_denied' && e.detail?.reason === 'frozen_acceptance_test').length, 2, 'case variant denied too');
+      }
+      const u = events.find((e) => e.type === 'executor_usage')?.detail as { input_tokens?: number; output_tokens?: number } | undefined;
+      assert.equal(u?.input_tokens, 150);
+      assert.equal(u?.output_tokens, 25);
+      // the events carry the real attempt (it was a fixed 0)
+      assert.ok(events.filter((e) => e.type === 'tool_call').every((e) => e.attempt === 1), JSON.stringify(events.filter((e) => e.type === 'tool_call').map((e) => e.attempt)));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

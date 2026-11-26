@@ -14,7 +14,7 @@ Este passo é **meta**: só orientação. A execução real pertence ao workflow
 
 <process>
 1. Verificar se o input é um **objetivo de implementação** (cria, implementa, adiciona, corrige, constrói, desenvolve, migra — verbos de ação sobre o código):
-   - **Sim** → destino direto: `oxe/workflows/conduct.md` (Conductor decide Agent Mode vs Swarm Mode). Não consultar tabela.
+   - **Sim** → mesma regra única do `oxe.md`: pequeno (critérios do quick) → **`/oxe-quick`**; senão → **`/oxe-spec`**. O Conductor (`oxe/workflows/conduct.md`) só quando o usuário pede explicitamente o modo autônomo. Não consultar tabela.
 2. Caso contrário, ler a secção **Router** em `oxe/workflows/help.md` (ou `.oxe/workflows/help.md` no projeto).
 3. Classificar a intenção do utilizador e escolher **uma** linha da tabela.
 4. Se a classificação não for claramente dominante, ainda devolver um único destino, mas explicitar a confiança da escolha e a lacuna que poderia mudar o roteamento.

@@ -85,11 +85,58 @@ function validateTouchedFileSyntax(projectRoot, relPath) {
   }
 
   if (['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'].includes(ext)) {
-    let ts;
+    let ts = null;
+    const searchPaths = [projectRoot, __dirname];
+    for (const root of [projectRoot, __dirname]) {
+      try {
+        const common = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8', windowsHide: true });
+        if (common.status === 0 && common.stdout && common.stdout.trim()) {
+          searchPaths.push(path.dirname(common.stdout.trim()));
+        }
+      } catch { /* ignore */ }
+    }
     try {
-      ts = require('typescript');
+      ts = require(require.resolve('typescript', { paths: searchPaths }));
     } catch {
-      return { path: rel, valid: true, kind: 'ts_skipped', error: null };
+      ts = null;
+    }
+    if (!ts) {
+      // Fallback syntax validation when `typescript` package is absent (e.g. global oxe-cc install on a bare repo)
+      if (['.js', '.cjs', '.mjs'].includes(ext)) {
+        try {
+          const vm = require('vm');
+          new vm.Script(raw.replace(/^#!.*\r?\n/, ''), { filename: rel });
+        } catch (err) {
+          if (!/\bimport\b|\bexport\b/.test(raw) || /Unexpected end of input|Unexpected token/.test(String(err && err.message))) {
+            return { path: rel, valid: false, kind: 'js', error: `${rel} — ${String(err && err.message ? err.message : err)}` };
+          }
+        }
+      }
+      // Structural truncation / unbalanced delimiter check for TS/TSX/JS/JSX
+      const stack = [];
+      let q = null;
+      for (let i = 0; i < raw.length; i += 1) {
+        const ch = raw[i];
+        const nx = raw[i + 1];
+        if (q) { if (ch === '\\') { i += 1; continue; } if (ch === q) q = null; continue; }
+        if (ch === '/' && nx === '/') { const nl = raw.indexOf('\n', i); if (nl < 0) break; i = nl; continue; }
+        if (ch === '/' && nx === '*') {
+          const end = raw.indexOf('*/', i + 2);
+          if (end < 0) return { path: rel, valid: false, kind: 'ts', error: `${rel} — comentário de bloco /* não fechado` };
+          i = end + 1;
+          continue;
+        }
+        if (ch === '"' || ch === "'" || ch === '`') { q = ch; continue; }
+        if (ch === '{' || ch === '(' || ch === '[') stack.push(ch);
+        else if (ch === '}' || ch === ')' || ch === ']') {
+          const open = stack.pop();
+          const match = (ch === '}' && open === '{') || (ch === ')' && open === '(') || (ch === ']' && open === '[');
+          if (!match) return { path: rel, valid: false, kind: 'ts', error: `${rel} — delimitador '${ch}' sem abertura correspondente` };
+        }
+      }
+      if (q) return { path: rel, valid: false, kind: 'ts', error: `${rel} — string ${q} não fechada (arquivo truncado)` };
+      if (stack.length) return { path: rel, valid: false, kind: 'ts', error: `${rel} — delimitador '${stack[stack.length - 1]}' não fechado (arquivo truncado)` };
+      return { path: rel, valid: true, kind: 'ts_basic', error: null };
     }
     const result = ts.transpileModule(raw, {
       fileName: rel,
@@ -117,17 +164,33 @@ function validateTouchedFileSyntax(projectRoot, relPath) {
   return { path: rel, valid: true, kind: 'other', error: null };
 }
 
+function isSafeRelativeWithinRoot(projectRoot, relPath) {
+  const rel = normalizeRel(relPath);
+  if (!rel || path.isAbsolute(relPath) || /^[A-Za-z]:/.test(rel)) return false;
+  if (rel.split('/').some((seg) => seg === '..')) return false;
+  const rootAbs = path.resolve(projectRoot);
+  const targetAbs = path.resolve(rootAbs, rel);
+  const rootPrefix = `${rootAbs.replace(/\\/g, '/').replace(/\/+$/, '')}/`;
+  const targetNorm = targetAbs.replace(/\\/g, '/');
+  return process.platform === 'win32'
+    ? targetNorm.toLowerCase().startsWith(rootPrefix.toLowerCase())
+    : targetNorm.startsWith(rootPrefix);
+}
+
 function collectDirtyDiffs(projectRoot) {
   const isScratch = makeScratchMatcher(projectRoot);
-  const statusRes = spawnSync('git', ['status', '--porcelain', '-uall'], {
+  const statusRes = spawnSync('git', ['-c', 'core.quotepath=false', 'status', '--porcelain', '-uall', '--', '.'], {
     cwd: projectRoot,
     encoding: 'utf8',
     windowsHide: true,
   });
   if (statusRes.status !== 0) return [];
+  const prefixRes = spawnSync('git', ['rev-parse', '--show-prefix'], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
+  const repoPrefix = prefixRes.status === 0 && prefixRes.stdout ? normalizeRel(prefixRes.stdout) : '';
+  const stripRepoPrefix = (p) => (repoPrefix && p.startsWith(repoPrefix) ? p.slice(repoPrefix.length) : p);
 
   const numstatMap = new Map();
-  const diffRes = spawnSync('git', ['diff', '--numstat', 'HEAD'], {
+  const diffRes = spawnSync('git', ['-c', 'core.quotepath=false', 'diff', '--relative', '--numstat', 'HEAD', '--', '.'], {
     cwd: projectRoot,
     encoding: 'utf8',
     windowsHide: true,
@@ -150,10 +213,13 @@ function collectDirtyDiffs(projectRoot) {
     if (line.length < 4) continue;
     const xy = line.slice(0, 2);
     let rawPath = line.slice(3);
+    let renamedFrom = null;
     if (rawPath.includes(' -> ')) {
-      rawPath = rawPath.split(' -> ').pop();
+      const [fromRaw, toRaw] = rawPath.split(' -> ');
+      renamedFrom = stripRepoPrefix(normalizeRel(unquotePorcelainPath(fromRaw)));
+      rawPath = toRaw;
     }
-    const rel = normalizeRel(unquotePorcelainPath(rawPath));
+    const rel = stripRepoPrefix(normalizeRel(unquotePorcelainPath(rawPath)));
     if (!rel || seen.has(rel)) continue;
     if (rel === '.oxe' || rel.startsWith('.oxe/')) continue;
     if (isScratch(rel)) continue;
@@ -176,7 +242,7 @@ function collectDirtyDiffs(projectRoot) {
       ? `untracked${added != null ? ` (+${added} linhas)` : ''}`
       : `${code}${added != null || deleted != null ? ` (+${added ?? 0}/-${deleted ?? 0})` : ''}`;
 
-    out.push({ path: rel, status: code, added, deleted, summary });
+    out.push({ path: rel, ...(renamedFrom ? { renamed_from: renamedFrom } : {}), status: code, added, deleted, summary });
   }
   return out;
 }
@@ -193,15 +259,18 @@ function findInProgressTasks(planDoc, events) {
     const payload = ev.payload && typeof ev.payload === 'object' ? ev.payload : {};
     const id = payload.task || ev.work_item_id || null;
     if (!id) continue;
-    if (ev.type === 'TaskStarted') {
+    if (ev.type === 'TaskStarted' || ev.type === 'AttemptStarted') {
+      const prev = eventState.get(id) || {};
       eventState.set(id, {
         in_progress: true,
-        executor: payload.executor || null,
-        base_sha: payload.base_sha || null,
-        started_at: ev.timestamp || null,
+        executor: payload.executor || prev.executor || null,
+        base_sha: payload.base_sha || prev.base_sha || null,
+        started_at: ev.timestamp || prev.started_at || null,
       });
-    } else if (ev.type === 'TaskCompleted' || ev.type === 'WorkItemCompleted' || ev.type === 'TaskReset') {
+    } else if (ev.type === 'TaskCompleted' || ev.type === 'WorkItemCompleted' || ev.type === 'TaskReset' || ev.type === 'TaskDeferred' || ev.type === 'WorkItemFailed') {
       eventState.set(id, { in_progress: false });
+    } else if (ev.type === 'PlanTasksSuperseded' && Array.isArray(payload.tasks)) {
+      for (const tid of payload.tasks) eventState.set(tid, { in_progress: false });
     }
   }
 
@@ -289,9 +358,8 @@ function inspectDirtyResume(projectRoot, planDoc, events, isPathInScope = defaul
 function resetTaskFiles(projectRoot, baseSha, inScopeDiffs) {
   const ref = baseSha && /^[0-9a-f]{7,40}$/i.test(String(baseSha)) ? String(baseSha) : 'HEAD';
   const discarded = [];
-  for (const item of inScopeDiffs || []) {
-    const rel = normalizeRel(typeof item === 'string' ? item : item.path);
-    if (!rel) continue;
+  const restoreOrRemove = (rel) => {
+    if (!isSafeRelativeWithinRoot(projectRoot, rel)) return;
     const cat = spawnSync('git', ['cat-file', '-e', `${ref}:${rel}`], {
       cwd: projectRoot,
       encoding: 'utf8',
@@ -309,11 +377,21 @@ function resetTaskFiles(projectRoot, baseSha, inScopeDiffs) {
         encoding: 'utf8',
         windowsHide: true,
       });
+      const abs = path.resolve(projectRoot, rel);
       try {
-        fs.rmSync(path.join(projectRoot, rel), { force: true });
+        const st = fs.lstatSync(abs);
+        if (st.isSymbolicLink() || st.isFile()) fs.unlinkSync(abs);
+        else if (st.isDirectory()) fs.rmSync(abs, { recursive: true, force: true });
       } catch { /* ignore */ }
     }
-    discarded.push(rel);
+    if (!discarded.includes(rel)) discarded.push(rel);
+  };
+  for (const item of inScopeDiffs || []) {
+    const rel = normalizeRel(typeof item === 'string' ? item : item && item.path);
+    if (rel) restoreOrRemove(rel);
+    if (item && typeof item === 'object' && item.renamed_from) {
+      restoreOrRemove(normalizeRel(item.renamed_from));
+    }
   }
   return discarded;
 }

@@ -18,6 +18,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { stripCodeComments } = require('./oxe-test-scope.cjs');
 
 const CODE_RE = /\.(c|m)?[jt]sx?$|\.(kt|kts|java|py|go|rs|swift|cs)$/i;
 const TEST_RE = /(^|\/)(tests?|__tests__|specs?|e2e)\/|\.(test|spec)\.[^/]+$/i;
@@ -68,7 +69,7 @@ function globRe(glob) {
   return new RegExp(`^${re}$`, 'i');
 }
 
-const git = (root, args) => spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+const git = (root, args) => spawnSync('git', ['-c', 'core.quotepath=false', ...args], { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
 
 /** Added lines of a file vs `base` (working tree), with their line numbers; a new/untracked file: every line. */
 function addedLines(root, file, base) {
@@ -103,26 +104,118 @@ function changedFiles(root, base, scope) {
   return out;
 }
 
+function destructuringBindsSymbol(inner, name, isArray) {
+  for (const part of String(inner || '').split(',')) {
+    const cleaned = part.replace(/^\s*\.\.\./, '').split('=')[0].trim();
+    if (!cleaned) continue;
+    if (!isArray && cleaned.includes(':')) {
+      const rhs = cleaned.slice(cleaned.indexOf(':') + 1).trim();
+      if (rhs === name) return true;
+    } else if (cleaned === name) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function definesSymbol(text, name) {
-  const n = name.replace(/[$]/g, '\\$');
-  return new RegExp(`\\b(function\\*?|class|const|let|var|interface|type|enum|fun|object|val|def|struct|trait|func)\\s+${n}\\b|export\\s*\\{[^}]*\\b${n}\\b|\\b${n}\\s*[:=]\\s*(async\\s*)?(\\(|function)|\\b(module\\.)?exports\\.${n}\\s*=|module\\.exports\\s*=\\s*\\{[^}]*\\b${n}\\b`).test(text);
+  if (!name || typeof name !== 'string') return false;
+  const cleaned = stripCodeComments(String(text || '')).replace(/^[ \t]*#.*$/gm, '');
+  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const idL = '(?<![\\w$])';
+  const idR = '(?![\\w$])';
+
+  // 1. Direct keyword declarations (JS/TS/Kotlin/Python/Rust/Go/Swift, including Kotlin extension `fun Receiver.name`)
+  const kwRe = new RegExp(
+    `(?<![.\\w$])(?:function\\s*\\*?|class|const|let|var|interface|type|typealias|enum|fun|object|val|def|struct|trait|func|protocol)\\s+(?:[A-Za-z_$][\\w$]*\\.)?${esc}${idR}`
+  );
+  if (kwRe.test(cleaned)) return true;
+
+  // 2. Exported destructuring (`export const { saveDraft, raw: other } = ...` or `export const [a, b] = ...`)
+  const objDestructRe = /\bexport\s+(?:const|let|var)\s*\{([^}]+)\}\s*=/g;
+  let m;
+  while ((m = objDestructRe.exec(cleaned)) !== null) {
+    if (destructuringBindsSymbol(m[1], name, false)) return true;
+  }
+  const arrDestructRe = /\bexport\s+(?:const|let|var)\s*\[([^\]]+)\]\s*=/g;
+  while ((m = arrDestructRe.exec(cleaned)) !== null) {
+    if (destructuringBindsSymbol(m[1], name, true)) return true;
+  }
+
+  // 3. Alias-aware ESM `export { a, orig as exported }` / `export type { ... }`
+  const exportListRe = /\bexport\s+(?:type\s+)?\{([^}]+)\}/g;
+  while ((m = exportListRe.exec(cleaned)) !== null) {
+    for (const rawItem of m[1].split(',')) {
+      const item = rawItem.trim().replace(/^type\s+/, '').trim();
+      if (!item) continue;
+      const asMatch = /^([A-Za-z_$][\w$]*|\bdefault\b)\s+as\s+([A-Za-z_$][\w$]*)$/.exec(item);
+      const exported = asMatch ? asMatch[2] : item;
+      if (exported === name) return true;
+    }
+  }
+
+  // 4. CommonJS exports (`exports.foo =`, `module.exports['$foo'] =`, `module.exports = { foo, alias: impl }`)
+  const cjsPropRe = new RegExp(`(?<![\\w$])(?:module\\.)?exports\\.${esc}\\s*=|(?<![\\w$])(?:module\\.)?exports\\s*\\[\\s*['"\`]${esc}['"\`]\\s*\\]\\s*=`);
+  if (cjsPropRe.test(cleaned)) return true;
+  const cjsObjRe = /\bmodule\.exports\s*=\s*\{([^}]+)\}/g;
+  while ((m = cjsObjRe.exec(cleaned)) !== null) {
+    for (const rawItem of m[1].split(',')) {
+      const item = rawItem.trim();
+      if (!item || item.startsWith('...')) continue;
+      const colonIdx = item.indexOf(':');
+      if (colonIdx > 0) {
+        const key = item.slice(0, colonIdx).trim().replace(/^['"`]|['"`]$/g, '');
+        if (key === name) return true;
+      } else {
+        const shorthand = /^(?:async\s+)?([A-Za-z_$][\w$]*)\s*(?:\(|$)/.exec(item);
+        if (shorthand && shorthand[1] === name) return true;
+      }
+    }
+  }
+
+  // 5. Java / C# typed method or field declarations (`public int size()`, `private static final int MAX = 1;`)
+  const jvmMemberRe = new RegExp(
+    `(?:^|[;{}])\\s*(?:@[\\w$.]+(?:\\([^)]*\\))?\\s*)*(?:(?:public|protected|private|static|final|synchronized|abstract|default|native)\\s+)+(?:<[^>]+>\\s+)?[A-Za-z_$][\\w$<>\\[\\],.?\\s]*\\s+${esc}\\s*(?:\\(|=|;)`
+  );
+  if (jvmMemberRe.test(cleaned)) return true;
+
+  // 6. Function / arrow assignment or object method (`foo = (...) =>`, `foo: async function(...)`, `foo: x =>`)
+  const fnAssignRe = new RegExp(`(?<![.\\w$])${idL}${esc}${idR}\\s*[:=]\\s*(?:async\\s*)?(?:\\(|function\\b|<[^>]+>\\s*\\(|[A-Za-z_$][\\w$]*\\s*=>)`);
+  return fnAssignRe.test(cleaned);
+}
+
+/** The file's text at `base` (a commit), or null when it did not exist there. */
+function textAt(root, base, file) {
+  const r = git(root, ['show', `${base || 'HEAD'}:${file}`]);
+  return r.status === 0 ? String(r.stdout || '') : null;
 }
 
 /** Level 1: symbols the pack declares for the task, defined in their files. */
-function existsFindings(root, taskId) {
+function existsFindings(root, taskId, base) {
   const out = [];
   let pack = null;
   for (const p of [path.join(root, '.oxe', 'IMPLEMENTATION-PACK.json')]) { try { pack = JSON.parse(fs.readFileSync(p, 'utf8')); } catch { /* */ } }
   const entry = pack && Array.isArray(pack.tasks) ? pack.tasks.find((t) => t && (t.id === taskId || t.task === taskId)) : null;
+  let nameOfSig = null;
   for (const s of (entry && Array.isArray(entry.symbols) ? entry.symbols : [])) {
     if (!s || typeof s !== 'object' || s.exported === false) continue;
-    const name = String(s.name || '').trim();
+    let name = String(s.name || '').trim();
+    if (!name && s.signature) {
+      if (!nameOfSig) nameOfSig = require('./oxe-plan-skeleton.cjs').nameOf;
+      name = String(nameOfSig(s.signature) || '').trim();
+    }
     const file = norm(s.path || s.file || '');
     if (!/^[A-Za-z_$][\w$]*$/.test(name) || !file || file.includes('*')) continue;
     let text = null;
     try { text = fs.readFileSync(path.join(root, file), 'utf8'); } catch { text = null; }
     if (text == null) out.push({ level: 'exists', file, line: 0, why: `arquivo do símbolo ${name} não existe` });
-    else if (!definesSymbol(text, name)) out.push({ level: 'exists', file, line: 0, why: `${name} declarado no pack, não definido no arquivo` });
+    else if (!definesSymbol(text, name)) {
+      // Absent at the base too: the attempt did not create it. A name guessed from the file (text.ts → `text`) can
+      // never be satisfied by a retry — oxespace-152-mobile paid two correct attempts for it.
+      const before = textAt(root, base, file);
+      const absentAtBase = before != null && !definesSymbol(before, name);
+      out.push({ level: 'exists', file, line: 0, why: `${name} declarado no pack, não definido no arquivo`, symbol: name, absent_at_base: absentAtBase });
+    }
   }
   return out;
 }
@@ -158,6 +251,19 @@ function substantiveFindings(root, files, base, ignore, scope) {
   return out;
 }
 
+function collectPkgEntryPaths(val, acc = []) {
+  if (!val) return acc;
+  if (typeof val === 'string') {
+    const clean = norm(val);
+    if (clean) acc.push(clean);
+  } else if (Array.isArray(val)) {
+    for (const item of val) collectPkgEntryPaths(item, acc);
+  } else if (typeof val === 'object') {
+    for (const v of Object.values(val)) collectPkgEntryPaths(v, acc);
+  }
+  return acc;
+}
+
 /** Level 3: a new source file referenced by another non-test file, or a declared entry point. */
 function wiredFindings(root, newFiles, entries, ignore) {
   const out = [];
@@ -165,14 +271,16 @@ function wiredFindings(root, newFiles, entries, ignore) {
   if (!candidates.length) return out;
   let pkg = {};
   try { pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')); } catch { pkg = {}; }
-  const pkgEntries = JSON.stringify([pkg.main, pkg.bin, pkg.exports, pkg.module]).replace(/\\\\/g, '/');
+  const pkgEntryPaths = collectPkgEntryPaths([pkg.main, pkg.bin, pkg.exports, pkg.module]);
+  const pkgEntryStems = new Set(pkgEntryPaths.map((p) => path.posix.basename(p).replace(/\.[^.]+$/, '')));
   const tracked = (git(root, ['ls-files', '--cached', '--others', '--exclude-standard']).stdout || '').split(/\r?\n/).map(norm).filter((f) => f && CODE_RE.test(f) && !TEST_RE.test(f));
   const texts = new Map();
   const read = (f) => { if (!texts.has(f)) { try { const st = fs.statSync(path.join(root, f)); texts.set(f, st.size < 1_500_000 ? fs.readFileSync(path.join(root, f), 'utf8') : ''); } catch { texts.set(f, ''); } } return texts.get(f); };
   for (const file of candidates) {
     const stem = path.posix.basename(file).replace(/\.[^.]+$/, '');
-    if (pkgEntries.includes(file) || pkgEntries.includes(stem)) continue;
-    const re = new RegExp(`['"\`][^'"\`]*\\b${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\.[a-z]+)?['"\`]|\\bimport\\s+[\\w.]*\\b${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+    if (pkgEntryPaths.includes(file) || pkgEntryStems.has(stem)) continue;
+    const stemEsc = stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`['"\`](?:[^'"\`]*[/\\\\])?${stemEsc}(?:\\.[A-Za-z0-9]+)*['"\`]|\\bimport\\s+[\\w.]*(?<![\\w$])${stemEsc}(?![\\w$])`);
     const used = tracked.some((other) => other !== file && re.test(read(other)));
     if (!used) out.push({ level: 'wired', file, line: 0, why: 'arquivo novo que nenhum outro arquivo (fora dos testes) importa ou usa' });
   }
@@ -190,7 +298,7 @@ function stubFindings(root, options = {}) {
   const changed = changedFiles(root, options.since || 'HEAD', options.scope || []);
   const files = [...changed.keys()];
   const out = [];
-  if (levels.has('exists') && options.task) out.push(...existsFindings(root, options.task));
+  if (levels.has('exists') && options.task) out.push(...existsFindings(root, options.task, options.since || 'HEAD'));
   if (levels.has('substantive')) out.push(...substantiveFindings(root, files, options.since || 'HEAD', ignore, options.scope || []));
   if (levels.has('wired')) out.push(...wiredFindings(root, files.filter((f) => changed.get(f)), entries, ignore));
   return out;
@@ -206,6 +314,17 @@ function blockedLine(findings) {
   if (!b.length) return null;
   const needs = [...new Set(b.flatMap((f) => (f.needs || []).map((n) => n.file)))];
   return `scope_insufficient: stub marcado como bloqueado em ${b.map((f) => `${f.file}:${f.line}`).join(', ')}${needs.length ? ` — a mudança precisa de ${needs.join(', ')}, fora do escopo da tarefa` : ''} (OXB-188)`;
+}
+
+/**
+ * The line the scheduler reads to stop without a retry: every remaining finding is a pack symbol that the file did not
+ * define before the task either, and the attempt did not create it — the pack most likely names a symbol that does
+ * not exist (a plan defect a retry cannot fix).
+ */
+function packSymbolLine(findings) {
+  if (!findings.length || !findings.every((f) => f.level === 'exists' && f.absent_at_base)) return null;
+  const list = findings.map((f) => `${f.symbol} em ${f.file}`).join(', ');
+  return `plan_defect: o pack nomeia um símbolo que não existe — ${list}: não existia na base e a tentativa não o criou. Se o nome está errado (ex.: tirado do nome do arquivo), corrija o IMPLEMENTATION-PACK.json; se a tarefa deve criá-lo, deixe isso explícito no pack e rode de novo`;
 }
 
 if (require.main === module) {
@@ -225,10 +344,12 @@ if (require.main === module) {
   if (findings.length) {
     const bl = blockedLine(findings);
     if (bl) console.error(bl);
+    const pd = packSymbolLine(findings);
+    if (pd) console.error(pd);
     console.error(`oxe stub-check: ${findings.length} problema(s) — a tarefa ainda não está pronta (OXB-108)\n${format(findings)}\n(exceção revisada: comente "oxe-stub-ok" na linha, ou stub_check.ignore no .oxe/config.json)`);
     process.exit(1);
   }
   console.log('oxe stub-check: ok');
 }
 
-module.exports = { blockedLine, blockedTargets, BLOCKED_PATTERNS, stubFindings, format, addedLines, STUB_PATTERNS };
+module.exports = { definesSymbol, blockedLine, packSymbolLine, blockedTargets, BLOCKED_PATTERNS, stubFindings, format, addedLines, STUB_PATTERNS };

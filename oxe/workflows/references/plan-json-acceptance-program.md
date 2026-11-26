@@ -25,6 +25,23 @@
 
 O teste fixa a interface exigida em código (nomes, assinatura, formato de retorno, erros) — é a SPEC executável. O runtime congela o hash no compile; o executor recebe o teste no prompt, não pode escrevê-lo (`tool denied`) e o verify reprova se ele mudar (`acceptance_tampered`) ou faltar. Motivo: quando o mesmo agente implementa e escreve a prova, uma leitura errada do requisito é "provada" pelo próprio teste (falso verde do e2e real da 1.19). O executor pode e deve escrever testes próprios adicionais em outros arquivos. `acceptance_tests_required: true` no `config.json` torna obrigatório um teste de aceite por A* da fase.
 
+**Valide o teste antes de congelar (bench B18):** um teste congelado com defeito trava o execute (na F1 do bench, A7 contradizia o 409 do próprio arquivo e A39 contradizia a decisão D-F1-1: 69/71 e 14 min de retrabalho). Antes de declarar `acceptance_tests`, para cada teste:
+1. Rode-o contra a árvore atual: ele deve ficar **vermelho pelo motivo certo** (`oxe-cc plan lint --dry-verify`).
+2. Escreva uma implementação de referência **descartável** mínima (numa pasta temporária ou num stash, nunca no commit) e rode o teste: ele deve ficar **verde**. Se não fica verde com uma implementação correta, o teste está errado.
+3. Aplique 2 ou 3 mutações óbvias na referência (`<` por `<=`, um status HTTP trocado, uma checagem de permissão removida): o teste deve ficar vermelho em cada uma.
+4. Confira que os testes do mesmo arquivo e as decisões D-* da fase não se contradizem.
+
+Descarte a referência antes de commitar os testes. Isso custa uma rodada no plano e evita a rodada de emenda (CR + `plan amend-test`) no execute.
+
+**NFR de tempo não vira teste congelado (bench B52).** Um critério de desempenho medido em tempo de parede (p95, latência, "responde em < N ms") congelado como `acceptance_tests` é instável: ele depende da carga da máquina e do `npm test` em paralelo. No bench, o A34 falhou em 2 de 4 execuções e bloqueou o close da F4 como "regressão". Declare-o em `.oxe/program/nfr.json` (OXB-144: `metric`, `method`, `threshold`, `samples` ≥ 5). A medição é feita por amostras com mediana, vira gate implícito da fase (`nfr-A<n>`) e acusa regressão contra a fase anterior. O teste de aceite do critério cobre só o comportamento (a rota existe e responde certo), nunca o tempo.
+
+**e2e congelado sem corrida:** um teste que corre contra a montagem ou a animação falha por tempo, não por código, e paga tentativas.
+- Depois de abrir o app, navegar ou redimensionar, espere um elemento da shell antes da primeira ação (G40).
+- Antes de medir geometria dentro de um overlay (dialog, menu, popover, tooltip), espere a animação de entrada terminar: `await el.evaluate((e) => Promise.all(e.getAnimations({ subtree: true }).map((a) => a.finished)))`, ou o helper do repo em `lint.e2e_ready_helpers` (G40c).
+- Um nome acessível com regex é sensível a maiúsculas; prefira string ou `/…/i` (G40b).
+
+**Escopo de quem é citado:** todo arquivo que as notas da tarefa ou o cabeçalho dos testes congelados dela citam (pelo caminho ou pelo nome do componente) entra em `files`, ou em `read_only: [...]` quando a tarefa só o lê (G44).
+
 Antes de declarar o plano pronto, rodar **`oxe-cc plan lint`** e corrigir todos os erros: ids únicos, dependências existentes e em onda anterior, escopos disjuntos na mesma onda, A* existentes na SPEC, tarefa mutável com entrada no IMPLEMENTATION-PACK e `plan_max_tasks_per_wave`.
 
 **Programa por fases:** se existir `.oxe/program/PROGRAM.json` com fase ativa, planejar **somente essa fase**: os A* do plano devem ser exatamente os da fase (o lint reprova A* de outra fase e A* da fase sem tarefa) e `PLAN.json` declara `"phase": "<id>"`. Ler `.oxe/program/interfaces/*.json` das fases fechadas: tarefas que consomem esses módulos devem importá-los pelos nomes/assinaturas registrados, não reimplementá-los. No IMPLEMENTATION-PACK, todo símbolo público de módulo (`kind` function/class/const/type) vira contrato verificado: o verify reprova com `exports_missing` se o arquivo não o exportar.
@@ -82,7 +99,7 @@ Num repositório com suíte própria (typecheck, lint, testes de governança com
 
 ## Execução econômica (1.21)
 
-- **Orçamento por run:** `runtime execute --budget-turns N [--budget-usd X]`, ou `"budget": {"turns": 20, "usd": 5, "max_retries": 1}` no PLAN.json. As flags vencem.
+- **Orçamento por run:** `runtime execute --budget-turns N [--budget-usd X]` (teto acumulado do run; `--budget-add-usd X` dá mais X sobre o já gasto), ou `"budget": {"turns": 20, "usd": 5, "max_retries": 1}` no PLAN.json. As flags vencem.
   - O ledger `.oxe/runs/<run>.budget.json` soma o uso entre execuções da mesma run.
   - O scheduler confere o orçamento **antes de cada tentativa** e limita a próxima aos turnos que restam, então a run nunca passa do teto de turnos. Ao esgotar, emite `BudgetExhausted` e bloqueia a tarefa.
   - Para continuar, peça OK ao dono do teto. Não faça um reset silencioso: `--budget-reset` só com aprovação.
@@ -131,7 +148,7 @@ Num repositório com suíte própria (typecheck, lint, testes de governança com
 ## Execução com o plano como fonte (1.21.1)
 
 - **O grafo é projeção:** o `runtime execute` recompila sozinho quando o PLAN.json, o PLAN.md, a SPEC ou o pack mudaram desde o último compile. Tarefas `done` nunca são refeitas.
-  - Para refazer uma tarefa, **reabra-a**: um CR `defect`/`spec_gap` (`runtime feedback`) reabre só a tarefa que fecha o critério, ou as que `--tasks T7[,T8]` nomear. As outras impactadas aparecem como "impactadas, não reabertas", e uma tarefa entregue por fora (`external_delivery`, `verify_only`, `blocked_by`) nunca é reaberta. `oxe-cc plan reopen Tn` reabre à mão.
+  - Para refazer uma tarefa, **reabra-a**: um CR `defect`/`spec_gap` (`runtime feedback … --reopen`) reabre só a tarefa que fecha o critério, ou as que `--tasks T7[,T8]` nomear. Sem `--reopen`, o CR só se liga às tarefas e mostra o comando que as reabriria: tarefa concluída com commit nunca é reaberta em silêncio. Tarefa nova de CR recebe o próximo id livre (o `plan merge` sobre o PLAN.json atual mantém os ids e as concluídas), e a ordem vem do `depends_on`, nunca do id. As outras impactadas aparecem como "impactadas, não reabertas", e uma tarefa entregue por fora (`external_delivery`, `verify_only`, `blocked_by`) nunca é reaberta. `oxe-cc plan reopen Tn` reabre à mão.
   - Ondas com escopos disjuntos (OXB-050): `runtime execute --parallel-mutating --checkpoint-commits` roda as tarefas mutáveis da onda em paralelo, uma worktree por tarefa (`deps_strategy` no config). Escopos que se sobrepõem nunca rodam juntos. Só os arquivos do escopo entram na checkout, e o verify roda de novo no tree integrado. O padrão continua serial.
   - Gates por tarefa (OXB-048): `task_gates` (PLAN.json ou config) rodam no verify de toda tarefa que escreve código, por exemplo typecheck incremental e `vitest related {files}`. Declare `affected_suites` quando a tarefa pode quebrar uma suíte vizinha (migração → suíte de migrações). Os `phase_gates` continuam rodando uma vez no verify da fase.
   - Branch do programa × main: `oxe-cc runtime sync --from origin/main` (merge local + reverify das tarefas done tocadas pela base) e `oxe-cc runtime promote Tn --base main` (branch por tarefa, cherry-pick -x dos checkpoints e dos testes congelados, `pr:ready`; PR só com `--open-pr`). Nunca copie arquivos inteiros entre branches: vazam hunks de outras tarefas.
@@ -150,4 +167,8 @@ Num repositório com suíte própria (typecheck, lint, testes de governança com
 - **Ambiente dos processos filhos:** executor, ferramentas, verify e gates não herdam `OXESPACE_*` nem segredos (`TOKEN`, `SECRET`, `PASSWORD`, `API_KEY`, `CREDENTIAL`, `PRIVATE_KEY`).
   - Para ajustar: `env_scrub` (regex extras) e `env_allow` (nomes) no config.
   - `oxe-cc doctor --project` mostra o que será removido.
-- **Modo inplace:** quando uma tarefa falha de vez, a tentativa é guardada em `.oxe/runs/<run>/attempts/<task>-failed/` (patch e arquivos novos) e o escopo dela é restaurado. Arquivos que você já tinha alterado antes do execute não são tocados. Cada tentativa tem seu log em `attempts/<task>-<n>.log`, e `--wave N` roda só a onda N.
+- **Modo inplace:** quando uma tarefa falha de vez, a tentativa é guardada em `.oxe/runs/<run>/attempts/<task>-failed/` (patch e arquivos novos) e o escopo dela é restaurado. Arquivos que você já tinha alterado antes do execute não são tocados. Cada tentativa tem seu log em `attempts/<task>-<n>.log`, e `--wave N` roda só a onda N (`--mode wave` = a primeira onda com tarefa pendente).
+
+## Sessão isolada por card
+
+No `/oxe-plan` de card único: crie ou ative a sessão via CLI (`oxe-cc session create <id> [--title "..."]` / `oxe-cc session switch <id>`). Antes de rodar `oxe-cc runtime execute --session <id>`, **commite os novos `acceptance_tests` congelados no HEAD** com mensagem e trailer de origem válidos (ex.: `git add <teste> && git commit -m "test(acceptance): frozen tests of <KEY>" --trailer "OXE-Task: T1"`), para que `acceptance_lock` e `checkpoint_check` tenham baseline limpo no git. Se um teste congelado precisar de emenda auditada, rode `oxe-cc plan amend-test <path> --reason "<CR-id>" --session <id>`.

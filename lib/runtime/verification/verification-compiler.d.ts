@@ -1,3 +1,4 @@
+export { isRunnerTimeoutOnly } from './runner-timeout';
 import type { ExpectedExport } from './contract-exports';
 import type { EvidenceType } from '../models/evidence';
 import type { VerificationStatus } from '../models/verification-result';
@@ -67,6 +68,8 @@ export interface CheckResult {
     duration_ms: number;
     error: string | null;
     evidence_refs?: string[];
+    /** Bench B55: the command already ran in this suite (same cwd/timeout); this check was judged on that output. */
+    reused_run?: boolean;
     /** Why a check was skipped (`needs_structured_check` = criterion has no executable verification). */
     skip_reason?: string | null;
     /** OXB-072: killed by the check timeout (status `error`, never `fail`). */
@@ -75,6 +78,22 @@ export interface CheckResult {
     tests_executed?: number | null;
     /** Evidence id of the structured summary record (kept out of `evidence_refs` so coverage counts real output only). */
     summary_evidence_ref?: string | null;
+    /**
+     * A failure whose only cause was a test runner's own per-test timeout ("Test timed out in 5000ms") — no assertion
+     * failed. Such a check is run once more by itself; `first` is the original outcome, the result is the rerun's.
+     */
+    rerun?: {
+        reason: 'runner_timeout';
+        first: {
+            status: VerificationStatus;
+            duration_ms: number;
+            error: string | null;
+        };
+        status: VerificationStatus;
+        duration_ms: number;
+    } | null;
+    /** The failure was only a runner timeout (on the rerun too, when there was one). */
+    runner_timeout?: boolean;
 }
 export interface ExecutedVerificationSuite {
     results: CheckResult[];
@@ -118,6 +137,13 @@ interface ParsedPlanLike {
     /** PLAN.json `acceptance_tests` with the hashes frozen when the run was compiled. */
     acceptanceTests?: AcceptanceTestLike[];
 }
+/**
+ * OxeSpace 14/11 (OxeCode F3 close): the frozen regression of closed phases stores hashes taken with LF; with
+ * core.autocrlf the working copy is CRLF and every file read as "acceptance_tampered" although none differed from
+ * origin/main. A frozen file matches when its bytes, its LF form or its CRLF form hash to the frozen sha (the same
+ * line-ending rule as commit-task's frozen check).
+ */
+export declare function frozenFileMatches(absPath: string, sha: string): boolean;
 export declare function sha256File(absPath: string): string | null;
 /**
  * Drop quoted arguments so only invoked programs are classified: `node -e "…'node --test'…"`
@@ -135,6 +161,10 @@ export declare function extractCommandFromHowToVerify(howToVerify: string): stri
 /** Bump when the rules that turn SPEC/PLAN into checks change (invalidates persisted suites). */
 export declare const VERIFICATION_COMPILER_VERSION = "1.20.0";
 export declare function compile(spec: ParsedSpecLike, plan: ParsedPlanLike): AcceptanceCheckSuite;
+/**
+ * Runs a check. A failure caused only by a test runner's per-test timeout (machine load, not the code: the same file
+ * passed alone in 4 s) is run once more by itself before it counts; both outcomes are kept.
+ */
 export declare function runCheck(check: AcceptanceCheck, cwd: string, timeoutMs?: number): Promise<CheckResult>;
 export declare function runSuite(suite: AcceptanceCheckSuite, cwd: string, timeoutMs?: number): Promise<CheckResult[]>;
 export declare function executeSuite(suite: AcceptanceCheckSuite, cwd: string, options: {
@@ -166,4 +196,3 @@ export declare function verifyRun(input: {
     attemptNumber?: number;
     timeoutMs?: number;
 }): Promise<VerifyRunResult>;
-export {};

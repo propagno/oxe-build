@@ -54,4 +54,19 @@ describe('shell-argv — invocação portável', () => {
     );
     assert.equal(out, 'eof');
   });
+
+  test('comandos bash (|| touch ; test ! -e) rodam via Git Bash no win32 sem quebrar no cmd', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-bash-verify-'));
+    try {
+      const flag = path.join(tmp, 'failed.flag').replace(/\\/g, '/');
+      const cmd = `node -e "process.exit(0)" || touch "${flag}" ; node -e "process.exit(0)" && test ! -e "${flag}"`;
+      const result = await runCheck(
+        { id: 'bash-verify', type: 'custom', command: cmd, evidence_type_expected: 'stdout', acceptance_ref: null, description: 'bash verify' },
+        tmp
+      );
+      assert.equal(result.status, 'pass', `${result.stderr}${result.error ?? ''}`);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });

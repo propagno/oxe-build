@@ -48,4 +48,16 @@ const verification_compiler_1 = require("../src/verification/verification-compil
         const out = await built_in_tools_1.BUILT_IN_TOOLS.run_command.execute({ command: 'node -e "process.stdin.resume(); process.stdin.on(\'end\', () => console.log(\'eof\'))"', timeout_ms: 10000 }, os_1.default.tmpdir());
         strict_1.default.equal(out, 'eof');
     });
+    (0, node_test_1.test)('comandos bash (|| touch ; test ! -e) rodam via Git Bash no win32 sem quebrar no cmd', async () => {
+        const tmp = fs_1.default.mkdtempSync(path_1.default.join(os_1.default.tmpdir(), 'oxe-bash-verify-'));
+        try {
+            const flag = path_1.default.join(tmp, 'failed.flag').replace(/\\/g, '/');
+            const cmd = `node -e "process.exit(0)" || touch "${flag}" ; node -e "process.exit(0)" && test ! -e "${flag}"`;
+            const result = await (0, verification_compiler_1.runCheck)({ id: 'bash-verify', type: 'custom', command: cmd, evidence_type_expected: 'stdout', acceptance_ref: null, description: 'bash verify' }, tmp);
+            strict_1.default.equal(result.status, 'pass', `${result.stderr}${result.error ?? ''}`);
+        }
+        finally {
+            fs_1.default.rmSync(tmp, { recursive: true, force: true });
+        }
+    });
 });

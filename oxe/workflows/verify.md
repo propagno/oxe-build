@@ -25,6 +25,20 @@ Se o usuário indicar uma tarefa (ex.: `T2`), focar só nela nas camadas 1–2; 
 **Nota de compatibilidade v1.1.0:** `/oxe-validate-gaps`, `/oxe-security`, `/oxe-ui-review`, `/oxe-review-pr` e `/oxe-retro` foram incorporados por este comando. Esses comandos legados continuam funcionando mas exibem aviso de migração.
 </objective>
 
+<caminho_curto>
+## Caminho curto (padrão) — o runtime é o verify
+
+Use este caminho, e **só ele**, quando as três condições valem: `oxe-cc runtime` está disponível, nenhuma flag foi passada (`--gaps`, `--security`, `--ui`, `--pr`, `--diff`) e a profundidade não é `thorough` (em `.oxe/config.json`: `verification_depth: "thorough"`, ou `profile` `strict` ou `legacy` sem `verification_depth` explícito). Não leia o resto deste arquivo nesse caso.
+
+1. Rode `oxe-cc runtime verify --json` uma vez. Ele executa os testes de aceite congelados, o check de cada tarefa, a regressão das fases fechadas e os gates do projeto, e projeta o `VERIFY.md`. O código de saída é o veredito: `0` passou, `1` reprovou, `2` bloqueado (sign-off humano ou check sem comando).
+2. **Saída 0:** responda em uma tela — total de checks, regressão `x/y`, gates `x/y`, e a linha `Próximo passo: oxe-cc phase close` (com programa) ou o que `oxe-cc status --json` indicar. Não reaudite o plano, não rode os comandos das tarefas de novo, não reescreva o `VERIFY.md`, não faça calibração, rascunho de commit nem checklist de PR. A retrospectiva fica para a última fase do programa (ou para quando o usuário pedir `/oxe-retro`).
+3. **Saída 1:** liste cada check vermelho com a primeira linha do erro e o arquivo. Só aqui vale investigar (Read/Grep no que falhou). Termine com o que corrigir; não marque nada como passou. Registre uma entrada curta em `SUMMARY.md`.
+4. **Saída 2:** liste o que falta do humano (critérios de sign-off) e pare. O sign-off é do usuário: nunca rode `runtime signoff` em nome dele.
+5. Teste congelado alterado: consulte a seção **Emendas de aceite** do `VERIFY.md` projetado antes de acusar adulteração; só arquivo alterado fora desse registro é `acceptance_tampered`.
+
+O caminho completo abaixo (camadas 1 a 6) vale para `verification_depth: "thorough"`, para as flags, para `runtime verify` com resultado `partial` e para o fallback legado sem runtime.
+</caminho_curto>
+
 <flags_processing>
 ## Processamento de flags (executar antes do step 1)
 
@@ -52,9 +66,10 @@ Ao receber qualquer argumento, verificar flags antes de iniciar o fluxo principa
 - Antes da leitura ampla, resolver `.oxe/context/packs/verify.md` e `.oxe/context/packs/verify.json` como entrada prioritária do passo.
 - Se o pack estiver fresco e coerente, usar `read_order`, `selected_artifacts`, `gaps` e `conflicts` como mapa primário da evidência. Se estiver stale, ausente ou com lacunas críticas, fazer fallback explícito para leitura direta e registar isso em `VERIFY.md`.
 - **Runtime enterprise como caminho padrão:** quando `oxe-cc runtime` estiver disponível, executar ou solicitar `oxe-cc runtime verify --dir <projeto>` como caminho primário deste passo. Tratar `verification-manifest.json`, `residual-risk-ledger.json` e `evidence-coverage.json` da run ativa como fonte primária de evidência técnica, e o `VERIFY.md` projetado pelo runtime como base do artefato final.
-- **Programa por fases:** com `.oxe/program/PROGRAM.json` e fase ativa, o `runtime verify` executa também a **regressão congelada das fases fechadas** (checks `reg-<fase>-*`) e imprime `Regressão (F1, …): x/y verdes`. Falha de regressão é bloqueante: registrar em `VERIFY.md` numa seção própria, separada dos A* da fase. Com verify verde, fechar a fase com `oxe-cc runtime program close` (congela a regressão da fase, grava as interfaces reais e faz o commit local da fase; `--no-commit` para pular o commit). Se o gate reprovar, os motivos listados viram o backlog do próximo `/oxe-execute`.
+- **Programa por fases:** com `.oxe/program/PROGRAM.json` e fase ativa, o `runtime verify` executa também a **regressão congelada das fases fechadas** (checks `reg-<fase>-*`) e imprime `Regressão (F1, …): x/y verdes`. Falha de regressão é bloqueante: registrar em `VERIFY.md` numa seção própria, separada dos A* da fase. Com verify verde, fechar a fase com `oxe-cc runtime program close` (exige `--by <papel> --reason "…"` quando usado com `--by-ci`, `--no-rollback-check` ou `--accept-drift`; congela a regressão da fase, grava as interfaces reais e faz o commit local da fase; `--no-commit` para pular o commit). Se o gate reprovar, os motivos listados viram o backlog do próximo `/oxe-execute`.
 - **Gates do projeto (1.21):** o `runtime verify` roda os `phase_gates` do plano (checks `gate-<id>`) e imprime `Gates do projeto: x/y verdes`. Um gate vermelho reprova a fase e abre sozinho um CR `constraint` com a saída. Esse CR fecha quando o gate volta a verde. Não relaxe o gate nem edite as listas de exceção do repositório para passar. Antes do `program close` de uma fase com CI, anexe o run com `oxe-cc runtime ci --attach <run> --head <sha>`.
-- **Dossiê e sign-off (1.20):** depois do verify, rodar `oxe-cc runtime dossier` e revisar `.oxe/dossier/<fase>/` (techspec com Prova, plan com diário). Critério manual/UAT só conta com `oxe-cc runtime signoff --criteria A<n> --by <quem>`. Escrever à mão o handoff "O que a próxima fase deve saber" em `plan.md` antes do `program close` — ver `oxe/workflows/references/plan-json-acceptance-program.md`.
+- **Teste congelado alterado:** antes de acusar adulteração ou pedir decisão nova, consulte o registro oficial: a seção **Emendas de aceite** do `VERIFY.md` projetado (vem de `acceptance_tests[].amended` do `PLAN.json`) e `oxe-cc runtime feedback list` (o CR que motivou a emenda). Arquivo emendado com CR e `plan amend-test` é mudança aprovada: cite o CR e siga. Só um arquivo alterado fora desse registro é adulteração (o `runtime verify` acusa `acceptance_tampered`).
+- **Dossiê e sign-off (1.20):** depois do verify, rodar `oxe-cc runtime dossier` e revisar `.oxe/dossier/<fase>/` (techspec com Prova, plan com diário). Critério manual/UAT só conta com `oxe-cc runtime signoff --criteria A<n> --by <quem>` (critérios permanentes de UI exigem também `--evidence <pasta>`). Escrever à mão o handoff "O que a próxima fase deve saber" em `plan.md` antes do `program close` — ver `oxe/workflows/references/plan-json-acceptance-program.md`.
 - Se `runtime verify` retornar `partial`, continuar com as camadas manuais usando os gaps explícitos do runtime como backlog obrigatório da revisão; não cair silenciosamente para narrativa solta.
 - Se o runtime não estiver compilado, indisponível ou não puder ser executado no ambiente atual, declarar `fallback legado` explicitamente antes de seguir com a verificação manual baseada em markdown e comandos locais.
 - **Agentes de verificação:** quando disponíveis, usar `oxe-verifier`, `oxe-integration-checker`, `oxe-validation-auditor` e `oxe-ui-auditor` como papéis auxiliares para auditar evidência, integração, lacunas de validação e UI. O resultado final continua sendo `VERIFY.md` + manifest/evidence do runtime.
@@ -71,7 +86,7 @@ Ao receber qualquer argumento, verificar flags antes de iniciar o fluxo principa
 - **Camada 5 — Validate-gaps (automático quando `verification_depth: "thorough"`):** após as 4 camadas, se `verification_depth: "thorough"` em `.oxe/config.json`, executar automaticamente a lógica de `oxe/workflows/validate-gaps.md` e produzir `.oxe/VALIDATION-GAPS.md` como parte deste verify. Não requer comando separado.
 - **Camada 6 — Security (automático quando `security_in_verify: true`):** se `security_in_verify: true` em `.oxe/config.json`, executar automaticamente a lógica de `oxe/workflows/security.md` e produzir `.oxe/SECURITY.md` como parte deste verify. Não requer comando separado.
 - **Camada QC — Quality Contract (automático quando SPEC.md contiver critérios R-RB):** se a SPEC.md do escopo resolvido contiver requisitos com ID `R-RB-NN` (gerados pela Fase 3.5 — Elevação de Robustez), executar a Camada QC conforme `<camada_qc_quality_contract>`. Não requer comando separado.
-- **Rotina compact/checkpoint (opcional):** se esta entrega alterou **estrutura**, **stack** ou **pastas** de forma relevante, `/oxe-scan` em modo refresh alinha `.oxe/codebase/` ao repo. Após **verify** com sucesso, `/oxe-project checkpoint` com slug curto pode marcar estado estável.
+- **Rotina compact/checkpoint (opcional):** se esta entrega alterou **estrutura**, **stack** ou **pastas** de forma relevante, `/oxe-scan` em modo refresh alinha `.oxe/codebase/` ao repo. Após **verify** com sucesso, `/oxe-checkpoint` com slug curto pode marcar estado estável.
 </context>
 
 <camada_1_pre_exec_audit>
@@ -206,7 +221,7 @@ Registrar em `VERIFY.md`: `Resultado de calibração | Confiança declarada | Re
    - **Checklist UAT** (Camada 4).
    - **Gaps** — o que falhou e sugestão de correção; se não houver, escrever `Nenhum gap restante`.
    Quando `runtime verify` já tiver projetado `VERIFY.md`, usar essa projeção como base e complementar manualmente apenas as seções ou evidências que o runtime ainda não cobrir.
-7. Atualizar **`.oxe/STATE.md`** global: `verify_complete` ou `verify_failed` + próximo passo (replan, corrigir ou publicar).
+7. Atualizar **`.oxe/STATE.md`** global: `verify_complete` ou `verify_failed` + próximo passo (verde: `/oxe-ship`; reprovado: corrigir ou replanejar).
 7a. **Registro de calibração:** após escrever `STATE.md`, se `PLAN.md` contiver bloco `<confidence_vector>` — extrair o vetor e comparar com o resultado real. Criar ou atualizar `.oxe/calibration.json` com um novo record no formato:
 ```json
 { "cycle": "C-NN", "plan_global_confidence": 0.74, "plan_dimensions": { "technical_risk": 0.45 }, "outcome": { "verify_status": "complete", "actual_waves": 3, "estimated_waves": 2 }, "calibration_error": { "technical_risk": 0.35 } }
@@ -226,7 +241,7 @@ O `calibration_error` de cada dimensão = `|score declarado - resultado observad
    - Escrever/atualizar `.oxe/global/LESSONS.md` (com fallback para `.oxe/LESSONS.md`)
    - Incluir seção **Retrospectiva** resumida no VERIFY.md
    - Especialmente importante quando: houve replanejamento, falhas em execute, critérios A* ajustados, ou ciclo durou mais de 2 ondas
-   - Com `--skip-retro`: pular esta etapa e mencionar que a retrospectiva está disponível via `/oxe-retro` manualmente
+   - Com `--skip-retro`: pular esta etapa e mencionar que a retrospectiva foi pulada. A retro é parte do verify, nunca um passo separado da jornada.
 8c. **Camada 5 — Validate-gaps:** se `verification_depth: "thorough"` em `.oxe/config.json` **ou** flag `--gaps` foi recebida, executar a lógica de `oxe/workflows/validate-gaps.md` e adicionar seção **Gaps de Cobertura** ao VERIFY.md (mesmo conteúdo de VALIDATION-GAPS.md). Também escrever `.oxe/VALIDATION-GAPS.md` separado.
 8d. **Camada 6 — Security:** se `security_in_verify: true` em `.oxe/config.json` **ou** flag `--security` foi recebida, executar a lógica de `oxe/workflows/security.md` e adicionar seção **Auditoria de Segurança** ao VERIFY.md. Também escrever `.oxe/SECURITY.md` separado. Achados P0 bloqueiam o `verify_complete` — registrar `verify_failed` até P0s serem resolvidos.
 8d2. **Camada UI — Revisão de implementação:** se `UI-SPEC.md` existir no escopo **ou** flag `--ui` foi recebida, executar a lógica de `oxe/workflows/ui-review.md` e adicionar seção **Auditoria UI** ao VERIFY.md. Também escrever `.oxe/UI-REVIEW.md` separado.
@@ -240,6 +255,8 @@ O `calibration_error` de cada dimensão = `|score declarado - resultado observad
    - **Riscos residuais**
    - **Resumo**
 </process>
+
+**Ao terminar o verify verde:** o próximo passo é **`/oxe-ship`** (entregar), com a retro já feita aqui dentro. O `/oxe-ship` pergunta o modo de entrega na primeira vez (`delivery` em `.oxe/config.json`) e segue PR, CI e merge, deploy, docs e close (com programa, `program close`). Com `alm.transport: "mcp"`, `oxe-cc alm queue` antes. Termine com o **Próximo passo** de `oxe-cc status --json` (ver `references/next-step-footer.md`); se o motor apontar outro passo (signoff, fila do ALM), siga o motor.
 
 <success_criteria>
 - [ ] VERIFY.md contém as quatro seções: Auditoria de pré-execução, Tabela de tarefas, Tabela de critérios SPEC, Fidelidade de decisões (quando aplicável), Checklist UAT.

@@ -44,10 +44,20 @@ export interface VerifyContract {
   command: string | null;
 }
 
-/** External dependencies of a task (PLAN.json `blocked_by`). */
+const INTERNAL_RUNTIME_WAIT_RE = /^(?:scope_insufficient|waiting_shared_files):/;
+
+/** External dependencies of a task (PLAN.json `blocked_by`, excluding internal runtime waits like scope_insufficient / waiting_shared_files). */
 function taskExternalDependencies(task: ParsedTask): string[] {
   const meta = (task.meta ?? {}) as Record<string, unknown>;
-  return Array.isArray(meta.blocked_by) ? (meta.blocked_by as unknown[]).map(String).filter(Boolean) : [];
+  const blockedBy = Array.isArray(meta.blocked_by) ? (meta.blocked_by as unknown[]).map(String).filter(Boolean) : [];
+  return blockedBy.filter((ref) => !INTERNAL_RUNTIME_WAIT_RE.test(ref));
+}
+
+/** Internal runtime preconditions held by the plan itself (`scope_insufficient:` / `waiting_shared_files:`), never an external delivery. */
+function taskRuntimeWaits(task: ParsedTask): string[] {
+  const meta = (task.meta ?? {}) as Record<string, unknown>;
+  const blockedBy = Array.isArray(meta.blocked_by) ? (meta.blocked_by as unknown[]).map(String).filter(Boolean) : [];
+  return blockedBy.filter((ref) => INTERNAL_RUNTIME_WAIT_RE.test(ref));
 }
 
 /** A task delivered by another path: only its verify runs (`kind: verify_only` | `external_delivery`). */
@@ -84,6 +94,8 @@ export interface NodePolicy {
    * preflight then blocked the whole run.
    */
   external_dependency?: string[];
+  /** Internal runtime waits held by the plan itself (`scope_insufficient:` / `waiting_shared_files:`), never an external delivery. */
+  runtime_wait?: string[];
   /**
    * No agent, no cost: the node only runs its verify (`kind: verify_only` / `external_delivery`, work delivered by
    * another path). Green completes it; red leaves it waiting.
@@ -179,6 +191,7 @@ export function compile(
         max_retries: default_max_retries,
         ...(gateReason ? { gate_reason: gateReason } : {}),
         ...(taskExternalDependencies(task).length ? { external_dependency: taskExternalDependencies(task) } : {}),
+        ...(taskRuntimeWaits(task).length ? { runtime_wait: taskRuntimeWaits(task) } : {}),
         ...(taskIsVerifyOnly(task) ? { verify_only: true } : {}),
       },
     };

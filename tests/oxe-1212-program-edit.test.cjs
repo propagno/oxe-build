@@ -107,6 +107,57 @@ describe('OXB-058: spec amend / spec add', () => {
     assert.equal(again.version, 3);
   });
 
+  it('feedback on a criterion of a phase not started yet records that phase, not "-" (OxeSpace 14/11, CR-X-1)', () => {
+    const dir = project();
+    const fb = op.runtimeFeedback(dir, null, { class: 'spec_gap', summary: 'A40 precisa citar o install-over', criteria: 'A40', by: 'tl' });
+    assert.equal(fb.cr.phase, 'F8');
+  });
+
+  it('amend of an open spec_gap CR that asked for it: no new CR, its version (OxeSpace 14/11, CR-F2-1)', () => {
+    const dir = project();
+    const fb = op.runtimeFeedback(dir, null, { class: 'spec_gap', summary: 'A40 precisa citar o install-over', criteria: 'A40', by: 'tl' });
+    const crs = () => ndjson(dir).filter((r) => r.kind === 'cr');
+    assert.equal(crs().length, 1);
+    const out = op.runtimeSpecAmend(dir, null, { id: 'A40', append: 'install-over', by: 'tl', reason: 'emenda pedida pelo CR aberto' });
+    assert.equal(out.attached, true);
+    assert.equal(out.cr.id, fb.cr.id);
+    assert.equal(out.version, 2);
+    assert.equal(crs().length, 1, 'no new CR');
+    // the same CR again, explicitly: still v2; a second amendment without --cr opens a new CR (v3)
+    assert.equal(op.runtimeSpecAmend(dir, null, { id: 'A40', append: 'ajuste', cr: fb.cr.id, by: 'tl', reason: 'ajuste da mesma emenda' }).version, 2);
+    const third = op.runtimeSpecAmend(dir, null, { id: 'A40', append: 'HML-R-1', by: 'tl', reason: 'outra cláusula do review' });
+    assert.equal(third.attached, undefined);
+    assert.equal(third.version, 3);
+    assert.throws(() => op.runtimeSpecAmend(dir, null, { id: 'A40', append: 'x', cr: 'CR-99', by: 'tl', reason: 'motivo suficiente' }), /CR-99 não existe/);
+  });
+
+  it('amend of another criterion with --cr CR-n attaches to that CR (joins its criteria), never a new CR (OxeSpace 15/11, Approvals polish)', () => {
+    const dir = project();
+    const fb = op.runtimeFeedback(dir, null, { class: 'spec_gap', summary: 'A40 precisa citar o install-over', criteria: 'A40', by: 'tl' });
+    const crs = () => ndjson(dir).filter((r) => r.kind === 'cr');
+    const out = op.runtimeSpecAmend(dir, null, { id: 'A41', append: 'update também', cr: fb.cr.id, by: 'tl', reason: 'a mesma mudança toca o A41' });
+    assert.equal(out.attached, true);
+    assert.equal(out.cr.id, fb.cr.id);
+    assert.equal(crs().length, 1, 'no new CR');
+    const cr = require('../bin/lib/oxe-change.cjs').listChanges(path.join(dir, '.oxe', 'program')).find((c) => c.id === fb.cr.id);
+    assert.deepEqual(cr.criteria.sort(), ['A40', 'A41']);
+  });
+
+  it('R29: a criterion already at v2 that joins an open CR goes to v3 (never back), and the plan sees v3 as required', () => {
+    const dir = project();
+    // A41 → v2 by its own CR (left open: what matters is its version)
+    const first = op.runtimeSpecAmend(dir, null, { id: 'A41', append: 'primeira', by: 'tl', reason: 'emenda anterior do A41' });
+    assert.equal(first.version, 2);
+    const fb = op.runtimeFeedback(dir, null, { class: 'spec_gap', summary: 'A40 precisa citar o install-over', criteria: 'A40', by: 'tl' });
+    const out = op.runtimeSpecAmend(dir, null, { id: 'A41', append: 'segunda', cr: fb.cr.id, by: 'tl', reason: 'a mesma mudança toca o A41' });
+    assert.equal(out.version, 3);
+    const change = require('../bin/lib/oxe-change.cjs');
+    const programDir = path.join(dir, '.oxe', 'program');
+    assert.equal(change.amendmentRequirements(programDir).get('A41').required, 3);
+    assert.equal(change.requiredVersions(programDir).get('A41'), 3);
+    assert.equal(change.amendmentRequirements(programDir).get('A40').required, 2, 'the CR own criterion keeps its version');
+  });
+
   it('amend refuses an unknown criterion and a missing reason, without touching the SPEC', () => {
     const dir = project();
     assert.throws(() => op.runtimeSpecAmend(dir, null, { id: 'A99', text: 'x', by: 'tl', reason: 'motivo suficiente' }), /A99 não está/);
@@ -171,6 +222,28 @@ describe('OXB-058: program phase add --after', () => {
     });
     assert.throws(() => op.runtimeProgramPhaseAdd(dir, null, { after: 'F7', title: 'Celular', by: 'tl' }), /F8 \(pending, com plano\) já começou/);
     assert.equal(read(dir, '.oxe/ROADMAP.md'), ROADMAP);
+  });
+
+  it('run twice is a no-op; a title or a criterion of another phase is refused (OxeSpace 14/11)', () => {
+    const dir = project();
+    op.runtimeProgramPhaseAdd(dir, null, { after: 'F7', title: 'Celular', acceptance: 'A42', by: 'tl' });
+    const roadmap1 = read(dir, '.oxe/ROADMAP.md');
+    const again = op.runtimeProgramPhaseAdd(dir, null, { after: 'F7', title: 'celular', acceptance: 'A42', by: 'tl' });
+    assert.equal(again.already, true);
+    assert.equal(again.phase, 'F8');
+    assert.equal(read(dir, '.oxe/ROADMAP.md'), roadmap1);
+    assert.equal(JSON.parse(read(dir, '.oxe/program/PROGRAM.json')).phases.length, 3);
+    assert.throws(() => op.runtimeProgramPhaseAdd(dir, null, { after: 'F9', title: 'Celular', by: 'tl' }), /já existe a fase F8/);
+    assert.throws(() => op.runtimeProgramPhaseAdd(dir, null, { after: 'F9', title: 'Outra', acceptance: 'A42', by: 'tl' }), /A42 \(F8\)/);
+    assert.equal(read(dir, '.oxe/ROADMAP.md'), roadmap1);
+  });
+
+  it('--depends-on is stored on the new phase; an unknown phase is refused (OxeSpace 14/11, OxeCode F4)', () => {
+    const dir = project();
+    const out = op.runtimeProgramPhaseAdd(dir, null, { after: 'F8', title: 'Celular', dependsOn: 'F7', by: 'tl' });
+    const p = JSON.parse(read(dir, '.oxe/program/PROGRAM.json')).phases.find((x) => x.id === out.phase);
+    assert.deepEqual(p.depends_on, ['F7']);
+    assert.throws(() => op.runtimeProgramPhaseAdd(dir, null, { after: 'F9', title: 'Outra', dependsOn: 'F2', by: 'tl' }), /--depends-on F2: a fase não existe/);
   });
 
   it('inserting after the last phase renumbers nothing', () => {
@@ -345,5 +418,92 @@ describe('OXB-082: phase edit --scope replaces the scope bullets', () => {
     assert.match(roadmap, /\*\*Escopo:\*\* Captura H1 e H2\.\n\n- H1, captura HTTP\.\n- H2, painel e aba Rede\.\n\n### Notas/);
     assert.doesNotMatch(roadmap, /OxePost/);
     assert.equal(JSON.parse(read(dir, '.oxe/program/PROGRAM.json')).phases.find((p) => p.id === 'F8').scope, 'Captura H1 e H2.');
+  });
+});
+
+// OxeSpace 14/11 (OxeCode F3 install): requirements written as `- R1 (CODE-8): …`, a --before heading given by its
+// prefix, the visual-input preflight fooled by a test file name, and the "fase inexistente" without the way out.
+describe('F3 install findings: bullet requirements, --before by prefix, visual input from prose only', () => {
+  it('reads `- R1 (CODE-8): …` bullets and appends R5 in the same style; --before matches the heading by prefix', () => {
+    const spec = '# SPEC\n\n## Requisitos\n\n- R1 (CODE-8): menu no terminal.\n- R2 (CODE-9): menu no cabeçalho.\n- R3: x.\n- R4: y.\n\n### Fora do escopo (não objetivos)\n\n- z\n';
+    assert.deepEqual(specEdit.requirementIds(spec), ['R1', 'R2', 'R3', 'R4']);
+    const out = specEdit.addRequirement(spec, 'R5', { text: 'o agente abre o Browser', criteria: 'A9' });
+    assert.equal(out.after, '- R5: o agente abre o Browser (A9)');
+    const noReq = '# SPEC\n\n### Fora do escopo (não objetivos)\n\n- z\n';
+    assert.match(specEdit.addRequirement(noReq, 'R1', { text: 'novo', before: '### Fora do escopo' }).text, /\| R1 \| novo \| v1 \| — \|\n\n### Fora do escopo \(não objetivos\)/);
+  });
+
+  it('a test file name or a code span is no visual input; prose is; VISUAL-INPUTS.json "not_applicable" ends it', () => {
+    const r = require('../bin/lib/oxe-rationality.cjs');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-visual-'));
+    dirs.push(dir);
+    const spec = path.join(dir, 'SPEC.md');
+    const applicable = (text, json) => {
+      fs.writeFileSync(spec, text);
+      const j = path.join(dir, 'V.json');
+      if (json) fs.writeFileSync(j, JSON.stringify(json)); else fs.rmSync(j, { force: true });
+      return r.summarizeVisualInputs({ spec, visualInputsJson: j }).applicable;
+    };
+    assert.equal(applicable('| A2 | captura | P1 | tests/oxe152/code/oxe107-device-screenshot.test.ts |'), false);
+    assert.equal(applicable('a ferramenta `device_screenshot` responde'), false);
+    assert.equal(applicable('O usuário anexou um screenshot da tela de erro.'), true);
+    assert.equal(applicable('O usuário anexou um screenshot da tela de erro.', { visualInputReadiness: 'not_applicable', inputs: [] }), false);
+  });
+});
+
+// OxeSpace 14/11 (Celular F2 CR-01 → CR-02): a spec_gap resolved without amending the criterion (a scope gap) made
+// every acceptance test of A4 stale. `feedback resolve --no-amendment` records it; a withdrawn spec_gap counts neither.
+describe('a spec_gap resolved with no amendment does not version the criterion', () => {
+  it('amendmentRequirements skips it; resolve --no-amendment works on an already resolved spec_gap', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-noamend-'));
+    dirs.push(dir);
+    const programDir = path.join(dir, '.oxe', 'program');
+    fs.mkdirSync(programDir, { recursive: true });
+    fs.writeFileSync(path.join(dir, '.oxe', 'STATE.md'), '# STATE\n');
+    change.appendNdjson(change.changesFile(programDir), { kind: 'cr', id: 'CR-01', class: 'spec_gap', status: 'open', criteria: ['A4'], tasks: ['T4'], amendment: 'changing', summary: 'desktop.ts fora do escopo', at: '2026-11-14T10:00:00Z' });
+    change.appendNdjson(change.changesFile(programDir), { kind: 'cr', id: 'CR-03', class: 'spec_gap', status: 'open', criteria: ['A7'], amendment: 'changing', summary: 'critério A7 muda de verdade', at: '2026-11-14T10:00:00Z' });
+    assert.equal(change.amendmentRequirements(programDir).get('A4').staleBelow, 2, 'open: A4 goes to v2');
+    change.setChangeStatus(programDir, 'CR-01', 'resolved', { resolution: 'T4 passou sem tocar em desktop.ts' });
+    const out = op.runtimeChangeSetStatus(dir, null, { id: 'CR-01', status: 'resolved', by: 'coordenação', reason: 'a ampliação de escopo não foi usada', noAmendment: true });
+    assert.equal(out.no_amendment, true);
+    const req = change.amendmentRequirements(programDir);
+    assert.equal(req.get('A4'), undefined, 'A4 stays v1: the frozen tests are not stale');
+    assert.equal(req.get('A7').required, 2, 'a real amendment still versions');
+    assert.throws(() => op.runtimeChangeSetStatus(dir, null, { id: 'CR-01', status: 'resolved', by: 'x', reason: 'de novo, sem motivo', noAmendment: false }), /já está resolved/);
+  });
+});
+
+// OxeSpace 14/11 (Celular F2 CR-02): T3 reopened by CR-02 was "already green" in the dry-verify, because the frozen
+// test that resolves CR-02 (criterion A3, no "task") was not run; the normalized plan also dropped an entry's "task".
+describe('dry-verify of a task reopened by an open CR runs the frozen test that resolves it', () => {
+  it('the CR test joins the task verify (bound by criterion or by task); red there → not "already green"', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-crdry-'));
+    dirs.push(dir);
+    const programDir = path.join(dir, '.oxe', 'program');
+    fs.mkdirSync(programDir, { recursive: true });
+    fs.writeFileSync(path.join(dir, '.oxe', 'STATE.md'), '# STATE\n');
+    fs.writeFileSync(path.join(dir, '.oxe', 'config.json'), '{"external_dependency_check":false}');
+    fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src', 'terminal.ts'), 'x\n');
+    fs.writeFileSync(path.join(dir, 'size.cjs'), 'process.exit(1)\n');
+    fs.mkdirSync(path.join(dir, 'tests'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'tests', 'cr02.test.ts'), "import { it } from 'vitest'\nit('terminal.service.ts stays under 1000 lines', () => {})\n");
+    change.appendNdjson(change.changesFile(programDir), { kind: 'cr', id: 'CR-02', class: 'defect', status: 'open', criteria: ['A3'], tasks: ['T3'], summary: 'terminal.service.ts passou de 1000 linhas', at: '2026-11-14T12:00:00Z' });
+    const doc = {
+      schema_version: 1,
+      tasks: [{ id: 'T3', title: 'reiniciar', wave: 1, files: ['src/terminal.ts'], acceptance: ['A3'], verify: { commands: ['node -e "process.exit(0)"'] } }],
+      acceptance_tests: [{ criterion: 'A3', files: ['tests/cr02.test.ts'], command: 'node size.cjs', resolves: ['CR-02'] }],
+    };
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.json'), JSON.stringify(doc));
+    spawnSync('git', ['init', '-q'], { cwd: dir });
+    const lint = op.runtimePlanLint(dir, null, { preflight: false, dryVerify: true });
+    const t3 = (lint.dry_verify || []).find((r) => r.task === 'T3');
+    assert.ok(t3, JSON.stringify(lint.dry_verify || lint.errors));
+    assert.notEqual(t3.verdict, 'already_green', JSON.stringify(t3));
+    assert.equal(t3.segments, 2, 'the CR test joined the task verify');
+    // the "task" of an entry survives the normalization
+    const planJson = require('../bin/lib/oxe-plan-json.cjs');
+    const norm = planJson.planJsonToParsedPlan ? planJson.planJsonToParsedPlan({ ...doc, acceptance_tests: [{ ...doc.acceptance_tests[0], task: 't3' }] }) : null;
+    if (norm) assert.equal(norm.acceptanceTests[0].task, 'T3');
   });
 });

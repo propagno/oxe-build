@@ -21,10 +21,12 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const FINDING_ID_RE = /\b(HML-F(\d+)-(\d+))\b/;
+const FINDING_ID_RE = /\b(HML-F(\d+(?:\.\d+)*)-(\d+))\b/;
 const CLASS_RE = /\[(defect|spec_gap|spec-gap|constraint)\]/i;
-const CRIT_RE = /\b(?:A\d+(?:\.\d+)?|G\d+)\b/g;
+const CRIT_RE = /\b(?:A|G)\d+(?:\.\d+)*\b/g;
 const FILE_RE = /`([^`\s]+\.[A-Za-z0-9]{1,6})`/g;
+
+const normPhaseNum = (raw) => String(raw || '').split('.').map((s) => String(Number(s))).join('.');
 
 function normClass(c) {
   const v = String(c || '').toLowerCase().replace('-', '_');
@@ -40,7 +42,7 @@ function fromText(id, phase, text, extra = {}) {
     .replace(/^[#\s>*-]+/, '').replace(/\*\*/g, '').replace(FINDING_ID_RE, '').replace(CLASS_RE, '')
     .replace(/^[\s:—–-]+/, '')
     // a leading "(A48)" / "(A12, A19.3)" names the criterion, it is not part of the summary
-    .replace(/^\((?:\s*(?:A\d+(?:\.\d+)?|G\d+)\s*,?)+\)\s*/, '')
+    .replace(/^\((?:\s*(?:A|G)\d+(?:\.\d+)*\s*,?)+\)\s*/, '')
     .replace(/^[\s:—–-]+/, '').trim();
   return { id, phase, class: normClass(cls && cls[1]), criteria, files, summary: summary || clean.slice(0, 160), body: clean.trim(), ...extra };
 }
@@ -57,10 +59,10 @@ function parseReport(text, options = {}) {
       const m = FINDING_ID_RE.exec(id);
       return {
         id,
-        phase: f.phase || (m ? `F${Number(m[2])}` : doc.phase || null),
+        phase: f.phase || (m ? `F${normPhaseNum(m[2])}` : doc.phase || null),
         class: normClass(f.class),
         criteria: (Array.isArray(f.criteria) ? f.criteria : []).map((c) => String(c).trim().toUpperCase()).filter(Boolean),
-        files: (Array.isArray(f.files) ? f.files : []).map(String),
+        files: (Array.isArray(f.files) ? f.files : []).map((p) => String(typeof p === 'string' ? p : (p && p.path) || '')).filter(Boolean),
         summary: String(f.summary || f.title || '').trim(),
         body: String(f.evidence || f.body || '').trim(),
       };
@@ -69,13 +71,19 @@ function parseReport(text, options = {}) {
   const lines = raw.replace(/\r\n/g, '\n').split('\n');
   const out = [];
   let cur = null;
+  let inFence = false;
   for (const line of lines) {
-    const m = FINDING_ID_RE.exec(line);
+    if (/^\s*(?:```|~~~)/.test(line)) {
+      inFence = !inFence;
+      if (cur) cur.lines.push(line);
+      continue;
+    }
+    const m = !inFence ? FINDING_ID_RE.exec(line) : null;
     if (m) {
       if (cur) out.push(cur);
-      cur = { id: m[1], phase: `F${Number(m[2])}`, lines: [line] };
+      cur = { id: m[1], phase: `F${normPhaseNum(m[2])}`, lines: [line] };
     } else if (cur) {
-      if (/^#{1,3}\s/.test(line)) { out.push(cur); cur = null; } else cur.lines.push(line);
+      if (!inFence && /^#{1,3}\s/.test(line)) { out.push(cur); cur = null; } else cur.lines.push(line);
     }
   }
   if (cur) out.push(cur);
@@ -88,8 +96,8 @@ function githubFindings(ref, options = {}) {
   const asFinding = (issue, repo) => {
     const text = `${issue.title || ''}\n${issue.body || ''}`;
     const m = FINDING_ID_RE.exec(text);
-    const phaseMatch = /\b(?:fase|phase)\s*F?(\d+)\b|\bF(\d+)\b/i.exec(text);
-    const f = fromText(m ? m[1] : `GH-${repo}#${issue.number}`, m ? `F${Number(m[2])}` : phaseMatch ? `F${Number(phaseMatch[1] || phaseMatch[2])}` : null, text, {});
+    const phaseMatch = /\b(?:fase|phase)\s*F?(\d+(?:\.\d+)*)\b|\bF(\d+(?:\.\d+)*)\b/i.exec(text);
+    const f = fromText(m ? m[1] : `GH-${repo}#${issue.number}`, m ? `F${normPhaseNum(m[2])}` : phaseMatch ? `F${normPhaseNum(phaseMatch[1] || phaseMatch[2])}` : null, text, {});
     f.summary = String(issue.title || f.summary).replace(FINDING_ID_RE, '').replace(/^[\s:—–-]+/, '').trim();
     f.source_url = issue.url || null;
     f.labels = (issue.labels || []).map((l) => (typeof l === 'string' ? l : l.name));
@@ -115,15 +123,16 @@ function githubFindings(ref, options = {}) {
 
 /** Criteria of a finding through A* → T → files (tasks of the plan that own the files it names). */
 function criteriaFromFiles(plan, files) {
-  const norm = (p) => String(p).replace(/\\/g, '/').replace(/^\.\//, '');
-  const wanted = new Set((files || []).map(norm));
+  const norm = (p) => String(typeof p === 'string' ? p : (p && p.path) || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  const wanted = new Set((files || []).map(norm).filter(Boolean));
   const out = new Set();
   const tasks = [];
   for (const task of (plan && plan.tasks) || []) {
-    const owns = (task.files || []).map(norm).some((f) => wanted.has(f) || [...wanted].some((w) => w.endsWith(`/${f}`) || f.endsWith(`/${w}`)));
+    if (!task || task.superseded || task.merged_into) continue;
+    const owns = (task.files || []).map(norm).filter(Boolean).some((f) => wanted.has(f) || [...wanted].some((w) => w.endsWith(`/${f}`) || f.endsWith(`/${w}`)));
     if (!owns) continue;
     tasks.push(task.id);
-    for (const a of task.aceite || []) out.add(a);
+    for (const a of [...(task.acceptance || []), ...(task.aceite || [])]) if (a) out.add(a);
   }
   return { criteria: [...out], tasks };
 }

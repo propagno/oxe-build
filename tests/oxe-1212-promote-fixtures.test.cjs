@@ -63,6 +63,75 @@ describe('OXB-160: promote fixtures and its own leftover branch', () => {
     assert.equal(out.error, undefined, out.error);
     assert.deepEqual(out.frozen_tests.sort(), ['tests/acceptance/f2/fixtures/t3.ts', 'tests/acceptance/f2/t3.test.ts', 'tests/acceptance/helpers/h.ts']);
     assert.equal(git(dir, 'show', 'oxe/promote-t3:shared/types/ipc/index.ts'), 'export type Ipc = 1;', 'product source is not copied from the program tip');
+    // the frozen-tests commit carries the task's origin (the commit-msg hook refused it, OxeSpace 14/11)
+    const body = git(dir, 'log', '-1', '--format=%B', 'oxe/promote-t3');
+    assert.match(body, /^test\(acceptance\): frozen tests of T3/);
+    assert.match(body, /^OXE-Task: (F\d+\/)?T3$/m);  });
+
+  it('a test of the task scope re-frozen by a CR quick goes in from the program tip; a verify test of another task is named, not carried (OxeSpace 15/11, F6 T30)', () => {
+    const dir = setup();
+    const g = (...a) => git(dir, ...a);
+    // main has the 1.5.0 u83; the program branch re-froze it (CR quick, no OXE-Task of T3) and changed another test
+    g('checkout', '-q', 'main');
+    write(dir, 'tests/acceptance/f8/u83.test.ts', "it('old', () => {});\n");
+    write(dir, 'tests/unit/other.test.ts', "it('old', () => {});\n");
+    g('add', '-A'); g('commit', '-qm', 'u83 1.5.0');
+    g('checkout', '-q', 'program');
+    g('merge', '-q', '--no-edit', 'main');
+    write(dir, 'tests/acceptance/f8/u83.test.ts', "it('new hints', () => {});\n");
+    g('add', '-A'); g('commit', '-qm', 'test(quick): re-freeze u83 for CR-F6-5');
+    write(dir, 'tests/unit/other.test.ts', "it('changed by T9', () => {});\n");
+    g('add', '-A'); g('commit', '-qm', 'test: other changed by T9', '-m', 'OXE-Task: T9');
+    const plan = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8'));
+    plan.tasks[0].files.push('tests/acceptance/f8/u83.test.ts');
+    plan.tasks[0].verify = { commands: ['vitest run tests/acceptance/f8/u83.test.ts tests/unit/other.test.ts'] };
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.json'), JSON.stringify(plan));
+    const out = op.runtimePromote(dir, null, { task: 'T3', base: 'main' });
+    assert.equal(out.error, undefined, out.error);
+    assert.ok(out.frozen_tests.includes('tests/acceptance/f8/u83.test.ts'), JSON.stringify(out.frozen_tests));
+    assert.equal(git(dir, 'show', 'oxe/promote-t3:tests/acceptance/f8/u83.test.ts'), "it('new hints', () => {});");
+    assert.deepEqual(out.not_carried_tests, ['tests/unit/other.test.ts']);
+    assert.ok(out.warnings.some((w) => /tests\/unit\/other\.test\.ts está no verify de T3 e difere de main.*mudado por [0-9a-f]+ test: other changed by T9/.test(w)), out.warnings.join(' | '));
+    assert.equal(git(dir, 'show', 'oxe/promote-t3:tests/unit/other.test.ts'), "it('old', () => {});", 'not carried');
+  });
+
+  it('a SHARED suite in the task files that another task changed on the program branch is not copied from the tip (cross-review 15/11)', () => {
+    const dir = setup();
+    const g = (...a) => git(dir, ...a);
+    g('checkout', '-q', 'main');
+    write(dir, 'tests/shared.test.ts', "it('base', () => {});\n");
+    g('add', '-A'); g('commit', '-qm', 'shared base');
+    g('checkout', '-q', 'program');
+    g('merge', '-q', '--no-edit', 'main');
+    write(dir, 'tests/shared.test.ts', "it('base', () => {});\nit('T3 case', () => {});\n");
+    g('add', '-A'); g('commit', '-qm', 'feat: T3 shared case', '-m', 'OXE-Task: T3');
+    write(dir, 'tests/shared.test.ts', "import { b } from '../src/b';\nit('base', () => {});\nit('T3 case', () => {});\nit('T32 case', () => b());\n");
+    g('add', '-A'); g('commit', '-qm', 'feat: T32 shared case', '-m', 'OXE-Task: T32');
+    const plan = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8'));
+    plan.tasks[0].files.push('tests/shared.test.ts');
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.json'), JSON.stringify(plan));
+    const out = op.runtimePromote(dir, null, { task: 'T3', base: 'main' });
+    assert.equal(out.error, undefined, out.error);
+    assert.ok(!out.frozen_tests.includes('tests/shared.test.ts'), JSON.stringify(out.frozen_tests));
+    assert.equal(git(dir, 'show', 'oxe/promote-t3:tests/shared.test.ts'), "it('base', () => {});\nit('T3 case', () => {});", 'only what the task cherry-pick brought');
+    assert.ok(out.warnings.some((w) => /tests\/shared\.test\.ts está nos files de T3, mas outra tarefa também o mudou/.test(w)), out.warnings.join(' | '));
+  });
+
+  it('the dirty worktree of a failed promote (pid gone) never blocks the next one (OxeSpace 14/11)', () => {
+    const dir = setup();
+    const first = op.runtimePromote(dir, null, { task: 'T3', base: 'main' });
+    assert.equal(first.error, undefined, first.error);
+    // what the failed promote left: its worktree holding the branch, an uncommitted file, the pid of a dead process
+    const wt = path.join(dir, '.oxe', 'promote-ws', 't3-old');
+    git(dir, 'worktree', 'add', '-q', wt, 'oxe/promote-t3');
+    fs.writeFileSync(path.join(wt, 'pendente.txt'), 'x\n');
+    const dead = Number(require('child_process').spawnSync(process.execPath, ['-e', 'console.log(process.pid)'], { encoding: 'utf8' }).stdout.trim());
+    fs.writeFileSync(`${wt}.pid`, JSON.stringify({ pid: dead, task: 'T3' }));
+    const again = op.runtimePromote(dir, null, { task: 'T3', base: 'main' });
+    assert.equal(again.error, undefined, again.error);
+    assert.ok(again.replaced_branch);
+    assert.ok(again.swept.some((s) => /t3-old$/.test(s)), JSON.stringify(again.swept));
+    assert.equal(fs.existsSync(wt), false);
   });
 
   it('a promote branch left local and unpushed is rebuilt; a branch with other commits is refused', () => {

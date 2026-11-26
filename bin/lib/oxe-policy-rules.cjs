@@ -19,6 +19,9 @@ function ruleText(rule) {
   return String(rule.message || rule.text || rule.description || rule.id || '');
 }
 
+const nonEmptyStr = (v) => typeof v === 'string' && v.trim().length > 0;
+const asPatterns = (v) => (Array.isArray(v) ? v : v != null ? [v] : []).filter(nonEmptyStr).map((s) => s.trim());
+
 /** @returns {{ id: string, state: 'enforced'|'advisory', kind: string, text: string, problem: string|null, rule: any }[]} */
 function classifyRules(rules) {
   return (Array.isArray(rules) ? rules : []).map((rule, i) => {
@@ -26,24 +29,24 @@ function classifyRules(rules) {
     const base = { id: (rule && typeof rule === 'object' && rule.id) ? String(rule.id) : `rule-${i + 1}`, text, rule };
     if (typeof rule === 'string') return { ...base, state: 'advisory', kind: 'text', problem: null };
     if (!rule || typeof rule !== 'object') return { ...base, state: 'advisory', kind: 'text', problem: 'regra vazia' };
-    const kind = rule.kind ? String(rule.kind) : (rule.forbid ? 'content' : 'text');
+    const kind = rule.kind ? String(rule.kind) : (rule.forbid !== undefined ? 'content' : 'text');
     const regexOk = (src) => { try { new RegExp(src); return true; } catch { return false; } };
     if (kind === 'content') {
-      if (!rule.id) return { ...base, state: 'advisory', kind, problem: 'falta id' };
+      if (!rule.id || !nonEmptyStr(rule.forbid)) return { ...base, state: 'advisory', kind, problem: !rule.id ? 'falta id' : 'forbid vazio' };
       if (!regexOk(rule.forbid)) return { ...base, state: 'enforced', kind, problem: `regex inválida: ${rule.forbid}` };
       return { ...base, state: 'enforced', kind, problem: null };
     }
     if (kind === 'command') {
-      if (!rule.id || !rule.deny) return { ...base, state: 'advisory', kind, problem: 'kind command exige id e deny' };
+      if (!rule.id || !nonEmptyStr(rule.deny)) return { ...base, state: 'advisory', kind, problem: 'kind command exige id e deny' };
       if (!regexOk(rule.deny)) return { ...base, state: 'enforced', kind, problem: `regex inválida: ${rule.deny}` };
       return { ...base, state: 'enforced', kind, problem: null };
     }
     if (kind === 'path') {
-      if (!rule.id || !(rule.deny_read || rule.deny_write)) return { ...base, state: 'advisory', kind, problem: 'kind path exige id e deny_read ou deny_write' };
+      if (!rule.id || (!asPatterns(rule.deny_read).length && !asPatterns(rule.deny_write).length)) return { ...base, state: 'advisory', kind, problem: 'kind path exige id e deny_read ou deny_write' };
       return { ...base, state: 'enforced', kind, problem: null };
     }
     if (kind === 'env') {
-      if (!rule.id || !rule.strip) return { ...base, state: 'advisory', kind, problem: 'kind env exige id e strip' };
+      if (!rule.id || !asPatterns(rule.strip).length) return { ...base, state: 'advisory', kind, problem: 'kind env exige id e strip' };
       return { ...base, state: 'enforced', kind, problem: null };
     }
     return { ...base, state: 'advisory', kind, problem: `kind desconhecido: ${kind}` };
@@ -58,22 +61,27 @@ function summary(rules) {
 }
 
 function globToRegex(glob) {
-  let re = '';
-  const g = String(glob).replace(/\\/g, '/');
-  for (let i = 0; i < g.length; i += 1) {
-    const c = g[i];
-    if (c === '*') { if (g[i + 1] === '*') { re += '.*'; i += 1; if (g[i + 1] === '/') i += 1; } else re += '[^/]*'; }
-    else if (c === '?') re += '[^/]';
-    else re += /[.+^${}()|[\]\\]/.test(c) ? `\\${c}` : c;
-  }
-  return new RegExp(`(^|/)${re}$`, 'i');
+  const g = String(glob || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  const s = g
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\/\*\*\//g, '\u0001')
+    .replace(/^\*\*\//, '\u0002')
+    .replace(/\/\*\*$/, '\u0003')
+    .replace(/\*\*/g, '\u0000')
+    .replace(/\*/g, '[^/]*')
+    .replace(/\?/g, '[^/]')
+    .replace(/\u0001/g, '(?:/.*/|/)')
+    .replace(/\u0002/g, '(?:.*/)?')
+    .replace(/\u0003/g, '(?:/.*)?')
+    .replace(/\u0000/g, '.*');
+  return new RegExp(`(^|/)${s}$`, 'i');
 }
 
 /** Environment prefixes the `env` rules strip from every child process (regex sources for configureChildEnv). */
 function envStripPatterns(rules) {
   return classifyRules(rules)
-    .filter((r) => r.kind === 'env' && r.state === 'enforced')
-    .map((r) => `^${String(r.rule.strip).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
+    .filter((r) => r.kind === 'env' && r.state === 'enforced' && !r.problem)
+    .flatMap((r) => asPatterns(r.rule.strip).map((p) => `^${p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
 }
 
 /**
@@ -88,16 +96,22 @@ function checkActionRules(rules, actions = {}) {
     const msg = r.rule.message || r.text;
     if (r.kind === 'command') {
       const re = new RegExp(r.rule.deny, 'i');
-      for (const c of actions.commands || []) if (re.test(c.command)) out.push({ rule: r.id, kind: 'command', what: c.command, task: c.task || null, message: msg });
+      for (const c of actions.commands || []) if (c && re.test(String(c.command || ''))) out.push({ rule: r.id, kind: 'command', what: c.command, task: c.task || null, message: msg });
     } else if (r.kind === 'path') {
       const norm = (p) => String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
-      if (r.rule.deny_read) {
-        const re = globToRegex(r.rule.deny_read);
-        for (const x of actions.reads || []) if (re.test(norm(x.path))) out.push({ rule: r.id, kind: 'path_read', what: norm(x.path), task: x.task || null, message: msg });
+      const readRes = asPatterns(r.rule.deny_read).map(globToRegex);
+      if (readRes.length) {
+        for (const x of actions.reads || []) {
+          const p = norm(x && x.path);
+          if (p && readRes.some((re) => re.test(p))) out.push({ rule: r.id, kind: 'path_read', what: p, task: (x && x.task) || null, message: msg });
+        }
       }
-      if (r.rule.deny_write) {
-        const re = globToRegex(r.rule.deny_write);
-        for (const x of actions.writes || []) if (re.test(norm(x.path))) out.push({ rule: r.id, kind: 'path_write', what: norm(x.path), task: x.task || null, message: msg });
+      const writeRes = asPatterns(r.rule.deny_write).map(globToRegex);
+      if (writeRes.length) {
+        for (const x of actions.writes || []) {
+          const p = norm(x && x.path);
+          if (p && writeRes.some((re) => re.test(p))) out.push({ rule: r.id, kind: 'path_write', what: p, task: (x && x.task) || null, message: msg });
+        }
       }
     }
   }
@@ -111,9 +125,18 @@ function actionsFromEvents(events, runId) {
     if (!e || e.type !== 'ExecutorUsage' || (runId && e.run_id !== runId)) continue;
     const p = e.payload || {};
     const task = e.work_item_id || null;
-    for (const c of Array.isArray(p.commands) ? p.commands : []) actions.commands.push({ command: String(c), task });
-    for (const x of Array.isArray(p.reads) ? p.reads : []) actions.reads.push({ path: String(x), task });
-    for (const x of Array.isArray(p.writes) ? p.writes : []) actions.writes.push({ path: String(x), task });
+    for (const c of Array.isArray(p.commands) ? p.commands : []) {
+      const cmd = typeof c === 'string' ? c : (c && c.command) || '';
+      if (cmd) actions.commands.push({ command: String(cmd), task });
+    }
+    for (const x of Array.isArray(p.reads) ? p.reads : []) {
+      const rp = typeof x === 'string' ? x : (x && x.path) || '';
+      if (rp) actions.reads.push({ path: String(rp), task });
+    }
+    for (const x of Array.isArray(p.writes) ? p.writes : []) {
+      const wp = typeof x === 'string' ? x : (x && x.path) || '';
+      if (wp) actions.writes.push({ path: String(wp), task });
+    }
   }
   return actions;
 }

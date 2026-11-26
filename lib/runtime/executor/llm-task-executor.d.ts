@@ -3,7 +3,7 @@ import type { WorkspaceLease } from '../models/workspace';
 import type { TaskExecutor, TaskResult } from '../scheduler/scheduler';
 import type { PluginRegistry } from '../plugins/plugin-registry';
 import { streamCompletion } from './stream-completion';
-import type { ToolCall } from './stream-completion';
+import type { ChatMessage, ToolCall } from './stream-completion';
 import type { NodeContextProvider } from './node-context';
 export interface LlmProviderConfig {
     baseUrl: string;
@@ -14,9 +14,9 @@ export interface LlmProviderConfig {
     timeoutMs?: number;
     systemPrompt?: string;
 }
-export type LlmExecutorEventType = 'executor_turn' | 'executor_slow_turn' | 'turn_start' | 'turn_complete' | 'tool_call' | 'tool_result' | 'tool_denied' | 'executor_complete'
+export type LlmExecutorEventType = 'executor_turn' | 'executor_slow_turn' | 'executor_context_cap' | 'turn_start' | 'turn_complete' | 'tool_call' | 'tool_result' | 'tool_denied' | 'executor_complete'
 /** Once per attempt: turns, tool calls and backend-reported cost. */
- | 'executor_usage' | 'turn_timeout' | 'rate_limit_wait';
+ | 'executor_usage' | 'turn_timeout' | 'rate_limit_wait' | 'network_retry' | 'context_compacted';
 /** Injectable completion function (defaults to the HTTP OpenAI-compatible client). */
 export type CompletionFn = typeof streamCompletion;
 export interface LlmExecutorEvent {
@@ -50,19 +50,65 @@ export interface LlmTaskExecutorOptions {
     noProgressTurns?: number;
     /** OXB-186: a turn slower than this (ms, default 180000) is reported with the prompt size behind it. */
     slowTurnMs?: number;
+    /**
+     * OxeSpace 15/11 (OxeChat F4 T12: a refusal at 277k chars): a soft cap on the context an attempt accumulates. Past it,
+     * `warn` (default) reports once (executor_context_cap) and goes on; `retry` closes the attempt as "contexto cheio"
+     * (a normal failed attempt: the scheduler's retry starts a fresh context with the tree's changes, inside max_retries).
+     */
+    maxContextChars?: number;
+    maxContextAction?: 'warn' | 'retry' | 'compact';
+    /** The project root (R44): run artifacts go there, never into an ephemeral worktree lease that is disposed. */
+    projectRoot?: string;
     /** OXB-204: max automatic backoff wait (ms) on 429 / rate-limit reset before failing as quota (default 300000). */
     maxQuotaWaitMs?: number;
     /** OXB-204: max consecutive automatic 429 waits inside an attempt before failing as quota (default 3). */
     maxQuotaRetries?: number;
+    /** OXB-C19: exponential backoff delays (ms) for transient network drops inside the same turn (default [5000, 15000, 30000, 60000]). */
+    networkRetryDelaysMs?: number[];
+    /** Pre-write in-memory validation hook: rejects invalid mutations before flushing to disk. */
+    preWrite?: (input: {
+        tool: 'write_file' | 'patch_file';
+        path: string;
+        content: string;
+        cwd: string;
+        node: GraphNode;
+    }) => {
+        ok: boolean;
+        reason?: string;
+        diagnostics?: string[];
+    } | Promise<{
+        ok: boolean;
+        reason?: string;
+        diagnostics?: string[];
+    }>;
+    /** Protect harness/CI control-plane paths (.oxe/, .git/, .github/workflows/) unless explicitly in mutation_scope (default true). */
+    protectControlPlane?: boolean;
     /** Injectable sleep for deterministic tests. */
     sleep?: (ms: number) => Promise<void>;
 }
+export declare function compactMessages(messages: ChatMessage[], targetChars: number): {
+    compacted: ChatMessage[];
+    removedChars: number;
+    summarizedCount: number;
+};
 export interface ExecutorUsage {
     turns: number;
     tool_calls: number;
     /** Calls per tool name (e.g. how many `run_command`). */
     tools: Record<string, number>;
     cost_usd: number | null;
+    /** Tokens the backend reported (http adapter: the usage chunk), summed over the turns. */
+    input_tokens?: number;
+    output_tokens?: number;
+    thinking_tokens?: number;
+    /** A policy refusal: the tool results the previous turn added to the prompt (the likely trigger). */
+    policy_trigger_candidates?: Array<{
+        tool: string;
+        target: string | null;
+        chars: number;
+    }>;
+    /** A policy refusal: the context chars the refused request carried (OxeSpace 16/11, F6 T36). */
+    policy_context_chars?: number;
     /**
      * OXB-118: what the attempt did, for the project's action rules checked after the fact (a command run, a path
      * read or written). Capped; long commands are cut.

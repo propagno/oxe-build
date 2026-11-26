@@ -156,10 +156,10 @@ function saveRuntimeProviderConfig(projectRoot, providerConfig) {
   try { cfg = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch {}
   if (!cfg.runtime || typeof cfg.runtime !== 'object') cfg.runtime = {};
   const normalizedAdapter = agyLib.normalizeAdapterId(providerConfig.adapter || providerConfig.name || '');
-  const isCliAdapter = normalizedAdapter === 'claude' || normalizedAdapter === 'antigravity';
+  const isCliAdapter = normalizedAdapter === 'claude' || normalizedAdapter === 'antigravity' || normalizedAdapter === 'grok';
   cfg.runtime.provider = {};
-  if (providerConfig.name) cfg.runtime.provider.name = normalizedAdapter === 'antigravity' ? 'antigravity' : providerConfig.name;
-  else if (normalizedAdapter === 'antigravity') cfg.runtime.provider.name = 'antigravity';
+  if (providerConfig.name) cfg.runtime.provider.name = (normalizedAdapter === 'antigravity' || normalizedAdapter === 'grok') ? normalizedAdapter : providerConfig.name;
+  else if (normalizedAdapter === 'antigravity' || normalizedAdapter === 'grok') cfg.runtime.provider.name = normalizedAdapter;
   if (!isCliAdapter || providerConfig.baseUrl) {
     cfg.runtime.provider.baseUrl = providerConfig.baseUrl || 'https://api.anthropic.com/v1';
   }
@@ -296,7 +296,8 @@ function resolveRuntimeArtifactPathsRaw(projectRoot, activeSession) {
       state: path.join(oxeDir, 'STATE.md'),
       spec: preferExistingPath(path.join(sessionRoot, 'spec', 'SPEC.md'), path.join(oxeDir, 'SPEC.md')),
       plan: preferExistingPath(path.join(sessionRoot, 'plan', 'PLAN.md'), path.join(oxeDir, 'PLAN.md')),
-      verify: preferExistingPath(path.join(sessionRoot, 'verification', 'VERIFY.md'), path.join(oxeDir, 'VERIFY.md')),
+      // OXB-C21 #1: an isolated session must project VERIFY.md inside its own folder, never falling back to root .oxe/VERIFY.md
+      verify: path.join(sessionRoot, 'verification', 'VERIFY.md'),
       implementationPack: preferExistingPath(path.join(sessionRoot, 'plan', 'IMPLEMENTATION-PACK.json'), path.join(oxeDir, 'IMPLEMENTATION-PACK.json')),
       roadmap: preferExistingPath(path.join(sessionRoot, 'spec', 'ROADMAP.md'), path.join(oxeDir, 'ROADMAP.md')),
       programDir: path.join(sessionRoot, 'program'),
@@ -308,7 +309,7 @@ function resolveRuntimeArtifactPathsRaw(projectRoot, activeSession) {
     state: base.state,
     spec: preferExistingPath(scoped.spec, base.spec),
     plan: preferExistingPath(scoped.plan, base.plan),
-    verify: preferExistingPath(scoped.verify, base.verify),
+    verify: activeSession ? scoped.verify : base.verify,
     implementationPack: preferExistingPath(scoped.implementationPackJson, base.implementationPackJson),
     roadmap: preferExistingPath(
       scoped.sessionRoot ? path.join(scoped.sessionRoot, 'spec', 'ROADMAP.md') : null,
@@ -470,12 +471,15 @@ function buildNodeContextProvider(projectRoot, activeSession) {
     handoffs = [];
   }
   // 1.21 (OXB-020): what the repo enforces on its own goes into every node prompt, collected once per run.
+  const projectConfig = readProjectConfig(projectRoot) || {};
   let repoRules = [];
   try {
-    repoRules = require('./oxe-repo-rules.cjs').collectRepoRules(projectRoot, { config: readProjectConfig(projectRoot) });
+    repoRules = require('./oxe-repo-rules.cjs').collectRepoRules(projectRoot, { config: projectConfig });
   } catch {
     repoRules = [];
   }
+  const rawDomHooks = projectConfig.checkpoint_dom_hooks;
+  const domCfg = rawDomHooks && typeof rawDomHooks === 'object' ? rawDomHooks : { mode: rawDomHooks };
   const runtimeForExports = loadRuntimeModule();
   let planAcceptance = [];
   try {
@@ -490,8 +494,9 @@ function buildNodeContextProvider(projectRoot, activeSession) {
     const contract = packTasks.find((task) => String(task && (task.id || task.task_id) || '').trim() === node.id) || null;
     const fixture = fixtures.find((entry) => rationality.fixtureTaskIds(entry).includes(node.id)) || null;
     const contractPaths = contract && Array.isArray(contract.exact_paths) ? contract.exact_paths : [];
-    const files = [...new Set([...(node.mutation_scope || []), ...contractPaths].map((value) => String(value || '').trim()))]
-      .filter((value) => looksLikeFilePath(value) && !value.includes('*'))
+    const scopeCandidates = [...new Set([...(node.mutation_scope || []), ...contractPaths].map((value) => String(value || '').trim()))]
+      .filter((value) => looksLikeFilePath(value) && !value.includes('*'));
+    const files = scopeCandidates
       .slice(0, 12)
       .map((rel) => snapshotWorkspaceFile(root, rel))
       .filter(Boolean);
@@ -520,7 +525,17 @@ function buildNodeContextProvider(projectRoot, activeSession) {
       if (res.status === 0) gitStatus = res.stdout;
     }
     return {
-      taskBody: extractPlanTaskBody(planText, node.id),
+      taskBody: (() => {
+        const mdBody = extractPlanTaskBody(planText, node.id);
+        try {
+          const t = ((readPlanJsonDoc(projectRoot, activeSession).doc || {}).tasks || []).find((x) => x && x.id === node.id);
+          const jsonNotes = t && typeof t.notes === 'string' ? t.notes.trim() : '';
+          if (jsonNotes && (!mdBody || !mdBody.includes(jsonNotes))) {
+            return [mdBody, `**Notas da tarefa:**\n${jsonNotes}`].filter(Boolean).join('\n\n');
+          }
+        } catch { /* auxiliar */ }
+        return mdBody;
+      })(),
       implementationContract: contract,
       fixture,
       workspaceFiles: files,
@@ -539,7 +554,60 @@ function buildNodeContextProvider(projectRoot, activeSession) {
       repoRules,
       handoffs,
       gitStatus,
-      lessons: [...lessons, ...(reviewSentinel ? [`Marcador desta sessão de execução (não o repita em arquivos): ${reviewSentinel}`] : [])],
+      lessons: [
+        ...lessons,
+        ...(reviewSentinel ? [`Marcador desta sessão de execução (não o repita em arquivos): ${reviewSentinel}`] : []),
+        // OxeSpace 15/11 (F6 T34/T35): a declared ratchet whose file is in the task's scope — the executor is told the
+        // cap and that it comes down with the count
+        ...(() => {
+          try {
+            const t = ((readPlanJsonDoc(projectRoot, activeSession).doc || {}).tasks || []).find((x) => x && x.id === node.id);
+            return require('./oxe-ratchets.cjs').ratchetNotes(root, readProjectConfig(projectRoot) || {}, (t && t.files) || []).map((n) => `Trava: ${n}`);
+          } catch { return []; }
+        })(),
+        // OXB-C1 Adendo 2 (OQ T1 / OXE-220): warn executor when an in-scope file is near its file-size cap and name the delegation target
+        ...(() => {
+          try {
+            const t = ((readPlanJsonDoc(projectRoot, activeSession).doc || {}).tasks || []).find((x) => x && x.id === node.id);
+            return require('./oxe-file-size-guard.cjs').fileSizeLessons(root, readProjectConfig(projectRoot) || {}, t, contract);
+          } catch { return []; }
+        })(),
+        // cross-review 15/11: the attempt that comes back after a failed checkpoint (dom_hooks, related tests) is told
+        // why the last one was undone — otherwise it redelivers the same change
+        ...(() => {
+          try {
+            const t = ((readPlanJsonDoc(projectRoot, activeSession).doc || {}).tasks || []).find((x) => x && x.id === node.id);
+            const cf = t && t.done !== true ? t.checkpoint_failed : null;
+            return cf && cf.reason ? [`O checkpoint anterior desta tarefa foi desfeito (${cf.kind || 'checkpoint'}): ${String(cf.reason).slice(0, 600)} — corrija isso nesta tentativa`] : [];
+          } catch { return []; }
+        })(),
+        ...(() => {
+          try {
+            if (domCfg.mode === false || domCfg.mode === 'off') return [];
+            const line = require('./oxe-dom-hooks.cjs').activeHooksLesson(root, scopeCandidates.slice(0, 30), { locale: domCfg.locale || null });
+            return line ? [line] : [];
+          } catch { return []; }
+        })(),
+        // OXB-C6 #1 (G45): tell the executor which specs/tests in scope (or across the repo) assert shapes this task changes
+        ...(() => {
+          try {
+            if (((projectConfig && projectConfig.lint) || {}).cross_card_conflicts === 'off') return [];
+            const pDocNow = readPlanJsonDoc(projectRoot, activeSession).doc;
+            const tNow = pDocNow && Array.isArray(pDocNow.tasks) ? pDocNow.tasks.find((x) => x && x.id === node.id) : null;
+            if (!tNow) return [];
+            const findings = require('./oxe-cross-card-conflicts.cjs').crossCardFrozenConflicts(
+              root,
+              { tasks: [{ ...tNow, done: false }], acceptance_tests: pDocNow.acceptance_tests || [] },
+              { specText: readTextIfExists(paths.spec) || '' }
+            );
+            return findings.slice(0, 12).map((f) => (
+              f.in_scope
+                ? `Spec no escopo afetado (${f.test}:${f.line} → ${f.change_desc || f.token || f.expected_by_test}): ajuste este spec em conjunto durante a execução para refletir o contrato novo de ${node.id}.`
+                : `Spec existente afetado (${f.test}:${f.line} → ${f.change_desc || f.token || f.expected_by_test}): atenção ao alterar seletores/roles/catálogo; se for no escopo ou precisa de ajuste, alinhe sem quebrar testes do repo.`
+            ));
+          } catch { return []; }
+        })(),
+      ],
       externalSignals: externalSignalsFor(node),
     };
   };
@@ -725,9 +793,9 @@ function implicitPhaseGates(projectRoot, programState, phaseId, projectConfig) {
   if (!programState || !phaseId) return [];
   const phase = (programState.phases || []).find((p) => p.id === phaseId);
   const base = phase && phase.base_commit;
-  if (!projectConfig || projectConfig.stub_check === false || !base) return [...decisionPhaseGates(projectRoot, phaseId), ...nfrPhaseGates(projectRoot, phase, phaseId)];
+  if (!projectConfig || projectConfig.stub_check === false || !base) return [...decisionPhaseGates(projectRoot, phaseId), ...nfrPhaseGates(projectRoot, phase, phaseId), ...(base ? phaseSuitesGates(projectRoot, base, projectConfig) : [])];
   const script = path.join(__dirname, 'oxe-stub-check.cjs').replace(/\\/g, '/');
-  return [{ id: 'stub-check', when: 'phase_verify', command: `node "${script}" --phase --since ${base}`, description: 'anti-stub da fase: stubs e arquivos novos sem ligação (OXB-108)', on_fail: 'cr_defect' }, ...decisionPhaseGates(projectRoot, phaseId), ...depsPhaseGates(projectRoot, base), ...nfrPhaseGates(projectRoot, phase, phaseId)];
+  return [{ id: 'stub-check', when: 'phase_verify', command: `node "${script}" --phase --since ${base}`, description: 'anti-stub da fase: stubs e arquivos novos sem ligação (OXB-108)', on_fail: 'cr_defect' }, ...decisionPhaseGates(projectRoot, phaseId), ...depsPhaseGates(projectRoot, base), ...nfrPhaseGates(projectRoot, phase, phaseId), ...phaseSuitesGates(projectRoot, base, projectConfig)];
 }
 
 /** OXB-144: each non-functional criterion of the phase is measured at the phase verify (gate nfr-A<n>). */
@@ -748,6 +816,50 @@ function depsPhaseGates(projectRoot, base) {
     if (!changed.length) return [];
     const cli = path.join(__dirname, '..', 'oxe-cc.js').replace(/\\/g, '/');
     return [{ id: 'deps', when: 'phase_verify', command: `node "${cli}" runtime deps --base ${base}`, description: 'auditoria de dependências da fase (OXB-127)', on_fail: 'cr_defect' }];
+  } catch { return []; }
+}
+
+/**
+ * OxeSpace 15/11 (OxeCode F5 → #854): the phase verify passed 40/40, and main's CI then failed repo-wide guards the
+ * verify never ran — a frozen 1.5.0 acceptance suite reading a CSS file the phase changed, the static CSS-class guard.
+ * With config `verify.phase_suites` (true | { include, guards, run_command, max_files, runner }), the phase verify runs
+ * as an implicit gate the suites under `include` (default tests/acceptance/) that import a changed file or name it
+ * (a readFileSync path, a static import), plus the `guards` (repo guard suites) always.
+ */
+function phaseSuitesGates(projectRoot, base, projectConfig) {
+  try {
+    const vcfg = (projectConfig && projectConfig.verify) || {};
+    const opt = vcfg.phase_suites;
+    if (!opt || !base) return [];
+    const o = opt === true ? {} : opt;
+    const changed = (gitLines(projectRoot, ['diff', '--name-only', base]) || []).map((f) => f.replace(/\\/g, '/')).filter((f) => f && !f.startsWith('.oxe/'));
+    // the guards run always (cross-review 15/11): even a phase whose diff the suites do not read
+    const guardFiles = (Array.isArray(o.guards) ? o.guards : []).map((g) => String(g).replace(/\\/g, '/')).filter((p) => fs.existsSync(path.join(projectRoot, p)));
+    if (!changed.length && !guardFiles.length) return [];
+    const si = require('./oxe-suite-impact.cjs');
+    const include = (Array.isArray(o.include) && o.include.length ? o.include : ['tests/acceptance/']).map((p) => String(p).replace(/\\/g, '/'));
+    const exclude = (Array.isArray(o.exclude) ? o.exclude : []).map((p) => String(p).replace(/\\/g, '/'));
+    const tracked = si.trackedFiles(projectRoot);
+    // real suite files only (not helpers, fixtures or docs under tests/), never e2e specs nor parked future-phase suites
+    const isSuite = (f) => /\.(test|spec)\.[cm]?[jt]sx?$/i.test(f) && !/\.e2e\./i.test(f) && !/(^|\/)parked[^/]*\//i.test(f);
+    const candidates = new Set(tracked.filter((f) => isSuite(f) && include.some((p) => f.startsWith(p)) && !exclude.some((p) => f.startsWith(p))));
+    const picked = new Set();
+    const { byTarget } = si.importIndex(projectRoot, { files: tracked });
+    for (const c of changed) for (const imp of byTarget.get(c) || []) if (candidates.has(imp.test)) picked.add(imp.test);
+    for (const t of candidates) {
+      if (picked.has(t)) continue;
+      let text = '';
+      try { text = fs.readFileSync(path.join(projectRoot, t), 'utf8'); } catch { continue; }
+      // path.join('src', 'css', 'app.css') names src/css/app.css too
+      const joined = text.replace(/(['"`])\s*,\s*(['"`])/g, '/');
+      if (changed.some((c) => text.includes(c) || joined.includes(c) || (path.posix.basename(c).length >= 8 && text.includes(path.posix.basename(c))))) picked.add(t);
+    }
+    if (!picked.size && !guardFiles.length) return [];
+    const max = Number(o.max_files) > 0 ? Number(o.max_files) : 60;
+    // the cap is on the discovered suites only: the guards are never cut
+    const files = [...new Set([...[...picked].filter((f) => !guardFiles.includes(f)).sort().slice(0, max), ...guardFiles])];
+    const template = typeof o.run_command === 'string' && o.run_command.includes('{files}') ? o.run_command : 'npx vitest run {files}';
+    return [{ id: 'phase-suites', when: 'phase_verify', command: template.replace('{files}', files.join(' ')), description: `suítes do repo que leem arquivos da fase e guardas do repo (${files.length}${picked.size > max ? ` de ${picked.size}` : ''})`, on_fail: 'cr_defect', ...(typeof o.runner === 'string' && o.runner.includes('{command}') ? { runner: o.runner } : {}) }];
   } catch { return []; }
 }
 
@@ -886,7 +998,7 @@ function runtimeTrain(projectRoot, activeSession, options = {}) {
   for (const item of left) {
     const task = ((doc && doc.tasks) || []).find((t) => t.id === item.task);
     const verifyCommand = task && task.verify && Array.isArray(task.verify.commands) ? task.verify.commands.join(' && ') : null;
-    const r = lib.resync({ root: projectRoot, item, verifyCommand, spawn: options.spawn, reopen: (id) => { try { require('./oxe-plan-json.cjs').markPlanTaskOpen(paths.plan, id, { by: 'merge-train' }); } catch { /* sem PLAN.md */ } } });
+    const r = lib.resync({ root: projectRoot, item, verifyCommand, config: readProjectConfig(projectRoot) || {}, spawn: options.spawn, reopen: (id) => { try { require('./oxe-plan-json.cjs').markPlanTaskOpen(paths.plan, id, { by: 'merge-train' }); } catch { /* sem PLAN.md */ } } });
     appendEvent(projectRoot, activeSession, { type: 'MergeTrainResync', work_item_id: item.task, payload: { url: item.url, ok: r.ok, why: r.why || null, steps: r.steps } });
     results.push({ task: item.task, ...r });
   }
@@ -913,10 +1025,18 @@ function runtimeDesignBuild(projectRoot, activeSession) {
 /** OXB-099: `oxe-cc spec freeze --from <PR|sha> [--paths glob] [--criteria A12] [--cr CR-n]`. */
 function runtimeSpecFreeze(projectRoot, activeSession, options = {}) {
   const lib = require('./oxe-spec-freeze.cjs');
-  const { jsonPath, doc } = readPlanJsonDoc(projectRoot, activeSession);
+  const changeLib = require('./oxe-change.cjs');
+  const { jsonPath, doc, paths } = readPlanJsonDoc(projectRoot, activeSession);
   if (!doc) throw new Error('spec freeze exige PLAN.json');
-  const out = lib.freeze(projectRoot, jsonPath, doc, options);
-  if (out.frozen.length) appendEvent(projectRoot, activeSession, { type: 'AcceptanceImported', payload: { origin: { kind: out.origin.kind, ref: out.origin.ref, sha: out.origin.sha }, frozen: out.frozen, cr: options.cr || null } });
+  const programDir = (paths && paths.programDir) || path.join(projectRoot, '.oxe', 'program');
+  let amendments = new Map();
+  let crs = [];
+  try {
+    amendments = changeLib.amendmentRequirements(programDir);
+    crs = changeLib.listChanges(programDir);
+  } catch { /* sem programa */ }
+  const out = lib.freeze(projectRoot, jsonPath, doc, { ...options, amendments, crs });
+  if (out.frozen.length) appendEvent(projectRoot, activeSession, { type: 'AcceptanceImported', payload: { origin: { kind: out.origin.kind, ref: out.origin.ref, sha: out.origin.sha }, frozen: out.frozen, cr: options.cr || null, ...(out.unscoped_tasks ? { unscoped_tasks: out.unscoped_tasks } : {}) } });
   return out;
 }
 
@@ -934,6 +1054,30 @@ function runtimePlanBuild(projectRoot, activeSession, options = {}) {
   }
   const files = options.files || [];
   if (files.length < 1) throw new Error('use: oxe-cc plan build --from backend.json frontend.json [--phase Fn]');
+  // lean bench L3: a change request implemented straight in the conversation left product code modified with no
+  // record, no test of its own and no commit, and the next phase was planned on top of it. Under the lean ceremony the
+  // phase plan starts from a clean tree: code changed outside a task, a quick or a CR is named and refused.
+  if (!options.dryRun && !options.allowDirty) {
+    let lean = false;
+    try { lean = require('./oxe-project-health.cjs').isLeanCeremony(projectRoot, null); } catch { lean = false; }
+    if (lean) {
+      const lib0 = require('./oxe-plan-build.cjs');
+      const frozen = new Set();
+      for (const file of files) {
+        try {
+          for (const a of (require('./oxe-plan-merge.cjs').readRolePlan(file).acceptance_tests) || []) {
+            for (const f of a.files || []) frozen.add(String(typeof f === 'string' ? f : (f && f.path) || '').replace(/\\/g, '/'));
+          }
+        } catch { /* the build below reports an unreadable role file */ }
+      }
+      const stray = changedEntriesUnder(projectRoot, ['.'])
+        .map((e) => String(e.path || '').replace(/\\/g, '/'))
+        .filter((p) => p && !p.startsWith('.oxe/') && !/^docs\//.test(p) && !frozen.has(p) && lib0.isProductCode(p));
+      if (stray.length) {
+        throw new Error(`código alterado sem origem no working tree (${stray.slice(0, 5).join(', ')}${stray.length > 5 ? `, +${stray.length - 5}` : ''}): a fase não é planejada em cima dele. Mudança pequena: oxe-cc quick <KEY> "<objetivo>" → oxe-cc quick commit -m "…" --all → oxe-cc quick done --verify "<suíte>". Mudança de critério ou contrato: registre o CR (oxe-cc runtime feedback --class new_scope --summary "…" --criteria A<n>) e emende a SPEC com o OK de quem aprova. Para planejar assim mesmo: --allow-dirty.`);
+      }
+    }
+  }
   let phase = options.phase || null;
   if (!phase) { try { const pg = require('./oxe-program.cjs').readProgram(resolveRuntimeArtifactPaths(projectRoot, activeSession).programDir || path.join(projectRoot, '.oxe', 'program')); phase = pg && pg.active_phase ? pg.active_phase : null; } catch { phase = null; } }
   const res = lib.build(files.map((file) => ({ file, doc: mergeLib.readRolePlan(file) })), { root: projectRoot, phase, key: options.key, ref: options.ref, autoCloseImports: Boolean(options.autoCloseImports), fixStalePaths: Boolean(options.fixStalePaths), pairAsDeps: Boolean(options.pairAsDeps) });
@@ -1160,6 +1304,9 @@ function runtimeDeferred(projectRoot, activeSession, options = {}) {
   let doc = null;
   try { doc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { doc = null; }
   const out = [];
+  const planPaths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const normF = (p) => String(typeof p === 'string' ? p : (p && p.path) || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  const underScope = (a, b) => a === b || b.startsWith(`${a.replace(/\/+$/, '')}/`);
   for (const e of open) {
     const t = ((doc && doc.tasks) || []).find((x) => x && x.id === e.task);
     if (t && t.done) { out.push({ id: e.id, task: e.task, status: 'done_elsewhere' }); if (!options.dryRun) lib.close(programDir, e.id, 'done_elsewhere'); continue; }
@@ -1167,7 +1314,23 @@ function runtimeDeferred(projectRoot, activeSession, options = {}) {
     if (!cmds.length) { out.push({ id: e.id, task: e.task, status: 'human_decision', why: 'tarefa sem verify' }); continue; }
     const r = runChildCommand(projectRoot, cmds.join(' && '), 600_000);
     if (r.ok) { out.push({ id: e.id, task: e.task, status: 'already_resolved' }); if (!options.dryRun) lib.close(programDir, e.id, 'already_resolved'); }
-    else out.push({ id: e.id, task: e.task, status: 'ready', tail: r.tail.split(/\r?\n/).slice(-3).join(' · ') });
+    else {
+      const tail = r.tail.split(/\r?\n/).slice(-3).join(' · ');
+      if (!options.dryRun) {
+        try {
+          if (t && t.checkpoint_failed && t.checkpoint_failed.kind === 'scope_insufficient') {
+            const reds = Array.isArray(t.checkpoint_failed.related_red) ? t.checkpoint_failed.related_red.map(normF).filter(Boolean) : [];
+            const mine = (t.files || []).map(normF).filter(Boolean);
+            if (reds.length && reds.every((red) => mine.some((m) => underScope(m, red)))) {
+              require('./oxe-plan-json.cjs').markPlanTaskOpen(planPaths.plan, e.task, { by: 'deferred retry' });
+            }
+          }
+        } catch { /* ignore */ }
+        clearTaskResidualRunState(projectRoot, activeSession, [e.task], { clearFailedAndBlocked: true });
+        lib.markRetried(programDir, e.id, { task: e.task, tail });
+      }
+      out.push({ id: e.id, task: e.task, status: 'ready', tail });
+    }
   }
   return { retry: out, dry_run: Boolean(options.dryRun) };
 }
@@ -1257,16 +1420,305 @@ function runtimeDocsCheck(projectRoot, activeSession, options = {}) {
 function runtimeDecision(projectRoot, activeSession, options = {}) {
   const lib = require('./oxe-decisions.cjs');
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
-  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  // revisão 21/11 (achado 7): `ledgerDir` = the card's own ledger (grill --card: .oxe/alm/grill/<KEY>/decisions.ndjson),
+  // so its decisions never reach the shared .oxe/program/decisions.ndjson nor the project's docs/adr/
+  const cardLedger = Boolean(options.ledgerDir);
+  const programDir = options.ledgerDir || paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  let program = null;
+  if (!cardLedger) { try { program = require('./oxe-program.cjs').readProgram(programDir); } catch { program = null; } }
+  const activePhase = (program && program.active_phase) || null;
+  // ADRs (docs/adr by default; config `adr: false` turns them off) follow every change to the ledger.
+  const publishAdrs = () => {
+    const dir = options.adrDir || require('./oxe-adr.cjs').adrDir(readProjectConfig(projectRoot) || {});
+    if (!dir) return null;
+    try { return require('./oxe-adr.cjs').publish(projectRoot, dir, decisionsForAdr(programDir), { allowOxeDir: Boolean(options.allowOxeAdrDir) }); } catch (err) { return { error: err.message }; }
+  };
   if (options.action === 'add') {
-    let program = null;
-    try { program = require('./oxe-program.cjs').readProgram(programDir); } catch { program = null; }
-    const rec = lib.add(programDir, { ...options, phase: options.phase || (program && program.active_phase) || null });
-    appendEvent(projectRoot, activeSession, { type: 'DecisionRecorded', payload: { id: rec.id, title: rec.title, phase: rec.phase } });
-    try { autoExportProgram(projectRoot, activeSession); } catch { /* */ }
-    return { decision: rec };
+    const rec = lib.add(programDir, { ...options, phase: options.phase || activePhase });
+    appendEvent(projectRoot, activeSession, { type: 'DecisionRecorded', payload: { id: rec.id, title: rec.title, phase: rec.phase, ...(rec.supersedes ? { supersedes: rec.supersedes } : {}), ...(options.card ? { card: options.card } : {}) } });
+    if (!cardLedger) { try { autoExportProgram(projectRoot, activeSession); } catch { /* */ } }
+    return { decision: rec, adr: publishAdrs() };
+  }
+  if (options.action === 'status') {
+    const rec = lib.setStatus(programDir, options.id, { status: options.status, reason: options.reason, by: options.by, superseded_by: options.supersededBy });
+    appendEvent(projectRoot, activeSession, { type: 'DecisionStatusChanged', payload: { id: rec.id, status: rec.status, reason: rec.reason } });
+    return { status: rec, adr: publishAdrs() };
+  }
+  if (options.action === 'import') {
+    const discussPath = options.from ? path.resolve(projectRoot, options.from) : path.join(projectRoot, '.oxe', 'DISCUSS.md');
+    if (!fs.existsSync(discussPath)) throw new Error(`DISCUSS.md não encontrado em ${path.relative(projectRoot, discussPath) || discussPath}`);
+    const out = lib.importDiscuss(programDir, fs.readFileSync(discussPath, 'utf8'), { phase: options.phase || activePhase, by: options.by });
+    for (const id of out.imported) appendEvent(projectRoot, activeSession, { type: 'DecisionRecorded', payload: { id, source: 'DISCUSS.md' } });
+    return { ...out, adr: publishAdrs() };
+  }
+  if (options.action === 'publish') {
+    const dir = options.adrDir || require('./oxe-adr.cjs').adrDir(readProjectConfig(projectRoot) || {}) || 'docs/adr';
+    return { adr: require('./oxe-adr.cjs').publish(projectRoot, dir, decisionsForAdr(programDir)) };
   }
   return { decisions: lib.list(programDir) };
+}
+
+/** The decisions as the ADRs show them: each story with its ALM card key (US-2 (OXE-12)), from the ledger of links. */
+function decisionsForAdr(programDir) {
+  const list = require('./oxe-decisions.cjs').list(programDir);
+  let links = new Map();
+  try { links = require('./oxe-alm.cjs').links(programDir); } catch { links = new Map(); }
+  return list.map((d) => (Array.isArray(d.stories) && d.stories.some((u) => links.has(u)) ? { ...d, story_keys: Object.fromEntries(d.stories.filter((u) => links.has(u)).map((u) => [u, links.get(u).key])) } : d));
+}
+
+/** Where the grill and the glossary live: next to the SPEC (.oxe/ or .oxe/<session>/spec/). */
+function grillPaths(projectRoot, activeSession, card = null) {
+  // a Jira card's own grooming (grill --card OXE-n): its own record, no project glossary
+  if (card) return { dir: path.join(projectRoot, '.oxe', 'alm', 'grill', String(card).toUpperCase()), glossary: null, specFile: null, card: String(card).toUpperCase() };
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const specFile = paths.spec || path.join(projectRoot, '.oxe', 'SPEC.md');
+  return { dir: require('./oxe-grill.cjs').dirFor(specFile), glossary: path.join(path.dirname(specFile), 'GLOSSARY.md'), specFile };
+}
+
+/**
+ * The grill's decisions → the decision ledger (and the ADRs), once each: a decision already recorded with
+ * source grill:Q-n is skipped. The options not taken become the rejected alternatives.
+ */
+function grillExportDecisions(projectRoot, activeSession, decisions, by, card = null) {
+  const lib = require('./oxe-decisions.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  // a card's grill has its own ledger next to its GRILL.md (grill.md: isolated in .oxe/alm/grill/<KEY>/)
+  const cardKey = card ? String(card).toUpperCase() : null;
+  const ledgerDir = cardKey ? path.join(projectRoot, '.oxe', 'alm', 'grill', cardKey) : null;
+  const programDir = ledgerDir || paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const known = new Set(lib.list(programDir).map((d) => d.source).filter(Boolean));
+  const recorded = [];
+  for (const d of decisions) {
+    const source = card ? `grill:${card}:${d.id}` : `grill:${d.id}`;
+    if (known.has(source)) continue;
+    const author = by || 'usuário';
+    const alternatives = (d.alternatives || []).filter((o) => o && String(o).length >= 3).map((o) => ({ text: String(o), reason: d.decided_by === 'recommended' ? `não escolhida no grill ${d.id}${d.why ? `: ${d.why}` : ''}` : `recusada pelo usuário no grill ${d.id}`, by: author }));
+    // a short answer ("sim", "B") only reads as a decision next to its question
+    const title = String(d.answer).length >= 12 ? String(d.answer) : `${String(d.question).replace(/\s*\?\s*$/, '')}: ${d.answer}`;
+    const affects = Array.isArray(d.affects) ? d.affects : [];
+    const cardAdrDir = cardKey ? path.join('.oxe', 'alm', 'grill', cardKey, 'adr') : null;
+    const out = runtimeDecision(projectRoot, activeSession, { action: 'add', criteria: affects.filter((x) => /^[AG]\d+(?:\.\d+)*$/.test(x)), stories: affects.filter((x) => /^US-\d+$/.test(x)), title: title.slice(0, 160), text: d.answer.length > 160 ? d.answer : null, context: d.question, consequences: d.why || null, source, by: author, alternatives, ...(cardAdrDir ? { adrDir: cardAdrDir, allowOxeAdrDir: true, ledgerDir, card: cardKey } : {}) });
+    recorded.push({ grill: d.id, decision: out.decision.id });
+  }
+  return recorded;
+}
+
+/**
+ * `oxe-cc grill start|ask|answer|fact|defer|confirm|term|conflict|resolve|status|close|export` — the spec's
+ * discovery as a decision tree (oxe/workflows/references/grill.md). Every change rewrites GRILL.md; close writes the
+ * glossary and records the decisions (→ ADRs).
+ */
+function runtimeGrill(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-grill.cjs');
+  const gp = grillPaths(projectRoot, activeSession, options.card);
+  const a = options.action || 'status';
+  let out;
+  if (a === 'start') {
+    // with --card and no --type: the card's own kind, from the refine collect (.oxe/alm/refine/<KEY>.json)
+    let type = options.type;
+    if (!type && options.card) { try { type = JSON.parse(fs.readFileSync(path.join(projectRoot, '.oxe', 'alm', 'refine', `${String(options.card).toUpperCase()}.json`), 'utf8')).kind || null; } catch { type = null; } }
+    out = lib.start(gp.dir, { type, title: options.title, restart: options.restart });
+  }
+  else if (a === 'ask') out = lib.ask(gp.dir, options);
+  else if (a === 'answer') {
+    out = lib.answer(gp.dir, options.id, options);
+    appendEvent(projectRoot, activeSession, { type: 'GrillAnswered', payload: { id: out.id, decided_by: out.decided_by, changed: out.changed, reopened: out.reopened } });
+  } else if (a === 'fact') out = lib.fact(gp.dir, options);
+  else if (a === 'mark') out = lib.mark(gp.dir, options.id, options);
+  else if (a === 'defer') out = lib.defer(gp.dir, options.id, options);
+  else if (a === 'confirm') out = lib.confirm(gp.dir, options.branch, options);
+  else if (a === 'term') out = lib.term(gp.dir, options);
+  else if (a === 'conflict') out = lib.conflict(gp.dir, options);
+  else if (a === 'resolve') out = lib.resolve(gp.dir, options.id, options);
+  else if (a === 'close' || a === 'export') {
+    if (a === 'close') out = lib.close(gp.dir, { by: options.by });
+    const s = lib.status(gp.dir);
+    const glossary = s.terms.length && gp.glossary ? lib.writeGlossary(gp.glossary, s.terms) : null;
+    const decisions = grillExportDecisions(projectRoot, activeSession, s.decisions, options.by, gp.card || null);
+    out = { ...(out || {}), glossary: glossary ? path.relative(projectRoot, glossary.file).replace(/\\/g, '/') : null, decisions_recorded: decisions, assumptions: s.assumptions };
+    if (a === 'close') appendEvent(projectRoot, activeSession, { type: 'GrillClosed', payload: { decisions: s.decisions.length, terms: s.terms.length, assumptions: s.assumptions.length } });
+  } else if (a !== 'status') throw new Error(`grill ${a}: ação desconhecida (start | ask | answer | fact | defer | confirm | term | conflict | resolve | status | close | export)`);
+  const s = lib.writeProjection(gp.dir);
+  const view = { type: s.type, closed: s.closed, next_branch: s.next_branch, blockers: s.blockers, branches: s.branches.map((b) => ({ id: b.id, title: b.title, blocking: b.blocking, decided: b.decided, open: b.open, deferred: b.deferred, confirmed: b.confirmed, ready: b.ready, asks: b.asks })), file: path.relative(projectRoot, path.join(gp.dir, 'GRILL.md')).replace(/\\/g, '/') };
+  return a === 'status' ? { ...view, examples: s.examples, open_questions: s.questions.filter((q) => q.status === 'open' || q.status === 'reopened'), assumptions: s.assumptions, terms: s.terms } : { ...out, grill: view };
+}
+
+/** Updates the comment of a card that starts with `marker`, or posts it (one comment per card, in place). */
+async function upsertCardComment(rest, key, marker, text) {
+  const refine = require('./oxe-alm-refine.cjs');
+  const r = await rest.request('GET', `${rest.site}/rest/api/3/issue/${key}/comment?maxResults=100`);
+  const mine = ((r && r.comments) || []).find((c) => refine.adfToText(c.body).trim().startsWith(marker));
+  const body = { body: refine.mdToAdf(text) };
+  if (mine) await rest.request('PUT', `${rest.site}/rest/api/3/issue/${key}/comment/${mine.id}`, body);
+  else await rest.request('POST', `${rest.site}/rest/api/3/issue/${key}/comment`, body);
+  return { updated: Boolean(mine) };
+}
+
+/**
+ * `oxe-cc grill publish --card OXE-n [--apply]`: the card's "Grooming (OXE)" comment (questions, recommended answers,
+ * answers with their source), and the card to "Em grooming" when it is still in the Backlog (never backwards).
+ * `oxe-cc grill report [--card …] [--out docs/grooming-quality.md]`: the quality of input and output.
+ */
+async function runtimeGrooming(projectRoot, activeSession, options = {}) {
+  const grillLib = require('./oxe-grill.cjs');
+  const grooming = require('./oxe-grooming.cjs');
+  const base = path.join(projectRoot, '.oxe', 'alm', 'grill');
+  if (options.action === 'report') {
+    const refine = require('./oxe-alm-refine.cjs');
+    const keys = options.card ? [String(options.card).toUpperCase()] : (fs.existsSync(base) ? fs.readdirSync(base).filter((k) => fs.existsSync(path.join(base, k, 'grill.ndjson'))) : []);
+    const cards = keys.map((key) => {
+      const specFile = path.join(refine.dirs(projectRoot).specs, `${key}.md`);
+      const dataFile = path.join(refine.dirs(projectRoot).data, `${key}.json`);
+      const md = fs.existsSync(specFile) ? fs.readFileSync(specFile, 'utf8') : null;
+      const kind = fs.existsSync(dataFile) ? JSON.parse(fs.readFileSync(dataFile, 'utf8')).kind : 'task';
+      // a spec still at the collect skeleton is "not written yet", not a lint failure (rework is a written spec that failed)
+      const written = md && !md.includes('(preencha com cada');
+      return { key, status: grillLib.status(path.join(base, key)), criteria: written ? refine.parseCriteria(md) : null, lint: written ? refine.lintSpec(md, kind) : null };
+    });
+    const r = grooming.report(cards);
+    const out = path.resolve(projectRoot, options.out || path.join('.oxe', 'alm', 'grill', 'grooming-quality.md'));
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, grooming.renderReport(r));
+    return { ...r, file: path.relative(projectRoot, out).replace(/\\/g, '/') };
+  }
+  if (!options.card) throw new Error('grill publish precisa do card: --card OXE-n');
+  const key = String(options.card).toUpperCase();
+  const status = grillLib.status(path.join(base, key));
+  const text = grooming.renderComment(key, status);
+  const asked = status.questions.filter((q) => q.decided_by !== 'code');
+  const counts = { questions: asked.length, facts: status.questions.length - asked.length, open: asked.filter((q) => q.status === 'open' || q.status === 'reopened').length };
+  if (!options.apply) return { key, dry_run: true, text, ...counts };
+  const lib = require('./oxe-alm.cjs');
+  const config = readProjectConfig(projectRoot) || {};
+  const cfg = lib.almConfig(config, { defaultProgram: path.basename(path.resolve(projectRoot)) });
+  if (!cfg) throw new Error('ALM não configurado (alm.provider)');
+  const env = options.env || process.env;
+  if (!lib.isWriter(cfg, env)) throw lib.writerError(cfg);
+  const problems = lib.checkConfig(cfg, env);
+  if (problems.length) throw new Error(`ALM: ${problems.join('; ')}`);
+  const rest = lib.jiraRest(cfg, options);
+  const c = await upsertCardComment(rest, key, grooming.MARKER, text);
+  // into "Em grooming" only from the Backlog: refineMove never moves a card that is already past it
+  let moved = null;
+  try {
+    const prov = lib.provider(cfg, { ...options, env });
+    const live = await prov.status(key);
+    const liveStage = lib.STAGES.find((s) => cfg.states[s] && live && String(cfg.states[s]).toLowerCase() === String(live).toLowerCase()) || null;
+    if (liveStage === 'intake' && cfg.states.grooming && cfg.track.includes('grooming')) moved = await refineMove(lib, cfg, key, 'grooming', { ...options, env });
+    else moved = { skipped: true, state: live };
+  } catch (err) { moved = { error: err.message }; }
+  appendEvent(projectRoot, activeSession, { type: 'GroomingPublished', payload: { key, ...counts } });
+  return { key, published: true, updated: c.updated, moved, ...counts };
+}
+
+/** `oxe-cc plan mutate [A1,A2]`: strength of the frozen tests per criterion (oxe-plan-mutate.cjs). */
+async function runtimePlanMutate(projectRoot, activeSession, options = {}) {
+  const { doc, paths } = readPlanJsonDoc(projectRoot, activeSession);
+  if (!doc) throw new Error('plan mutate exige PLAN.json (oxe-cc plan build)');
+  const risks = require('./oxe-risk-decision.cjs').criterionRisks(readTextIfExists(paths.spec) || '');
+  const out = await require('./oxe-plan-mutate.cjs').measure(projectRoot, doc, { ...options, risks });
+  appendEvent(projectRoot, activeSession, { type: 'TestStrengthMeasured', payload: { tree: out.tree, mutants: out.mutants, killed: out.killed, weak: out.weak, unmeasured: out.unmeasured } });
+  return out;
+}
+
+/** `oxe-cc spec check [--fast]`: the quality gate of the upstream (oxe-spec-check.cjs) over the files of the scope. */
+function runtimeSpecCheck(projectRoot, activeSession, options = {}) {
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const config = readProjectConfig(projectRoot) || {};
+  const prdFile = prdPathFor(projectRoot, activeSession);
+  const prdLib = require('./oxe-prd.cjs');
+  const grillLib = require('./oxe-grill.cjs');
+  const gp = grillPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const grill = grillLib.readRecords(gp.dir).length ? grillLib.status(gp.dir) : null;
+  const out = require('./oxe-spec-check.cjs').checkSpec({
+    specText: readTextIfExists(paths.spec) || '',
+    roadmapText: readTextIfExists(paths.roadmap) || '',
+    prd: fs.existsSync(prdFile) ? prdLib.readPrd(prdFile) : null,
+    prdText: readTextIfExists(prdFile) || '',
+    lintPrd: prdLib.lintPrd,
+    prdRequired: Boolean(config.prd && typeof config.prd === 'object' && config.prd.required === true),
+    glossary: grillLib.readGlossary(gp.glossary),
+    grill,
+    fast: Boolean(options.fast),
+    decisionSources: require('./oxe-decisions.cjs').list(programDir).map((d) => d.source).filter(Boolean),
+    rfcs: require('./oxe-rfc.cjs').list(projectRoot),
+    rfcMode: require('./oxe-rfc.cjs').rfcMode(config),
+  });
+  // alm.trace_gate: the loose ends of the traceability graph (warnings here unless "strict")
+  try {
+    const tg = traceGateFindings(projectRoot, activeSession, 'spec');
+    out.errors.push(...tg.errors);
+    out.warnings.push(...tg.warnings);
+    if (tg.errors.length) out.ok = false;
+  } catch { /* auxiliar */ }
+  return { ...out, spec: path.relative(projectRoot, paths.spec || '').replace(/\\/g, '/') };
+}
+
+const specHash = (text) => require('crypto').createHash('sha256').update(String(text || '').replace(/\r\n/g, '\n')).digest('hex').slice(0, 16);
+
+/** The last approval of the spec, and whether the SPEC changed since (null: never approved). */
+function specApproval(projectRoot, activeSession) {
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  let last = null;
+  try { for (const e of readEvents(projectRoot, activeSession)) if (e.type === 'SpecApproved') last = e; } catch { /* */ }
+  if (!last) return null;
+  const now = specHash(readTextIfExists(paths.spec));
+  return { at: last.timestamp || null, by: last.payload && last.payload.by, hash: last.payload && last.payload.hash, changed_since: Boolean(last.payload && last.payload.hash && last.payload.hash !== now) };
+}
+
+/** `oxe-cc spec approve --by <papel> [--fast]`: only over a green spec check; recorded (event + changes.ndjson). */
+function runtimeSpecApprove(projectRoot, activeSession, options = {}) {
+  if (!options.by) throw new Error('a aprovação tem dono: oxe-cc spec approve --by <papel>');
+  const check = runtimeSpecCheck(projectRoot, activeSession, options);
+  if (!check.ok) throw Object.assign(new Error(`spec check com ${check.errors.length} erro(s) — corrija antes de aprovar:\n  - ${check.errors.join('\n  - ')}`), { check });
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const hash = specHash(readTextIfExists(paths.spec));
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const changeLib = require('./oxe-change.cjs');
+  const record = { kind: 'spec_approval', by: String(options.by), at: new Date().toISOString(), hash, file: check.spec, warnings: check.warnings.length, ...(options.fast ? { mode: 'fast' } : {}) };
+  changeLib.appendNdjson(changeLib.changesFile(programDir), record);
+  appendEvent(projectRoot, activeSession, { type: 'SpecApproved', payload: { by: record.by, hash, warnings: record.warnings } });
+  return { approved: true, ...record, check };
+}
+
+/**
+ * `oxe-cc ship status`: where the delivery of the active phase is — PRs opened by promote, merged (asked to gh, which
+ * records AlmMerged), deploys attached, and the next step. `refresh: false` reads only the events.
+ */
+function runtimeDeliveryStatus(projectRoot, activeSession, options = {}) {
+  if (options.refresh !== false) { try { detectMergedPrs(projectRoot, activeSession, readEvents(projectRoot, activeSession), options); } catch { /* sem gh: segue com os eventos */ } }
+  const events = readEvents(projectRoot, activeSession);
+  const phase = activeProgramPhase(projectRoot, activeSession);
+  const since = phase && phase.started_at ? Date.parse(phase.started_at) : 0;
+  const merged = new Map(events.filter((e) => e.type === 'AlmMerged').map((e) => [e.work_item_id, e.payload || {}]));
+  const prs = events.filter((e) => isPromotedPrEvent(e) && (!since || !e.timestamp || Date.parse(e.timestamp) >= since))
+    .map((e) => ({ ...(e.type === 'QuickPromoted' ? { quick: e.work_item_id } : {}), task: e.work_item_id, pr: e.payload.pr, merged: merged.has(e.work_item_id), merged_at: merged.has(e.work_item_id) ? merged.get(e.work_item_id).merged_at || null : null }));
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  let deploys = [];
+  try { deploys = require('./oxe-phase-gates.cjs').readDeploys(programDir, phase ? phase.id : null).map((d) => ({ env: d.env, version: d.version, ok: d.ok !== false, at: d.at || null })); } catch { deploys = []; }
+  // OXB-d: the CI of each open PR — a red that matches a known failure (whose item is still open) is a flake to rerun,
+  // not a regression.
+  if (options.refresh !== false) {
+    const kf = require('./oxe-known-failures.cjs');
+    // G5: the repository's known failures (shared by every worktree), without the ones whose fix PR already merged
+    const known = kf.listAll(projectRoot, programDir, { prState: require('./oxe-ship-pr.cjs').prState(options.ghSpawn || spawnSync, projectRoot) }).filter((k) => !k.expired);
+    // the tracking item counts as open until the known failure is removed (ship known-failure remove, when the fix
+    // lands); a host may inject the live status of the item
+    const itemOpen = typeof options.itemOpen === 'function' ? options.itemOpen : () => null;
+    for (const p of prs.filter((x) => !x.merged)) {
+      try { p.ci = kf.classifyPr(p.pr, known, { spawn: options.ghSpawn || spawnSync, cwd: projectRoot, itemOpen }); } catch { p.ci = { state: 'unknown', failed: [] }; }
+    }
+  }
+  const mode = require('./oxe-journey.cjs').deliveryMode(readProjectConfig(projectRoot) || {});
+  const next = require('./oxe-project-health.cjs').suggestNextStep(projectRoot, readProjectConfig(projectRoot) || {});
+  let activeQuick = null;
+  try {
+    const act = require('./oxe-quick.cjs').activeOnWorktree(projectRoot);
+    if (act && act.quick) activeQuick = { state: act.state, id: act.quick.id, key: act.quick.key || null, objective: act.quick.objective, branch: act.quick.branch || null };
+  } catch { activeQuick = null; }
+  return { mode: mode.mode, deploy_env: mode.deploy_env, phase: phase ? { id: phase.id, status: phase.status } : null, ...(activeQuick ? { quick: activeQuick } : {}), prs, deploys, next };
 }
 
 /** OXB-160: the tests' own tree for a frozen test file: up to its tests/test/__tests__/spec/e2e dir, else its own dir. */
@@ -1304,7 +1756,7 @@ function ownUnpushedPromoteBranch(projectRoot, branch, remote, baseSha, opts = {
   const marked = (gitRun(projectRoot, ['config', '--get', `branch.${branch}.oxePromote`]).stdout || '').trim() === 'true';
   if (marked) return { ok: true, sha };
   const bodies = (gitRun(projectRoot, ['log', '--format=%s%n%b%x00', `${baseSha}..${branch}`]).stdout || '').split('\0').map((x) => x.trim()).filter(Boolean);
-  const promoteLike = bodies.every((b) => /\(cherry picked from commit [0-9a-f]{7,40}\)/.test(b) || /^test\(acceptance\): frozen tests of /.test(b));
+  const promoteLike = bodies.every((b) => /\(cherry picked from commit [0-9a-f]{7,40}\)/.test(b) || /^test\(acceptance\): frozen tests of /.test(b) || /^chore\(ratchet\): reconcile ratchet caps of /.test(b));
   return promoteLike ? { ok: true, sha } : { ok: false, why: 'tem commits que não são do promote' };
 }
 
@@ -1323,7 +1775,7 @@ function ownPushedPromoteBranch(projectRoot, activeSession, branch, remote, remo
   const have = gitRun(projectRoot, ['cat-file', '-e', `${remoteSha}^{commit}`]).ok;
   if (!have) return { ok: false, why: 'não consegui ler a branch remota' };
   const bodies = (gitRun(projectRoot, ['log', '--format=%s%n%b%x00', `${baseSha}..${remoteSha}`]).stdout || '').split('\0').map((x) => x.trim()).filter(Boolean);
-  if (!bodies.every((b) => /\(cherry picked from commit [0-9a-f]{7,40}\)/.test(b) || /^test\(acceptance\): frozen tests of /.test(b))) return { ok: false, why: 'tem commits que não são do promote' };
+  if (!bodies.every((b) => /\(cherry picked from commit [0-9a-f]{7,40}\)/.test(b) || /^test\(acceptance\): frozen tests of /.test(b) || /^chore\(ratchet\): reconcile ratchet caps of /.test(b))) return { ok: false, why: 'tem commits que não são do promote' };
   const gh = (options.ghSpawn || spawnSync)('gh', ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'number,state,url'], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
   if (!gh || gh.status !== 0) return { ok: false, why: 'não consegui confirmar pelo gh que ela não tem PR' };
   let prs = [];
@@ -1530,23 +1982,44 @@ function runtimeQuestions(projectRoot, activeSession, options = {}) {
 }
 
 /**
- * LlmTaskExecutor sobre um adapter (`claude` = `claude -p` por turno, `antigravity` = `agy -p` por turno, `http` = OpenAI-compatível).
+ * LlmTaskExecutor sobre um adapter (`claude` = `claude -p` por turno, `antigravity` = `agy -p` por turno, `grok` = `grok --prompt-file` por turno, `http` = OpenAI-compatível).
  * O uso por tentativa vira evento `ExecutorUsage`.
  */
 function createAdapterExecutor(runtime, projectRoot, activeSession, options, getRunId) {
   const agyLib = require('./oxe-provider-antigravity.cjs');
+  const grokLib = require('./oxe-provider-grok.cjs');
   const persisted = loadRuntimeProviderConfig(projectRoot);
   const rawAdapter = options.adapter || (persisted && (persisted.adapter || persisted.name)) || 'http';
   const adapterId = agyLib.normalizeAdapterId(rawAdapter) || 'http';
   if (typeof runtime.createExecutorAdapter !== 'function') throw new Error('Runtime não exporta createExecutorAdapter.');
   const resolvedAdapterOpts = adapterId === 'antigravity'
-    ? { ...agyLib.resolveAntigravityOptions({ persisted }), ...(options.adapterOptions || {}) }
-    : (options.adapterOptions || {});
+    ? { ...agyLib.resolveAntigravityOptions({ persisted, cwd: projectRoot }), ...(options.adapterOptions || {}) }
+    : adapterId === 'grok'
+      ? { ...grokLib.resolveGrokOptions({ persisted, cwd: projectRoot }), ...(options.adapterOptions || {}) }
+      : (options.adapterOptions || {});
   const adapter = runtime.createExecutorAdapter(adapterId, {
     claude: adapterId === 'claude' ? resolvedAdapterOpts : {},
     antigravity: adapterId === 'antigravity' ? resolvedAdapterOpts : {},
+    grok: adapterId === 'grok' ? resolvedAdapterOpts : {},
   });
   installQuestionResolver(runtime, projectRoot, activeSession, getRunId);
+  if (typeof runtime.setFinishTaskGuard === 'function') {
+    runtime.setFinishTaskGuard((cwd) => {
+      try {
+        const check = require('./oxe-file-size-guard.cjs').verifyTaskFileSize(cwd || projectRoot, {
+          configRoot: projectRoot,
+          changedOnly: true,
+        });
+        if (!check.ok) {
+          return {
+            ok: false,
+            error: `finish_task recusado — ${check.message} (corrija nesta tentativa antes de chamar finish_task)`,
+          };
+        }
+      } catch { /* auxiliar */ }
+      return { ok: true };
+    });
+  }
   const provider = options.providerConfig || {};
   const progress = (event) => {
     if (event && event.type === 'executor_usage') {
@@ -1560,6 +2033,7 @@ function createAdapterExecutor(runtime, projectRoot, activeSession, options, get
     }
     // OXB-186: the turn heartbeat and the slow turns go to OXE-EVENTS, so a stalled attempt is visible.
     if (event && event.type === 'executor_turn') appendEvent(projectRoot, activeSession, { type: 'ExecutorTurn', run_id: getRunId(), work_item_id: event.nodeId, payload: { attempt: event.attempt, ...(event.detail || {}) } });
+    if (event && event.type === 'executor_context_cap') appendEvent(projectRoot, activeSession, { type: 'ExecutorContextCap', run_id: getRunId(), work_item_id: event.nodeId, payload: { attempt: event.attempt, ...(event.detail || {}) } });
     if (event && event.type === 'executor_slow_turn') appendEvent(projectRoot, activeSession, { type: 'ExecutorSlowTurn', run_id: getRunId(), work_item_id: event.nodeId, payload: { attempt: event.attempt, ...(event.detail || {}) } });
     if (typeof options.onProgress === 'function') options.onProgress(event);
   };
@@ -1581,7 +2055,16 @@ function createAdapterExecutor(runtime, projectRoot, activeSession, options, get
       askOrchestrator: ((readProjectConfig(projectRoot) || {}).execute || {}).ask_orchestrator === true,
       // OXB-186: execute.no_progress_turns (0 disables) and execute.slow_turn_ms.
       noProgressTurns: Number.isInteger(((readProjectConfig(projectRoot) || {}).execute || {}).no_progress_turns) ? readProjectConfig(projectRoot).execute.no_progress_turns : undefined,
+      projectRoot,
       slowTurnMs: Number(((readProjectConfig(projectRoot) || {}).execute || {}).slow_turn_ms) > 0 ? Number(readProjectConfig(projectRoot).execute.slow_turn_ms) : undefined,
+      // OxeSpace 15/11 (OxeChat F4 T12): execute.max_context_chars (or executor.*), action "warn" (default) | "retry"
+      ...(() => {
+        const cfgX = readProjectConfig(projectRoot) || {};
+        const pick = (k) => ((cfgX.execute || {})[k] != null ? (cfgX.execute || {})[k] : (cfgX.executor || {})[k]);
+        const cap = Number(pick('max_context_chars'));
+        const act = pick('max_context_action');
+        return cap > 0 ? { maxContextChars: cap, maxContextAction: act === 'retry' || act === 'compact' ? act : 'warn' } : {};
+      })(),
     }
   );
 }
@@ -1921,6 +2404,87 @@ function unionCanonicalStates(primary, secondary) {
   return primary;
 }
 
+function excludedCompletedIdsFromPlan(projectRoot, activeSession, runId = null) {
+  const excluded = new Set();
+  try {
+    const { doc } = readPlanJsonDoc(projectRoot, activeSession);
+    for (const t of (doc && Array.isArray(doc.tasks) ? doc.tasks : [])) {
+      if (t && t.id && t.done !== true && t.status !== 'done' && t.checkpoint_failed) excluded.add(t.id);
+    }
+  } catch { /* ignore */ }
+  try {
+    const lastKind = new Map();
+    for (const e of readEvents(projectRoot, activeSession)) {
+      if (!e || (runId && e.run_id && e.run_id !== runId)) continue;
+      const id = e.work_item_id || (e.payload && e.payload.task) || null;
+      if (!id) continue;
+      const t = normalizeRuntimeEventType(e.type);
+      if (t === 'WorkItemCompleted' || t === 'CheckpointFailed' || t === 'PlanTaskReopened' || t === 'TaskReopened') {
+        lastKind.set(id, t);
+      }
+    }
+    for (const [id, kind] of lastKind) {
+      if (kind !== 'WorkItemCompleted') excluded.add(id);
+    }
+  } catch { /* ignore */ }
+  return excluded;
+}
+
+function stripTasksFromCanonicalState(serializedOrLive, ids, options = {}) {
+  const targetIds = new Set([...(ids || [])].filter(Boolean));
+  if (!serializedOrLive || !targetIds.size) return { state: serializedOrLive, changed: false };
+  const isMap = serializedOrLive.workItems instanceof Map;
+  const live = isMap ? serializedOrLive : hydrateCanonicalState(serializedOrLive);
+  let changed = false;
+  for (const id of targetIds) {
+    if (live.completedWorkItems.delete(id)) changed = true;
+    if (options.clearFailedAndBlocked) {
+      if (live.failedWorkItems.delete(id)) changed = true;
+      if (live.blockedWorkItems.delete(id)) changed = true;
+    }
+    const item = live.workItems.get(id);
+    if (item && (item.status === 'completed' || (options.clearFailedAndBlocked && item.status !== 'pending'))) {
+      live.workItems.set(id, { ...item, status: 'pending' });
+      changed = true;
+    }
+  }
+  return { state: isMap ? live : serializeCanonicalState(live), changed };
+}
+
+function clearTaskResidualRunState(projectRoot, activeSession, taskIds, options = {}) {
+  const targetIds = new Set((Array.isArray(taskIds) ? taskIds : [taskIds]).filter(Boolean));
+  if (!targetIds.size) return false;
+  const current = readRunState(projectRoot, activeSession);
+  if (!current) return false;
+  let changed = false;
+  const next = { ...current };
+  if (current.canonical_state) {
+    const stripped = stripTasksFromCanonicalState(current.canonical_state, targetIds, options);
+    if (stripped.changed) {
+      next.canonical_state = stripped.state;
+      changed = true;
+    }
+  }
+  if (Array.isArray(current.pending_checkpoints)) {
+    const filtered = current.pending_checkpoints.filter((id) => !targetIds.has(String(id)));
+    if (filtered.length !== current.pending_checkpoints.length) {
+      next.pending_checkpoints = filtered;
+      changed = true;
+    }
+  }
+  if (options.clearFailedAndBlocked && Array.isArray(current.failures)) {
+    const filteredFailures = current.failures.filter((f) => !f || !targetIds.has(String(f.work_item_id || f.task_id || f.id || '')));
+    if (filteredFailures.length !== current.failures.length) {
+      next.failures = filteredFailures;
+      changed = true;
+    }
+  }
+  if (!changed) return false;
+  next.updated_at = new Date().toISOString();
+  writeRunState(projectRoot, activeSession, next);
+  return true;
+}
+
 function reduceCanonicalRunStateLive(projectRoot, activeSession, options = {}) {
   const runtime = loadRuntimeModule();
   if (!runtime || typeof runtime.reduce !== 'function') return null;
@@ -1948,6 +2512,1142 @@ function reduceCanonicalRunState(projectRoot, activeSession, options = {}) {
   return serializeCanonicalState(reduceCanonicalRunStateLive(projectRoot, activeSession, options));
 }
 
+// ── 1.21.2: product and technical documents (PRD, RFC, ADR, publish) and the ALM ──────────────────────────────────
+
+function prdPathFor(projectRoot, activeSession) {
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  return path.join(paths.spec ? path.dirname(paths.spec) : path.join(projectRoot, '.oxe'), 'PRD.md');
+}
+
+function activeProgramPhase(projectRoot, activeSession) {
+  try {
+    const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+    const prog = require('./oxe-program.cjs').readProgram(paths.programDir || path.join(projectRoot, '.oxe', 'program'));
+    if (!prog || !prog.active_phase) return null;
+    return (prog.phases || []).find((p) => p.id === prog.active_phase) || null;
+  } catch { return null; }
+}
+
+/** PRD ↔ SPEC traceability and the active phase's RFC (plan lint). */
+function productDocsLint(projectRoot, activeSession, ctx = {}) {
+  const config = readProjectConfig(projectRoot) || {};
+  const errors = [];
+  const warnings = [];
+  const prdLib = require('./oxe-prd.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const prdFile = prdPathFor(projectRoot, activeSession);
+  const prd = fs.existsSync(prdFile) ? prdLib.readPrd(prdFile) : null;
+  const required = Boolean(config.prd && typeof config.prd === 'object' && config.prd.required === true);
+  if (prd || required) {
+    const specText = ctx.specText != null ? ctx.specText : readTextIfExists(paths.spec);
+    const r = prdLib.lintPrd(prd, { criteria: ctx.specCriteria || [], requirements: prdLib.requirementIds(specText, readTextIfExists(paths.roadmap)), required });
+    errors.push(...r.errors.map((e) => `PRD: ${e}`));
+    warnings.push(...r.warnings.map((w) => `PRD: ${w}`));
+  }
+  const phase = activeProgramPhase(projectRoot, activeSession);
+  if (phase) {
+    const rfcLib = require('./oxe-rfc.cjs');
+    const risks = require('./oxe-risk-decision.cjs').criterionRisks(ctx.specText != null ? ctx.specText : readTextIfExists(paths.spec));
+    const r = rfcLib.lintPhaseRfc(projectRoot, { phase: phase.id, phaseCriteria: phase.acceptance || [], risks, mode: rfcLib.rfcMode(config) });
+    errors.push(...r.errors);
+    warnings.push(...r.warnings);
+  }
+  try {
+    const tg = traceGateFindings(projectRoot, activeSession, 'plan');
+    errors.push(...tg.errors);
+    warnings.push(...tg.warnings);
+  } catch { /* auxiliar */ }
+  return { errors, warnings };
+}
+
+/** `oxe-cc prd lint`. */
+function runtimePrd(projectRoot, activeSession) {
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const prdFile = prdPathFor(projectRoot, activeSession);
+  const specText = readTextIfExists(paths.spec);
+  let criteria = [];
+  try { const parsers = loadSdkParsers(); criteria = specText && parsers ? (parsers.parseSpec(specText).criteria || []).map((c) => c.id) : []; } catch { criteria = []; }
+  const prd = fs.existsSync(prdFile) ? require('./oxe-prd.cjs').readPrd(prdFile) : null;
+  const r = productDocsLint(projectRoot, activeSession, { specText, specCriteria: criteria });
+  return { file: path.relative(projectRoot, prdFile).replace(/\\/g, '/'), exists: Boolean(prd), stories: prd ? prd.stories.length : 0, metrics: prd ? prd.metrics.length : 0, version: prd ? prd.version : null, ...r, ok: r.errors.length === 0 };
+}
+
+/** `oxe-cc rfc new|list|accept|reject`. */
+function runtimeRfc(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-rfc.cjs');
+  if (options.action === 'new') {
+    const phase = options.phase || (activeProgramPhase(projectRoot, activeSession) || {}).id || null;
+    const out = lib.create(projectRoot, { title: options.title, phase, by: options.by });
+    appendEvent(projectRoot, activeSession, { type: 'RfcCreated', payload: { id: out.id, phase } });
+    return { ...out, file: path.relative(projectRoot, out.file).replace(/\\/g, '/') };
+  }
+  if (options.action === 'accept') {
+    const out = lib.accept(projectRoot, options.id, { by: options.by, force: options.force }, (input) => runtimeDecision(projectRoot, activeSession, { action: 'add', ...input }).decision);
+    appendEvent(projectRoot, activeSession, { type: 'RfcAccepted', payload: { id: out.rfc, decision: out.decision } });
+    return { ...out, file: path.relative(projectRoot, out.file).replace(/\\/g, '/') };
+  }
+  if (options.action === 'reject') {
+    const out = lib.reject(projectRoot, options.id, { reason: options.reason });
+    appendEvent(projectRoot, activeSession, { type: 'RfcRejected', payload: { id: out.rfc, reason: options.reason } });
+    return out;
+  }
+  return { rfcs: lib.list(projectRoot).map((r) => ({ ...r, file: r.file ? path.relative(projectRoot, r.file).replace(/\\/g, '/') : null })) };
+}
+
+/** `oxe-cc docs publish` (also at the phase close): PRD, RFCs, ADRs, SYSTEM-DESIGN → docs/. */
+function runtimeDocsPublish(projectRoot, activeSession, options = {}) {
+  const config = readProjectConfig(projectRoot) || {};
+  const dir = options.dir || require('./oxe-docs-publish.cjs').docsDir(config);
+  if (!dir) return { disabled: true, written: [], unchanged: 0, skipped: [] };
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  return require('./oxe-docs-publish.cjs').publish(projectRoot, dir, {
+    prdFile: prdPathFor(projectRoot, activeSession),
+    almLinks: require('./oxe-alm.cjs').links(programDir),
+    rfcs: require('./oxe-rfc.cjs').list(projectRoot),
+    decisions: decisionsForAdr(programDir),
+    adrDir: require('./oxe-adr.cjs').adrDir(config),
+    designFile: path.join(projectRoot, '.oxe', 'SYSTEM-DESIGN.md'),
+    glossaryFile: grillPaths(projectRoot, activeSession).glossary,
+  });
+}
+
+/** The open PR whose head is the current branch (gh pr list --head), or null (no gh, no PR, detached HEAD). */
+function branchOpenPr(projectRoot, ghSpawn) {
+  try {
+    const branch = (gitLines(projectRoot, ['rev-parse', '--abbrev-ref', 'HEAD']) || [])[0];
+    if (!branch || branch === 'HEAD') return null;
+    const r = (ghSpawn || spawnSync)('gh', ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number,url', '--limit', '1'], { cwd: projectRoot, encoding: 'utf8', windowsHide: true, timeout: 20_000 });
+    if (r.status !== 0) return null;
+    const list = JSON.parse(String(r.stdout || '[]'));
+    return Array.isArray(list) && list[0] ? { branch, number: list[0].number, url: list[0].url || null } : null;
+  } catch { return null; }
+}
+
+/** A PR opened by the OXE: `runtime promote` (TaskPromoted) or `quick promote --open-pr` (QuickPromoted). */
+function isPromotedPrEvent(e) {
+  return Boolean(e && e.payload && e.payload.pr && (e.type === 'TaskPromoted' || (e.type === 'QuickPromoted' && e.work_item_id)));
+}
+
+/** Promoted PRs that got merged since: an `AlmMerged` event each (gh pr view; no gh → nothing). */
+function detectMergedPrs(projectRoot, activeSession, events, options = {}) {
+  const merged = new Set(events.filter((e) => e.type === 'AlmMerged').map((e) => e.work_item_id));
+  const found = [];
+  for (const e of events.filter((x) => isPromotedPrEvent(x) && !merged.has(x.work_item_id))) {
+    const r = (options.ghSpawn || spawnSync)('gh', ['pr', 'view', String(e.payload.pr), '--json', 'state,mergedAt'], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
+    if (r.status !== 0) continue;
+    let j = null;
+    try { j = JSON.parse(String(r.stdout || '{}')); } catch { j = null; }
+    if (j && String(j.state).toUpperCase() === 'MERGED') {
+      appendEvent(projectRoot, activeSession, { type: 'AlmMerged', work_item_id: e.work_item_id, payload: { pr: e.payload.pr, merged_at: j.mergedAt || null } });
+      merged.add(e.work_item_id);
+      found.push(e.work_item_id);
+    }
+  }
+  return found;
+}
+
+/**
+ * `oxe-cc alm status|push|sync|move|link|defect`. Async (network). With `dryRun` nothing is written anywhere.
+ * options: { action, dryRun, stories (bool), tasks (bool), ref, stage, key, title, origin, http, env, ghSpawn, provider }
+ */
+async function runtimeAlm(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-alm.cjs');
+  const config = readProjectConfig(projectRoot) || {};
+  const cfg = lib.almConfig(config, { defaultProgram: path.basename(path.resolve(projectRoot)) });
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const env = options.env || process.env;
+  const problems = lib.checkConfig(cfg, env);
+  // alm status <KEY>: the card's live column (read only), not a folder (OxeSpace 14/11: "alm status OXE-144")
+  if ((options.action === 'status' || !options.action) && options.ref) {
+    if (!cfg) return { configured: false, key: options.ref, why: 'ALM não configurado aqui' };
+    const item = lib.resolveItem(programDir, cfg, options.ref);
+    if (!item) throw new Error(`${options.ref}: não é uma chave deste projeto (${cfg.provider === 'jira' ? `${cfg.p.project}-n` : 'número'})`);
+    const prov = lib.provider(cfg, { http: options.http, env, sleep: options.sleep, readOnly: true });
+    const state = typeof prov.status === 'function' && !prov.deferred ? await prov.status(item.key) : null;
+    const stage = lib.STAGES.find((s) => cfg.states[s] && state && String(cfg.states[s]).toLowerCase() === String(state).toLowerCase()) || null;
+    return { configured: true, key: item.key, ref: item.direct ? null : item.ref, state, stage };
+  }
+  if (options.action === 'status' || !options.action) {
+    const st = lib.readState(programDir);
+    return { configured: Boolean(cfg), provider: cfg ? cfg.provider : 'none', transport: cfg ? cfg.transport : null, problems, links: lib.links(programDir).size, pending: (st.pending || []).length, queue: lib.readQueue(programDir).ops.length, last_sync: st.last_sync || null, auto: cfg ? cfg.auto : false };
+  }
+  if (options.action === 'queue') {
+    return { provider: cfg ? cfg.provider : 'none', transport: cfg ? cfg.transport : null, ops: lib.pendingOps(programDir) };
+  }
+  if (!cfg) throw new Error('ALM não configurado: defina "alm": { "provider": "jira" | "azure-devops", … } no .oxe/config.json (sem ALM, o OXE segue normalmente)');
+  // alm list (OxeSpace 15/11): read only — the cards in the given board states, with the merged PRs citing each one
+  if (options.action === 'list') {
+    const states = String(options.state || '').split(',').map((s) => s.trim()).filter(Boolean);
+    if (!states.length) throw new Error('uso: oxe-cc alm list --state "<estado do quadro>"[,…] [--with-prs] [--json]');
+    if (problems.length) throw new Error(`ALM: ${problems.join('; ')}`);
+    const prov = lib.provider(cfg, { http: options.http, env, sleep: options.sleep, readOnly: true });
+    if (prov.deferred) throw new Error('alm list lê o quadro pela API REST; com alm.transport "mcp", consulte pela ferramenta MCP da sessão');
+    if (typeof prov.searchByStates !== 'function') throw new Error(`${cfg.provider}: alm list ainda não suportado`);
+    const cards = await prov.searchByStates(states);
+    if (options.withPrs) {
+      const byKey = require('./oxe-alm-prs.cjs').mergedPrsByKey(projectRoot, cfg, { ghSpawn: options.ghSpawn, repo: options.repo });
+      for (const card of cards) card.prs = byKey.get(String(card.key).toUpperCase()) || [];
+    }
+    return { states, count: cards.length, cards, with_prs: Boolean(options.withPrs) };
+  }
+  // alm pr-merged (OxeSpace 15/11, OXE-277): a dry run unless --apply
+  if (options.action === 'pr-merged' && !options.apply) options = { ...options, dryRun: true };
+  const dryRun = lib.isDry(cfg, options);
+  if (problems.length && !dryRun) throw new Error(`ALM: ${problems.join('; ')}`);
+  // A dry run with the credentials in place still READS (what exists, what would be adopted); it never writes.
+  const net = { http: options.http, env, sleep: options.sleep, provider: options.provider, retries: options.retries, dryRun, apply: options.apply, readOnlyLookup: dryRun && !problems.length };
+  const phase = activeProgramPhase(projectRoot, activeSession);
+  // OXB-b: one writer per program (alm.writer); the other sessions read and comment. A local lock keeps two writers
+  // on the same machine from creating the same batch at once.
+  const WRITES = ['push', 'sync', 'move', 'defect', 'ack', 'link', 'label', 'version', 'summary', 'supersede', 'pr-merged'];
+  const writes = WRITES.includes(options.action) || (options.action === 'pending' && options.sub === 'apply');
+  if ((writes || options.action === 'comment') && !dryRun && !options.auto) lib.warnApply(cfg, options);
+  if (writes && !dryRun) {
+    if (!lib.isWriter(cfg, env)) throw lib.writerError(cfg);
+    if (['push', 'sync', 'defect', 'pr-merged'].includes(options.action) && !options.noLock) {
+      return lib.withWriteLock(programDir, () => runtimeAlm(projectRoot, activeSession, { ...options, noLock: true }));
+    }
+  }
+  if (options.action === 'comment') {
+    const ref = /^T\d+$/i.test(options.ref || '') ? lib.taskRef(phase ? phase.id : null, options.ref.toUpperCase()) : options.ref;
+    return lib.comment(programDir, cfg, ref, options.text || options.comment, net);
+  }
+  if (options.action === 'pr-merged') {
+    const prsLib = require('./oxe-alm-prs.cjs');
+    const out = await prsLib.prMerged(projectRoot, programDir, cfg, lib, { pr: options.pr, repo: options.repo, ghSpawn: options.ghSpawn, apply: !dryRun, net, prData: options.prData });
+    if (!out.dry_run) appendEvent(projectRoot, activeSession, { type: 'AlmPrMerged', payload: { pr: out.pr, moved: out.moved.map((m) => m.key), commented: out.commented, bare: out.bare, errors: out.errors } });
+    return out;
+  }
+  if (options.action === 'ack') {
+    if (!options.ref) throw new Error('uso: oxe-cc alm ack <id-da-operação|US-n|Fn-Tn> [--key <chave>] [--url <url>] [--error "…"]');
+    const ref = /^T\d+$/i.test(options.ref) ? lib.taskRef(phase ? phase.id : null, options.ref.toUpperCase()) : options.ref;
+    const out = lib.ack(programDir, cfg, ref, { key: options.key, url: options.url, error: options.error, adopted: options.adopted });
+    if (out.done) appendEvent(projectRoot, activeSession, { type: 'AlmAcked', payload: { id: out.id, key: options.key || null } });
+    return out;
+  }
+  if (options.action === 'push') {
+    const prdFile = prdPathFor(projectRoot, activeSession);
+    const prd = fs.existsSync(prdFile) ? require('./oxe-prd.cjs').readPrd(prdFile) : null;
+    const doc = readPlanJsonDoc(projectRoot, activeSession).doc;
+    const wantStories = options.stories !== false;
+    const wantTasks = options.tasks !== false;
+    const title = (() => { const m = prd && /^#\s+(?:PRD\s+[—-]\s+)?(.+)$/m.exec(readTextIfExists(prdFile) || ''); return m ? m[1].trim() : null; })();
+    const out = await lib.push(programDir, cfg, {
+      stories: wantStories && prd ? prd.stories : [],
+      tasks: wantTasks && doc ? doc.tasks || [] : [],
+      phase: phase ? phase.id : (doc && doc.phase) || null,
+      epicTitle: title && !/^\(/.test(title) ? title : null,
+      dryRun,
+      rebuild: Boolean(options.rebuildLedger),
+      firstPush: Boolean(options.firstPush),
+    }, net);
+    if (!dryRun) appendEvent(projectRoot, activeSession, { type: 'AlmPushed', payload: { created: out.created.length, reused: out.reused.length, failed: out.failed.length } });
+    return { provider: cfg.provider, dry_run: dryRun, ...out };
+  }
+  if (options.action === 'sync') {
+    if (!dryRun) { try { detectMergedPrs(projectRoot, activeSession, readEvents(projectRoot, activeSession), options); } catch { /* sem gh: segue */ } }
+    const events = readEvents(projectRoot, activeSession);
+    const links = lib.links(programDir);
+    const doc = readPlanJsonDoc(projectRoot, activeSession).doc;
+    const phaseId = phase ? phase.id : (doc && doc.phase) || null;
+    const refsOfPhase = (ph) => [...links.keys()].filter((ref) => (ph ? ref.startsWith(`${ph}-`) : /^(F\d+-)?T\d+/.test(ref)) || /^US-/.test(ref));
+    const releasedEnv = config.alm && typeof config.alm.released_env === 'string' ? config.alm.released_env : null;
+    const out = await lib.sync(programDir, cfg, events, { phase: phaseId, refsOfPhase, releasedEnv }, net);
+    return { provider: cfg.provider, dry_run: dryRun, ...out };
+  }
+  if (options.action === 'move') {
+    const ref = /^T\d+$/i.test(options.ref || '') ? lib.taskRef(phase ? phase.id : null, options.ref.toUpperCase()) : options.ref;
+    return lib.move(programDir, cfg, ref, options.stage, { ...net, comment: options.comment });
+  }
+  // the umbrella card: a label and "Relates" links between cards, by key (OxeSpace 14/11, OXE-22/23)
+  if (options.action === 'label') return lib.labelItem(programDir, cfg, options.ref, options.add, { ...net, remove: options.remove });
+  // G21: the requests reader sessions recorded; apply (writer) drains them, then a sync catches up the events
+  if (options.action === 'pending') {
+    if (options.sub !== 'apply') return { pending: lib.listPending(projectRoot) };
+    const out = await lib.applyPending(projectRoot, programDir, cfg, net);
+    if (!dryRun) appendEvent(projectRoot, activeSession, { type: 'AlmPendingApplied', payload: { applied: out.applied.length, failed: out.failed.length } });
+    // the task starts/ends a reader session's execute logged as events (G27) move here too
+    let synced = null;
+    try { synced = await runtimeAlm(projectRoot, activeSession, { ...options, action: 'sync', noLock: false }); } catch (err) { synced = { error: err.message }; }
+    return { dry_run: dryRun, ...out, sync: synced };
+  }
+  if (options.action === 'supersede') {
+    const out = await lib.supersede(programDir, cfg, options.ref, options.newKeys, { ...net, comment: options.comment, closeTo: options['close-to'] || options.closeTo, noClose: Boolean(options.noClose) });
+    if (out.applied) appendEvent(projectRoot, activeSession, { type: 'AlmSuperseded', payload: { key: out.key, by: out.by, link_type: out.link_type, status: out.status } });
+    return { dry_run: dryRun, ...out };
+  }
+  if (options.action === 'summary') return { dry_run: dryRun, ...(await lib.setItemSummary(programDir, cfg, options.ref, options.summary, { ...net, comment: options.comment })) };
+  if (options.action === 'version') return { dry_run: dryRun, ...(await lib.setItemVersion(programDir, cfg, options.ref, options.version, { ...net, comment: options.comment })) };
+  if (options.action === 'link' && options.relates) return lib.relateItems(programDir, cfg, options.ref, options.relates, net);
+  if (options.action === 'link' && options.pr) {
+    // OXB-G18: the card to the pull request that delivered it (Jira remote link / Azure hyperlink)
+    return lib.linkPr(programDir, cfg, options.ref, { pr: options.pr, repo: options.repo || (config.alm && config.alm.docs && config.alm.docs.repo) || null, title: options.title }, net);
+  }
+  if (options.action === 'link') {
+    if (!options.ref || !options.key) throw new Error('uso: oxe-cc alm link <US-n|Tn> <chave> · oxe-cc alm link <chave> --pr <n> [--repo <url>]');
+    const ref = /^T\d+$/i.test(options.ref) ? lib.taskRef(phase ? phase.id : null, options.ref.toUpperCase()) : options.ref;
+    // an existing link keeps its kind and fields (a bug stays a bug); --cr is written, never dropped (OxeSpace 14/11:
+    // "link --cr CR-06" turned the bug FLAKY-F6-FOCUS into a task and the close gate passed without the CR)
+    // the fields of every earlier record of this ref, merged in order (a later line that lost one, as the old
+    // link did, does not erase it); --kind sets the kind explicitly
+    let prev = null;
+    try {
+      for (const line of fs.readFileSync(path.join(programDir, 'alm-links.ndjson'), 'utf8').split(/\r?\n/)) {
+        let r = null;
+        try { r = JSON.parse(line); } catch { r = null; }
+        if (r && r.ref === ref) prev = { ...(prev || {}), ...r };
+      }
+    } catch { prev = null; }
+    if (prev) delete prev.at;
+    if (options.kind && !['bug', 'task', 'story', 'epic'].includes(String(options.kind))) throw new Error(`--kind ${options.kind}: use bug | task | story | epic`);
+    if (options.cr && !require('./oxe-change.cjs').listChanges(programDir).some((c) => c.id === options.cr)) throw new Error(`${options.cr}: CR inexistente (oxe-cc runtime feedback list)`);
+    const kind = options.kind ? String(options.kind) : prev && prev.kind ? prev.kind : /^US-/.test(ref) ? 'story' : 'task';
+    const rec = { ...(prev || {}), ref, key: options.key, kind, provider: cfg.provider, manual: true, ...(options.cr ? { cr: String(options.cr) } : {}) };
+    if (!dryRun) { lib.addLink(programDir, rec); lib.dropEnsure(programDir, ref); }
+    return { ref, key: options.key, kind: rec.kind, ...(rec.cr ? { cr: rec.cr } : {}), dry_run: dryRun };
+  }
+  if (options.action === 'defect') {
+    const ref = options.ref || `BUG-${Date.now().toString(36).toUpperCase()}`;
+    // the bug and its CR know each other (--cr CR-n): the trace flags a defect CR without bug and a bug without CR
+    if (options.cr && !require('./oxe-change.cjs').listChanges(programDir).some((c) => c.id === options.cr)) throw new Error(`${options.cr}: CR inexistente (oxe-cc runtime feedback list)`);
+    return lib.reportDefect(programDir, cfg, { ref, title: options.title || 'defeito', description: options.description, origin: options.origin, cr: options.cr }, net);
+  }
+  throw new Error(`alm ${options.action}: ação desconhecida (status | push | sync | move | link | defect | comment | queue | ack)`);
+}
+
+/**
+ * `oxe-cc alm refine import <KEY…> [--risk P2] [--phase Fn] [--dry-run] --by <papel>`: the refined card's criteria
+ * become the program SPEC's. A CA without a SPEC id becomes a new A-n (its text cites the card key, its test is the
+ * "Como verificar", its "Risco: Px" the Risco column) and gets `(A-n)` written back into the card spec; a CA that
+ * already has one is checked against the SPEC (exists, cites the card). The CA ↔ A link is then explicit both ways.
+ */
+function runtimeAlmRefineImport(projectRoot, activeSession, options = {}) {
+  const refine = require('./oxe-alm-refine.cjs');
+  const specEdit = require('./oxe-spec-edit.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const keysAll = (options.keys || []).map((k) => String(k).toUpperCase());
+  const d = refine.dirs(projectRoot);
+  const catalog = refine.discoverProgramCatalog(projectRoot, { activeSession, programRoots: options.programRoots || null });
+  let targetRoot = projectRoot;
+  let targetSession = activeSession;
+  let targetSlug = null;
+  let explicitTarget = null;
+  if (options.spec) {
+    explicitTarget = refine.resolveProgramSpec(projectRoot, activeSession, options.spec, { catalogCache: catalog, programRoots: options.programRoots || null });
+    if (!explicitTarget || !explicitTarget.specPath) {
+      throw new Error(`--spec "${options.spec}" não encontrado ou sem SPEC.md`);
+    }
+    targetRoot = explicitTarget.root;
+    targetSession = targetRoot === path.resolve(projectRoot) ? activeSession : null;
+    targetSlug = targetRoot !== path.resolve(projectRoot) ? explicitTarget.slug : null;
+  } else if (keysAll.length) {
+    const resolvedTargets = [];
+    for (const key of keysAll) {
+      const mdPath = path.join(d.specs, `${key}.md`);
+      if (!fs.existsSync(mdPath)) continue;
+      const mdText = fs.readFileSync(mdPath, 'utf8');
+      const r = refine.resolveCardProgram(projectRoot, activeSession, { key, md: mdText, catalogCache: catalog, programRoots: options.programRoots || null });
+      if (r && r.entry && r.matchedBy !== 'dir_default') resolvedTargets.push(r.entry);
+    }
+    const distinctRoots = [...new Set(resolvedTargets.map((e) => e.root))];
+    if (distinctRoots.length > 1) {
+      throw new Error(`os cards pertencem a programas diferentes (${[...new Set(resolvedTargets.map((e) => e.slug))].join(', ')}): informe --spec <programa|caminho> ou rode por card`);
+    }
+    if (distinctRoots.length === 1 && distinctRoots[0] !== path.resolve(projectRoot)) {
+      explicitTarget = resolvedTargets[0];
+      targetRoot = explicitTarget.root;
+      targetSession = null;
+      targetSlug = explicitTarget.slug;
+    }
+  }
+  const paths = resolveRuntimeArtifactPaths(targetRoot, targetSession);
+  const specPath = (explicitTarget && explicitTarget.specPath) || paths.spec;
+  if (!specPath || !fs.existsSync(specPath)) throw new Error('SPEC.md ausente: o import leva os critérios do card para a SPEC do programa (/oxe-spec primeiro)');
+  if (!options.dryRun && !options.by) throw new Error('o import emenda a SPEC: informe --by <papel>');
+  let specText = fs.readFileSync(specPath, 'utf8');
+  const programDir = (explicitTarget && explicitTarget.programDir) || paths.programDir || path.join(targetRoot, '.oxe', 'program');
+  const results = [];
+  // A phase that is executing or closed is frozen (its SPEC rows, its PLAN, its tests): a change there is a CR,
+  // never a direct edit, and a later phase amends a frozen test with a new version instead of replacing it.
+  let program = null;
+  try { program = require('./oxe-program.cjs').readProgram(programDir); } catch { program = null; }
+  const phases = (program && program.phases) || [];
+  const frozen = (ph) => Boolean(ph) && (['executing', 'verifying', 'closed'].includes(ph.status) || Boolean(ph.run_id));
+  const phaseOfA = (a) => phases.find((ph) => (ph.acceptance || []).includes(a)) || null;
+  const activePh = program && program.active_phase ? phases.find((ph) => ph.id === String(program.active_phase).toUpperCase()) || null : null;
+  const relSpec = path.relative(projectRoot, specPath).replace(/\\/g, '/');
+  if (options.phase) {
+    const target = phases.find((ph) => ph.id === String(options.phase).toUpperCase());
+    if (target && frozen(target)) {
+      const cas = keysAll.join(', ');
+      return {
+        dry_run: true,
+        refused: true,
+        spec: relSpec,
+        ...(targetSlug ? { program: targetSlug } : {}),
+        reason: `a fase ${target.id} está ${target.status}${target.run_id ? ' (com run)' : ''}: os arquivos dela estão congelados e nada foi escrito. Critério novo entra por CR nesta fase ou numa fase posterior`,
+        commands: [
+          `oxe-cc runtime feedback --class new_scope --summary "critérios dos cards refinados ${cas}" --by <papel>`,
+          `oxe-cc alm refine import ${keysAll.join(' ')}${options.spec ? ` --spec ${options.spec}` : ''} --phase <fase ainda não iniciada> --by <papel>`,
+        ],
+        results: [],
+      };
+    }
+  }
+  const specCriteria = new Map(require('./oxe-spec-check.cjs').criteria(specText).list.map((c) => [c.id, c]));
+  const norm = (t) => String(t || '').replace(/\([A-Z][A-Z0-9]+-\d+\)/g, '').replace(/[`*_]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+  for (const key of keysAll) {
+    const specFile = path.join(d.specs, `${key}.md`);
+    if (!fs.existsSync(specFile)) { results.push({ key, error: `sem spec refinado: oxe-cc alm refine ${key}` }); continue; }
+    let md = fs.readFileSync(specFile, 'utf8');
+    const criteria = refine.parseCriteria(md);
+    const existing = specEdit.criteriaIds(specText);
+    const added = new Map();
+    const out = { key, criteria_count: criteria.length, added: [], linked: [], problems: [] };
+    if (!criteria.length) {
+      out.problems.push(`0 critérios lidos em ${key}.md (esperado "1. **CA-n** — Dado … · Teste: …" ou "- CA-n — …")`);
+    }
+    for (const c of criteria) {
+      if (c.spec_id) {
+        if (c.spec_program) {
+          const critProg = refine.resolveProgramSpec(projectRoot, activeSession, c.spec_program, { catalogCache: catalog, programRoots: options.programRoots || null });
+          if (!critProg || path.resolve(critProg.root) !== path.resolve(targetRoot)) {
+            out.linked.push({ ca: c.id, a: `${c.spec_program}:${c.spec_id}` });
+            continue;
+          }
+        }
+        if (!existing.includes(c.spec_id)) out.problems.push(`${c.id} aponta para ${c.spec_id}, que não existe na SPEC${targetSlug ? ` de ${targetSlug}` : ''}`);
+        else {
+          const row = String(specText).split(/\r?\n/).find((l) => new RegExp(`^\\|\\s*\\**${c.spec_id}\\**\\s*\\|`).test(l)) || '';
+          const ph = phaseOfA(c.spec_id);
+          const isFrozen = frozen(ph);
+          if (!row.includes(key)) {
+            out.problems.push(isFrozen
+              ? `${c.spec_id} (de ${c.id}) não cita ${key}, e a fase ${ph.id} está ${ph.status}: registre a ligação por CR — oxe-cc runtime feedback --class spec_gap --criteria ${c.spec_id} --summary "${c.spec_id} é o ${c.id} de ${key}" --additive --by <papel>`
+              : `${c.spec_id} (de ${c.id}) não cita ${key} na SPEC — emende com oxe-cc spec amend ${c.spec_id} --append "(${key})"`);
+          }
+          // the card's CA says something else than the SPEC's A: on a frozen A that is a CR proposal, never an edit
+          const a = specCriteria.get(c.spec_id);
+          if (a && norm(a.text) && norm(c.text) && norm(a.text) !== norm(c.text)) {
+            out.proposals = out.proposals || [];
+            out.proposals.push(isFrozen
+              ? { ca: c.id, a: c.spec_id, frozen: true, command: `oxe-cc runtime feedback --class spec_gap --criteria ${c.spec_id} --amend-to <N> --summary "${key} ${c.id}: ${c.text.slice(0, 80)}" --by <papel>`, why: `${c.spec_id} pertence à fase ${ph.id} (${ph.status}): o teste congelado dela ganha uma versão nova (vN), não é trocado` }
+              : { ca: c.id, a: c.spec_id, frozen: false, command: `oxe-cc spec amend ${c.spec_id} --text "${c.text.replace(/"/g, '\\"').slice(0, 160)} (${key})" --by <papel> --reason "alm refine ${key} ${c.id}"`, why: `o ${c.id} do card diz outra coisa que o ${c.spec_id} da SPEC` });
+          }
+          out.linked.push({ ca: c.id, a: c.spec_id });
+        }
+        continue;
+      }
+      if (!c.test || require('./oxe-alm-refine.cjs').TBC_RE.test(c.test)) { out.problems.push(`${c.id} sem teste: não vira critério da SPEC (rode o lint do refine)`); continue; }
+      const max = [...existing, ...added.values()].filter((x) => /^A\d+$/.test(x)).reduce((m, x) => Math.max(m, Number(x.slice(1))), 0);
+      const id = `A${max + 1}`;
+      try {
+        const edit = specEdit.addCriterion(specText, id, { text: `${c.text} (${key})`, verify: c.test, risk: c.risk || options.risk });
+        specText = edit.text;
+        added.set(c.id, id);
+        out.added.push({ ca: c.id, a: id, row: edit.after });
+      } catch (err) { out.problems.push(`${c.id}: ${err.message}`); }
+    }
+    if (!options.dryRun && added.size) {
+      md = refine.setSpecIds(md, added, targetSlug ? { program: targetSlug } : {});
+      fs.writeFileSync(specFile, md);
+      for (const a of out.added) changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'spec_edit', action: 'add_criterion', id: a.a, by: options.by, reason: `alm refine import ${key} ${a.ca}`, origin: 'alm_refine', at: new Date().toISOString(), after: a.row });
+    }
+    results.push(out);
+  }
+  let assignedPhase = null;
+  let phaseWarning = null;
+  const addedIds = results.flatMap((r) => (r.added || []).map((a) => a.a));
+  if (!options.dryRun && addedIds.length) {
+    writeTextAtomic(specPath, specText);
+    appendEvent(targetRoot, targetSession, { type: 'SpecEdited', payload: { action: 'alm_refine_import', keys: results.map((r) => r.key), added: addedIds } });
+    const targetPhaseId = options.phase
+      ? String(options.phase).toUpperCase()
+      : (activePh && !frozen(activePh) ? activePh.id : null);
+    if (targetPhaseId) {
+      try {
+        runtimeProgramPhaseEdit(targetRoot, targetSession, { phase: targetPhaseId, addAcceptance: addedIds.join(','), by: options.by, reason: `alm refine import ${results.map((r) => r.key).join(', ')}` });
+        assignedPhase = targetPhaseId;
+      } catch (err) {
+        if (options.phase) {
+          results.push({ key: '(fase)', problems: [`os critérios entraram na SPEC, mas não na fase ${targetPhaseId}: ${err.message}`], added: [], linked: [] });
+        } else {
+          phaseWarning = `critério(s) ${addedIds.join(', ')} adicionado(s) na SPEC sem fase ("fase -"): ${err.message}`;
+        }
+      }
+    } else if (program) {
+      phaseWarning = `critério(s) ${addedIds.join(', ')} adicionado(s) na SPEC sem fase ("fase -")${activePh ? ` porque a fase ativa ${activePh.id} está ${activePh.status}` : ''} — vincule à fase (oxe-cc runtime program phase edit ${activePh ? activePh.id : '<Fn>'} --add-acceptance ${addedIds.join(',')} --by ${options.by || '<papel>'} --reason "…" ou via --phase <Fn> / CR) antes de plan append`;
+    }
+  }
+  return {
+    dry_run: Boolean(options.dryRun),
+    spec: relSpec,
+    ...(targetSlug ? { program: targetSlug } : {}),
+    ...(assignedPhase ? { phase: assignedPhase } : {}),
+    ...(phaseWarning ? { phase_warning: phaseWarning } : {}),
+    results,
+  };
+}
+
+/**
+ * alm.trace_gate: the traceability orphans in the gates. "warn": warnings everywhere. "close": warnings in spec check
+ * and plan lint (the cards are still being refined), errors at the phase close. "strict": errors everywhere.
+ * Without alm.trace_gate, nothing (the trace stays an explicit command).
+ * @param {'spec'|'plan'|'close'} stage
+ */
+function traceGateFindings(projectRoot, activeSession, stage) {
+  const config = readProjectConfig(projectRoot) || {};
+  const mode = config.alm && ['warn', 'close', 'strict'].includes(config.alm.trace_gate) ? config.alm.trace_gate : null;
+  if (!mode) return { errors: [], warnings: [], mode: null };
+  const graph = require('./oxe-trace.cjs').build(traceSnapshot(projectRoot, activeSession));
+  const blocking = mode === 'strict' || (mode === 'close' && stage === 'close');
+  const lines = graph.orphans.map((o) => `rastreabilidade: ${o.kind} ${o.id}: ${o.why} — ${o.fix}`);
+  return blocking ? { errors: lines, warnings: [], mode } : { errors: [], warnings: lines, mode };
+}
+
+/** A whole-word, accent-aware, case-insensitive match of `word` (glossary synonyms). */
+function wholeWord(word) {
+  const esc = String(word).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^\\p{L}\\p{N}])${esc}(?=$|[^\\p{L}\\p{N}])`, 'iu');
+}
+
+/**
+ * `oxe-cc alm intake | doctor | version ensure | usage` (oxe-alm-admin.cjs). intake and version create (writer only,
+ * --dry-run shows); doctor and usage only read.
+ */
+async function runtimeAlmAdmin(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-alm.cjs');
+  const admin = require('./oxe-alm-admin.cjs');
+  if (options.action === 'usage') return admin.usageReport(projectRoot);
+  const config = readProjectConfig(projectRoot) || {};
+  const cfg = lib.almConfig(config, { defaultProgram: path.basename(path.resolve(projectRoot)) });
+  if (!cfg) throw new Error('ALM não configurado: veja o exemplo em oxe/templates/CONFIG.md (seção ALM) ou rode /oxe-alm setup');
+  if (cfg.provider !== 'jira') throw new Error(`alm ${options.action}: por enquanto só Jira`);
+  const env = options.env || process.env;
+  const problems = lib.checkConfig(cfg, env);
+  // intake --dry-run needs no credential: it only builds and checks the item, offline (OxeSpace 14/11)
+  const offlineIntake = options.action === 'intake' && lib.isDry(cfg, options) && problems.length > 0;
+  if (problems.length && !offlineIntake) throw new Error(`ALM: ${problems.join('; ')}`);
+  if (offlineIntake) options = { ...options, offline: true };
+  if (options.action === 'doctor') return admin.doctor(lib.jiraRest(cfg, { ...options, readOnly: true }), cfg);
+  options = { ...options, dryRun: lib.isDry(cfg, options) };
+  const rest = lib.jiraRest(cfg, options);
+  if (!options.dryRun && !lib.isWriter(cfg, env)) throw lib.writerError(cfg);
+  if (!options.dryRun) lib.warnApply(cfg, options);
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  if (options.action === 'version') return admin.versionEnsure(rest, cfg, options.name, options);
+  if (options.action === 'priority') {
+    const out = await admin.setPriority(rest, cfg, options.key, options.name, options);
+    if (!out.planned) appendEvent(projectRoot, activeSession, { type: 'AlmPrioritySet', payload: { key: out.key, priority: out.priority, confirmed: out.confirmed } });
+    return out;
+  }
+  if (options.action === 'intake') {
+    let fromText = null;
+    if (options.from && !/^https?:\/\//i.test(options.from)) {
+      const f = path.resolve(projectRoot, options.from);
+      if (!fs.existsSync(f)) throw new Error(`--from ${options.from}: arquivo não encontrado`);
+      fromText = fs.readFileSync(f, 'utf8');
+    }
+    const out = await admin.intake(rest, cfg, { ...options, fromText }, { programDir, options: { ...options, env } });
+    if (out.created) appendEvent(projectRoot, activeSession, { type: 'AlmIntake', payload: { ref: out.ref, key: out.key, type: options.type } });
+    return out;
+  }
+  throw new Error(`alm ${options.action}: ação desconhecida`);
+}
+
+/** The snapshot oxe-trace.cjs builds the graph from: every artifact's own ids and references, read-only. */
+function traceSnapshot(projectRoot, activeSession) {
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const config = readProjectConfig(projectRoot) || {};
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const prdLib = require('./oxe-prd.cjs');
+  const specCheck = require('./oxe-spec-check.cjs');
+  const refine = require('./oxe-alm-refine.cjs');
+  const almLib = require('./oxe-alm.cjs');
+  const prdFile = prdPathFor(projectRoot, activeSession);
+  const prd = fs.existsSync(prdFile) ? prdLib.readPrd(prdFile) : null;
+  const specText = readTextIfExists(paths.spec) || '';
+  let doc = null;
+  try { doc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { doc = null; }
+  const cardSpecs = new Map();
+  const specsDir = refine.dirs(projectRoot).specs;
+  if (fs.existsSync(specsDir)) for (const f of fs.readdirSync(specsDir).filter((x) => /\.md$/.test(x))) cardSpecs.set(f.replace(/\.md$/, ''), refine.parseCriteria(fs.readFileSync(path.join(specsDir, f), 'utf8')));
+  let almCfg = null;
+  try { almCfg = almLib.almConfig(config, { defaultProgram: path.basename(path.resolve(projectRoot)) }); } catch { almCfg = null; }
+  let run = null;
+  try { run = readRunState(projectRoot, activeSession); } catch { run = null; }
+  const phase = activeProgramPhase(projectRoot, activeSession);
+  return {
+    stories: prd ? prd.stories : [],
+    criteria: specCheck.criteria(specText).list,
+    requirements: specCheck.requirements(specText),
+    decisions: require('./oxe-decisions.cjs').list(programDir),
+    rfcs: require('./oxe-rfc.cjs').list(projectRoot),
+    tasks: (doc && doc.tasks) || [],
+    tests: (doc && doc.acceptance_tests) || [],
+    changes: require('./oxe-change.cjs').listChanges(programDir),
+    links: almLib.links(programDir),
+    // the cards tracked as known CI failures (a flake older than the phase is no defect of it: no CR needed)
+    knownFailureItems: (() => { try { return new Set(require('./oxe-known-failures.cjs').listAll(projectRoot, programDir).filter((k) => !k.expired).map((k) => String(k.item).toUpperCase())); } catch { return new Set(); } })(),
+    cardSpecs,
+    checks: (run && run.verification_check_results) || [],
+    phase: phase ? phase.id : (doc && doc.phase) || null,
+    // OxeSpace 15/11 (OxeCode F5 close): with a program, the active phase's criteria — another phase's v1 criteria
+    // are not this plan's to test (they are judged at their own close)
+    // (R31) a phase with no declared criteria (acceptance: []) is not scoped; the standing criteria count in every phase
+    phaseCriteria: phase && Array.isArray(phase.acceptance) && phase.acceptance.length ? [...phase.acceptance, ...require('./oxe-criteria-ids.cjs').standingAcceptance(projectRoot)] : null,
+    almConfigured: Boolean(almCfg),
+    storiesSource: almCfg ? almCfg.stories_source : 'prd',
+    cardKeysOf: prdLib.cardKeys,
+    _cfg: almCfg,
+    _config: config,
+    _programDir: programDir,
+  };
+}
+
+/**
+ * `oxe-cc trace` (the graph and its orphans → .oxe/trace.json) · `oxe-cc trace publish [--apply]`: the "Documentos
+ * (OXE)" comment of each linked card — its story and PRD link, criteria with the latest evidence, decisions with ADR
+ * links, open CRs — upserted (one comment per card, updated in place). Dry run unless --apply; --apply is the writer's.
+ */
+async function runtimeTrace(projectRoot, activeSession, options = {}) {
+  const snap = traceSnapshot(projectRoot, activeSession);
+  const graph = require('./oxe-trace.cjs').build(snap);
+  fs.mkdirSync(path.join(projectRoot, '.oxe'), { recursive: true });
+  fs.writeFileSync(path.join(projectRoot, '.oxe', 'trace.json'), JSON.stringify({ at: new Date().toISOString(), ...graph }, null, 2));
+  if (options.action !== 'publish') return { file: '.oxe/trace.json', ...graph };
+  const lib = require('./oxe-alm.cjs');
+  const cfg = snap._cfg;
+  if (!cfg) throw new Error('trace publish escreve nos cards: configure alm.provider');
+  const docs = snap._config.alm && snap._config.alm.docs && typeof snap._config.alm.docs === 'object' ? snap._config.alm.docs : null;
+  const dirRel = (docs && docs.dir) || (snap._config.docs_publish && snap._config.docs_publish.dir) || 'docs';
+  const docsBase = docs && docs.repo ? `${String(docs.repo).replace(/\/+$/, '')}/blob/${docs.branch || 'main'}/${dirRel}` : null;
+  const adrDirAbs = path.join(projectRoot, require('./oxe-adr.cjs').adrDir(snap._config) || 'docs/adr');
+  const adrFiles = fs.existsSync(adrDirAbs) ? fs.readdirSync(adrDirAbs) : [];
+  const adrFile = (id) => adrFiles.find((f) => f.startsWith(`${id}-`)) || null;
+  const trace = require('./oxe-trace.cjs');
+  const posts = [];
+  for (const st of graph.stories.filter((x) => x.card)) posts.push({ key: st.card, text: trace.cardDocs({ story: st.id, criteria: st.criteria, decisions: st.decisions }, { docsBase, adrFile }) });
+  const critById = new Map(graph.criteria.map((c) => [c.id, c]));
+  const decTitle = new Map(snap.decisions.map((d) => [d.id, d.title]));
+  for (const t of graph.tasks.filter((x) => x.card)) {
+    const crit = t.criteria.map((a) => ({ id: a, evidence: critById.get(a) ? critById.get(a).evidence : null, tests: critById.get(a) ? critById.get(a).tests : [], changes: critById.get(a) ? critById.get(a).changes : [] }));
+    const decs = [...new Set([...t.decisions, ...t.criteria.flatMap((a) => (critById.get(a) ? critById.get(a).decisions : []))])].map((id) => ({ id, title: decTitle.get(id) || null }));
+    posts.push({ key: t.card, text: trace.cardDocs({ criteria: crit, decisions: decs }, { docsBase, adrFile }) });
+  }
+  if (!options.apply) return { file: '.oxe/trace.json', dry_run: true, publish: posts.map((p) => ({ key: p.key, lines: p.text.split('\n').length, text: p.text })), ...graph };
+  const env = options.env || process.env;
+  if (!lib.isWriter(cfg, env)) throw lib.writerError(cfg);
+  if (cfg.transport === 'mcp') {
+    lib.enqueue(snap._programDir, posts.map((p) => ({ id: `docs:${p.key}`, op: 'comment', ref: p.key, key: p.key, upsert_marker: 'Documentos (OXE)', comments: [p.text] })));
+    return { file: '.oxe/trace.json', queued: posts.length, ...graph };
+  }
+  const problems = lib.checkConfig(cfg, env);
+  if (problems.length) throw new Error(`ALM: ${problems.join('; ')}`);
+  const rest = lib.jiraRest(cfg, options);
+  const refine = require('./oxe-alm-refine.cjs');
+  const done = [];
+  for (const p of posts) {
+    try {
+      const r = await rest.request('GET', `${rest.site}/rest/api/3/issue/${p.key}/comment?maxResults=100`);
+      const mine = ((r && r.comments) || []).find((c) => refine.adfToText(c.body).trim().startsWith('Documentos (OXE)'));
+      const body = { body: refine.mdToAdf(p.text) };
+      if (mine) await rest.request('PUT', `${rest.site}/rest/api/3/issue/${p.key}/comment/${mine.id}`, body);
+      else await rest.request('POST', `${rest.site}/rest/api/3/issue/${p.key}/comment`, body);
+      done.push({ key: p.key, updated: Boolean(mine) });
+    } catch (err) { done.push({ key: p.key, error: err.message }); }
+  }
+  appendEvent(projectRoot, activeSession, { type: 'TracePublished', payload: { cards: done.length, failed: done.filter((d) => d.error).length } });
+  return { file: '.oxe/trace.json', published: done, ...graph };
+}
+
+/** `oxe-cc alm metrics [--jql "…"] [--max N]`: the board in numbers (oxe-alm-metrics.cjs), read-only. */
+async function runtimeAlmMetrics(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-alm.cjs');
+  const metrics = require('./oxe-alm-metrics.cjs');
+  const config = readProjectConfig(projectRoot) || {};
+  const cfg = lib.almConfig(config, { defaultProgram: path.basename(path.resolve(projectRoot)) });
+  if (!cfg || cfg.provider !== 'jira') throw new Error('alm metrics: precisa de alm.provider "jira"');
+  const env = options.env || process.env;
+  const problems = lib.checkConfig(cfg, env);
+  if (problems.length) throw new Error(`ALM: ${problems.join('; ')}`);
+  const rest = lib.jiraRest(cfg, options);
+  const jql = options.jql || `project = "${cfg.p.project}" AND updated >= -90d ORDER BY created ASC`;
+  const max = Number(options.max) > 0 ? Number(options.max) : 300;
+  const issues = [];
+  let token = null;
+  do {
+    const r = await rest.request('GET', `${rest.site}/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&fields=status,created,issuetype,summary&expand=changelog&maxResults=100${token ? `&nextPageToken=${encodeURIComponent(token)}` : ''}`);
+    for (const i of (r && r.issues) || []) issues.push({ key: i.key, created: i.fields.created, status: i.fields.status ? i.fields.status.name : null, statusId: i.fields.status ? i.fields.status.id : null, summary: i.fields.summary, changes: metrics.changesFromJira(i) });
+    token = r && !r.isLast ? r.nextPageToken : null;
+  } while (token && issues.length < max);
+  metrics.renameByStatusId(issues);
+  const out = metrics.compute(issues.slice(0, max), { states: cfg.states, wip: cfg.wip, stages: lib.STAGES }, { now: options.now });
+  const dir = path.join(projectRoot, '.oxe', 'alm');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'metrics.json'), JSON.stringify({ jql, at: new Date().toISOString(), ...out }, null, 2));
+  fs.writeFileSync(path.join(dir, 'metrics.md'), metrics.renderMarkdown(out, { project: cfg.p.project, jql, doneName: cfg.states.released || cfg.states.integrated }));
+  return { jql, file: '.oxe/alm/metrics.md', ...out };
+}
+
+/** The refine moves its own stages (when mapped and in alm.track): refinement while writing, then ready or back to grooming. */
+async function refineMove(lib, cfg, key, stage, options) {
+  if (!cfg.states[stage] || !cfg.track.includes(stage)) return { stage, skipped: true, why: !cfg.states[stage] ? `etapa "${stage}" sem estado em alm.states: nada movido` : `etapa "${stage}" fora de alm.track: nada movido` };
+  try {
+    const prov = lib.provider(cfg, options);
+    // The refine only moves a card that is still before development (Backlog, Em grooming, Em refinamento). A card
+    // already Ready or past it (in development, review, train, main, staging, released) keeps its column: the apply
+    // writes the spec, spec-v1 and the original-text comment, and no transition.
+    if (typeof prov.status === 'function') {
+      const live = await prov.status(key);
+      const liveStage = lib.STAGES.find((s) => cfg.states[s] && live && String(cfg.states[s]).toLowerCase() === String(live).toLowerCase()) || null;
+      const movable = ['intake', 'grooming', 'refinement'];
+      if (!liveStage || !movable.includes(liveStage)) return { stage, skipped: true, state: live, why: liveStage ? `o card está em "${live}" (${liveStage}): o refine só move cards antes de "pronto"` : `estado "${live}" sem etapa mapeada: nada movido` };
+      if (String(live).toLowerCase() === String(cfg.states[stage]).toLowerCase()) return { stage, state: live, changed: false };
+      if (options.dryRun) return { stage, planned: true, from: live, state: cfg.states[stage] };
+    } else if (options.dryRun) return { stage, planned: true, state: cfg.states[stage] };
+    const r = await prov.transition(key, cfg.states[stage]);
+    return { stage, state: r.status, changed: r.changed };
+  } catch (err) { return { stage, error: err.message }; }
+}
+
+/**
+ * `oxe-cc alm refine <KEY…> | --jql "…" [--max-cards N]` (collect, read-only) · `alm refine lint <KEY…>` ·
+ * `alm refine apply <KEY…> [--confirm-overwrite]` (writer only). Jira over REST. No paid model: the agent of the
+ * session rewrites the skeleton (oxe/workflows/references/alm-refine.md).
+ */
+async function runtimeAlmRefine(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-alm.cjs');
+  const refine = require('./oxe-alm-refine.cjs');
+  const config = readProjectConfig(projectRoot) || {};
+  const cfg = lib.almConfig(config, { defaultProgram: path.basename(path.resolve(projectRoot)) });
+  if (!cfg) throw new Error('ALM não configurado: alm refine lê os cards do Jira (alm.provider: "jira")');
+  if (cfg.provider !== 'jira') throw new Error('alm refine: por enquanto só Jira');
+  const env = options.env || process.env;
+  const d = refine.dirs(projectRoot);
+  const action = options.action || 'collect';
+  let keys = (options.keys || []).map((k) => String(k).toUpperCase());
+  if (action === 'lint' || action === 'apply') {
+    if (!keys.length) keys = fs.existsSync(d.specs) ? fs.readdirSync(d.specs).filter((f) => /\.md$/.test(f)).map((f) => f.replace(/\.md$/, '')) : [];
+    const catalogCache = refine.discoverProgramCatalog(projectRoot, { activeSession, programRoots: options.programRoots || null });
+    const out = [];
+    for (const key of keys) {
+      const specFile = path.join(d.specs, `${key}.md`);
+      const dataFile = path.join(d.data, `${key}.json`);
+      if (!fs.existsSync(specFile) || !fs.existsSync(dataFile)) { out.push({ key, error: `sem coleta: rode oxe-cc alm refine ${key}` }); continue; }
+      const collected = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
+      const md = fs.readFileSync(specFile, 'utf8');
+      let resolvedProgram = null;
+      try {
+        resolvedProgram = refine.resolveCardProgram(projectRoot, activeSession, {
+          key,
+          md,
+          spec: options.spec || null,
+          catalogCache,
+          programRoots: options.programRoots || null,
+        });
+      } catch (err) {
+        if (action === 'lint') {
+          out.push({ key, kind: collected.kind, ok: false, errors: [err.message], warnings: [], questions: [], criteria: [], needs_info: false });
+          continue;
+        }
+        out.push({ key, error: err.message });
+        continue;
+      }
+      const targetEntry = resolvedProgram ? resolvedProgram.entry : null;
+      if (action === 'lint') {
+        const artRoot = targetEntry ? targetEntry.root : projectRoot;
+        const artSess = artRoot === path.resolve(projectRoot) ? activeSession : null;
+        const artifacts = (collected && collected.project_artifacts && collected.project_artifacts.has_any)
+          ? collected.project_artifacts
+          : refine.discoverProjectArtifacts(artRoot, artSess, key);
+        const l = refine.lintSpec(md, collected.kind, { artifacts });
+        // G34 (user decision 14/11, via the brand: the 1.5.2 is faithful to the rebranding end to end): a UI card
+        // passes the refine only with (1) its BRD-n, (2) the target (a file or an approved artifact) and (3)
+        // measures in the CAs (size, font, radius, color as a token, ms, or system colors / forced-colors), for
+        // both themes and both densities. Without them: needs-info, with the question for the brand.
+        const ui = uiCardGaps(md, collected, { projectRoot: artRoot });
+        if (ui.isUi && ui.gaps.length) {
+          for (const g of ui.gaps) { l.warnings.push(`interface: ${g}`); l.questions.push(`MARCA: ${g}`); }
+          l.needs_info = true;
+        }
+        // CA ↔ A + PLAN.json: check each CA criterion against the card's own program SPEC/PLAN (or --spec / qualified prog:A-n)
+        const cross = refine.lintCardCriteriaAgainstPrograms(md, key, targetEntry, {
+          projectRoot,
+          activeSession,
+          catalog: catalogCache,
+          programRoots: options.programRoots || null,
+        });
+        if (cross.errors.length) { l.errors.push(...cross.errors); l.ok = false; }
+        if (cross.warnings.length) l.warnings.push(...cross.warnings);
+        // the domain glossary: a forbidden synonym in the card spec (one term, one meaning, in the card too)
+        try {
+          const glRoot = targetEntry ? targetEntry.root : projectRoot;
+          const glSess = glRoot === path.resolve(projectRoot) ? activeSession : null;
+          const gl = require('./oxe-grill.cjs').readGlossary(grillPaths(glRoot, glSess).glossary);
+          for (const t of gl) for (const syn of t.synonyms || []) {
+            if (syn.length >= 3 && wholeWord(syn).test(md)) l.warnings.push(`glossário: "${syn}" é sinônimo proibido de "${t.term}" — use "${t.term}"`);
+          }
+        } catch { /* sem glossário */ }
+        out.push({
+          key,
+          kind: collected.kind,
+          ...(targetEntry && targetEntry.root !== path.resolve(projectRoot) ? { program: targetEntry.slug, spec: path.relative(path.dirname(path.resolve(projectRoot)), targetEntry.specPath || targetEntry.planPath || targetEntry.root).replace(/\\/g, '/') } : {}),
+          ...l,
+        });
+        continue;
+      }
+      if (options.spec || (resolvedProgram && resolvedProgram.matchedBy !== 'dir_default')) {
+        const crossApply = refine.lintCardCriteriaAgainstPrograms(md, key, targetEntry, {
+          projectRoot,
+          activeSession,
+          catalog: catalogCache,
+          programRoots: options.programRoots || null,
+        });
+        if (crossApply.errors.length) {
+          out.push({ key, error: `spec reprovado no lint (SPEC/PLAN):\n  - ${crossApply.errors.join('\n  - ')}`, lint: { ok: false, errors: crossApply.errors, warnings: crossApply.warnings } });
+          continue;
+        }
+      }
+      const dry = lib.isDry(cfg, options);
+      // a simulation only reads: any session may run it; writing is the writer's
+      if (!dry && !lib.isWriter(cfg, env)) throw lib.writerError(cfg);
+      if (!dry) lib.warnApply(cfg, options);
+      const problems = lib.checkConfig(cfg, env);
+      if (problems.length) throw new Error(`ALM: ${problems.join('; ')}`);
+      try {
+        const r = await refine.apply(lib.jiraRest(cfg, { ...options, dryRun: dry }), collected, md, { confirmOverwrite: options.confirmOverwrite, dryRun: dry });
+        // with no open question the card is Ready; with questions it goes back to grooming, where they are answered
+        const target = r.questions ? 'grooming' : 'ready';
+        // --keep-status: the spec is written, the card stays in its column (OxeSpace 15/11: a re-spec of a card in
+        // progress moved it back to Pronto)
+        if (options.keepStatus) r.moved = { skipped: true, why: '--keep-status: o card fica na coluna em que está' };
+        else if (r.applied) r.moved = await refineMove(lib, cfg, key, target, { ...options, env });
+        else if (r.dry_run) r.moved = await refineMove(lib, cfg, key, target, { ...options, env, dryRun: true });
+        if (r.dry_run && cfg.require_apply && !options.dryRun && !options.apply) r.why_dry = 'alm.require_apply: gravar exige --apply';
+        if (!dry) appendEvent(projectRoot, activeSession, { type: 'AlmRefined', payload: { key, sha: r.sha || null, applied: Boolean(r.applied) } });
+        out.push(r);
+      } catch (err) { out.push({ key, error: err.message, ...(err.lint ? { lint: err.lint } : {}) }); }
+    }
+    return { action, results: out };
+  }
+  // collect (read-only)
+  const problems = lib.checkConfig(cfg, env);
+  if (problems.length) throw new Error(`ALM: ${problems.join('; ')} — o refine lê o card pela API do Jira`);
+  const rest = lib.jiraRest(cfg, options);
+  if (options.jql) {
+    const r = await rest.request('GET', `${rest.site}/rest/api/3/search/jql?jql=${encodeURIComponent(options.jql)}&fields=summary&maxResults=${Math.min(100, Number(options.maxCards) || 20)}`);
+    keys = [...keys, ...((r && r.issues) || []).map((i) => i.key)];
+  }
+  const max = Number(options.maxCards) > 0 ? Number(options.maxCards) : 15;
+  if (keys.length > max) throw new Error(`${keys.length} card(s) passam do teto --max-cards ${max}: refine em lote só com o OK do usuário (aumente --max-cards de propósito)`);
+  fs.mkdirSync(d.data, { recursive: true });
+  fs.mkdirSync(d.specs, { recursive: true });
+  const out = [];
+  for (const key of keys) {
+    try {
+      const c = await refine.collect(rest, key, { projectRoot, activeSession });
+      fs.writeFileSync(path.join(d.data, `${key}.json`), JSON.stringify(c, null, 2));
+      const specFile = path.join(d.specs, `${key}.md`);
+      const kept = fs.existsSync(specFile) && !options.reset;
+      if (!kept) fs.writeFileSync(specFile, refine.skeleton(c));
+      // --claim (writer): the card shows "in refinement" while the spec is being written. Never silent (OXB-G14): a
+      // reader session, a dry run or an unmapped stage says why the card did not move.
+      const claimDry = lib.isDry(cfg, options);
+      if (options.claim && !claimDry && lib.isWriter(cfg, env)) lib.warnApply(cfg, options);
+      const claimed = !options.claim ? null
+        : !lib.isWriter(cfg, env) && !claimDry ? { stage: 'refinement', skipped: true, why: lib.writerError(cfg).message }
+          : await refineMove(lib, cfg, key, 'refinement', { ...options, env, dryRun: claimDry });
+      out.push({ key, ...(claimed ? { moved: claimed } : {}), kind: c.kind, type: c.type, status: c.status, summary: c.summary, comments: c.comments.length, links: c.links.length, code_refs: c.code_refs.length, already_refined: c.already_refined, spec: path.relative(projectRoot, specFile).replace(/\\/g, '/'), kept });
+    } catch (err) { out.push({ key, error: err.message }); }
+  }
+  // collect itself only reads; --claim (without --dry-run) is the one write of this step
+  return { action: 'collect', dry_run: !options.claim || lib.isDry(cfg, options), claim: Boolean(options.claim), results: out };
+}
+
+/**
+ * G9 — `oxe-cc quick <KEY> "<objetivo>"` · `quick status|trailers|list` · `quick done [--verify "<cmd>"] [--no-commit]`.
+ * With an ALM and a card: the start comments the mini-spec on the card and moves it to in_progress (only from a column
+ * before it, never backwards); the done comments the commits and the verification. ALM writes follow --apply /
+ * --dry-run / alm.require_apply and the writer rule, as every alm command.
+ */
+function discoverInheritedAlmConfig(projectRoot, activeSession, explicitAlmDir = null) {
+  const hasAlm = (c) => Boolean(c && c.alm && typeof c.alm === 'object' && c.alm.provider && c.alm.provider !== 'none');
+  if (explicitAlmDir) {
+    const abs = path.resolve(projectRoot, String(explicitAlmDir));
+    const c = readProjectConfig(abs);
+    if (!hasAlm(c)) throw new Error(`--alm-dir ${explicitAlmDir}: nenhum bloco "alm" configurado em ${abs}`);
+    return { alm: c.alm, from: abs, from_kind: 'explicit' };
+  }
+  const candidates = [];
+  // 1. Main git worktree (`<gitCommonDir>/..`) — prioritized over sibling worktrees (OXB-C18 #5)
+  try {
+    const common = (gitLines(projectRoot, ['rev-parse', '--path-format=absolute', '--git-common-dir']) || [])[0];
+    const main = common ? path.dirname(common) : null;
+    if (main) candidates.push({ dir: path.resolve(main), kind: 'main' });
+  } catch { /* no git */ }
+  // 2. PROGRAM.json `forked_from.root` (a parallel phase worktree forked from a program root)
+  try {
+    const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+    const prog = readJsonQuiet(path.join(paths.programDir || path.join(projectRoot, '.oxe', 'program'), 'PROGRAM.json'));
+    if (prog && prog.forked_from && prog.forked_from.root) candidates.push({ dir: path.resolve(prog.forked_from.root), kind: 'forked_from' });
+  } catch { /* no program */ }
+  // 3. Sibling git worktrees of the same repository (`git worktree list --porcelain`), newest `.oxe/config.json` first
+  try {
+    const wts = [];
+    for (const line of gitLines(projectRoot, ['worktree', 'list', '--porcelain']) || []) {
+      if (line.startsWith('worktree ')) {
+        const wt = path.resolve(line.slice('worktree '.length).trim());
+        if (wt !== path.resolve(projectRoot)) {
+          let mtime = 0;
+          try { mtime = fs.statSync(path.join(wt, '.oxe', 'config.json')).mtimeMs; } catch { mtime = 0; }
+          wts.push({ wt, mtime });
+        }
+      }
+    }
+    wts.sort((a, b) => b.mtime - a.mtime);
+    for (const x of wts) candidates.push({ dir: x.wt, kind: 'sibling' });
+  } catch { /* no git */ }
+
+  const seen = new Set([path.resolve(projectRoot)]);
+  for (const cand of candidates) {
+    if (!cand || !cand.dir || seen.has(cand.dir)) continue;
+    seen.add(cand.dir);
+    const c = readProjectConfig(cand.dir);
+    if (hasAlm(c)) return { alm: c.alm, from: cand.dir, from_kind: cand.kind };
+  }
+  return null;
+}
+
+async function runtimeQuick(projectRoot, activeSession, options = {}) {
+  const q = require('./oxe-quick.cjs');
+  const action = options.action || 'status';
+  if (action === 'status') return { open: q.current(projectRoot) };
+  if (action === 'list') return { quicks: q.list(projectRoot, { local: Boolean(options.local) }) };
+  if (action === 'commit') {
+    const out = q.commit(projectRoot, { message: options.message, paths: options.paths, all: options.all, dryRun: options.dryRun });
+    if (!out.dry_run) appendEvent(projectRoot, activeSession, { type: 'QuickCommitted', payload: { id: out.id, sha: out.sha, files: out.files.length } });
+    return out;
+  }
+  if (action === 'trailers') {
+    const open = q.current(projectRoot);
+    if (!open) throw new Error('nenhum quick aberto (oxe-cc quick <KEY> "<objetivo>")');
+    return { id: open.id, trailers: q.trailers(open) };
+  }
+  if (action === 'promote') {
+    const out = q.promote(projectRoot, {
+      id: options.id,
+      openPr: Boolean(options.openPr),
+      base: options.base || null,
+      config: readProjectConfig(projectRoot) || {},
+      draft: Boolean(options.draft),
+      dryRun: Boolean(options.dryRun),
+      force: Boolean(options.force),
+      spawn: options.spawn,
+    });
+    // work_item_id = the quick id: ship status / detectMergedPrs follow its CI and merge like a promoted task's
+    if (out.promoted) appendEvent(projectRoot, activeSession, { type: 'QuickPromoted', work_item_id: out.id, payload: { id: out.id, key: out.key, pr: out.pr, branch: out.branch } });
+    return out;
+  }
+  let config = readProjectConfig(projectRoot) || {};
+  const lib = require('./oxe-alm.cjs');
+  // OxeSpace 14/11 & OXB-C1 (#11): a program worktree may have no local `.oxe/config.json` "alm" block; inherit from
+  // `--alm-dir`, `PROGRAM.json -> forked_from.root`, main worktree, or sibling worktrees of the same clone.
+  // OXB-C20 #9: `--no-alm` skips sibling worktree scanning and disables ALM writes for fast parallel quick workflows.
+  let almFrom = null;
+  let almFromKind = null;
+  if (options.noAlm) {
+    config = { ...config, alm: { provider: 'none' } };
+  } else if (options.almDir || !config.alm) {
+    const inherited = discoverInheritedAlmConfig(projectRoot, activeSession, options.almDir || null);
+    if (inherited) {
+      config = { ...config, alm: inherited.alm };
+      almFrom = inherited.from;
+      almFromKind = inherited.from_kind || null;
+    }
+  }
+  const cfg = lib.almConfig(config, { defaultProgram: path.basename(path.resolve(projectRoot)) });
+  // OXB-C21 #5: `--from-card <KEY>` pre-populates key & objective from `.oxe/alm/refine/<KEY>.json` or `.oxe/alm/specs/<KEY>.md`.
+  let resolvedKey = options.key || null;
+  let resolvedObjective = options.objective || null;
+  if (action === 'start' && options.fromCard) {
+    const fk = String(options.fromCard).toUpperCase();
+    resolvedKey = resolvedKey || fk;
+    if (!resolvedObjective) {
+      const refineJson = path.join(projectRoot, '.oxe', 'alm', 'refine', `${fk}.json`);
+      const refineSpec = path.join(projectRoot, '.oxe', 'alm', 'specs', `${fk}.md`);
+      if (fs.existsSync(refineJson)) {
+        try {
+          const data = JSON.parse(fs.readFileSync(refineJson, 'utf8'));
+          if (data && data.summary) resolvedObjective = String(data.summary).trim();
+        } catch { /* ignore */ }
+      }
+      if (!resolvedObjective && fs.existsSync(refineSpec)) {
+        try {
+          const md = fs.readFileSync(refineSpec, 'utf8');
+          const m = /^#\s+(?:[A-Z][A-Z0-9]+-\d+\s*[—–-]\s*)?(.+)$/m.exec(md);
+          if (m && m[1]) resolvedObjective = m[1].trim();
+        } catch { /* ignore */ }
+      }
+      if (!resolvedObjective) throw new Error(`--from-card ${fk}: coleta não encontrada em .oxe/alm/refine/${fk}.json nem .oxe/alm/specs/${fk}.md — rode \`oxe-cc alm refine ${fk}\` ou informe o objetivo`);
+    }
+  }
+  if (action === 'start' && cfg && cfg.provider !== 'none' && !resolvedKey) throw new Error('com ALM configurado, o quick nomeia o card: oxe-cc quick <KEY> "<objetivo>"');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const rec = action === 'start'
+    ? q.start(projectRoot, { key: resolvedKey, objective: resolvedObjective, by: options.by, replace: options.replace, dryRun: options.dryRun, quickFile: paths.quick || path.join(projectRoot, '.oxe', 'QUICK.md') })
+    : action === 'cancel'
+      ? q.cancel(projectRoot, { reason: options.reason, evidence: options.evidence, by: options.by, id: options.id, dryRun: options.dryRun })
+      : q.done(projectRoot, { verify: options.verify, noCommit: options.noCommit, by: options.by, id: options.id, dryRun: options.dryRun });
+  // a dry run writes no local state either (no record, no QUICK.md, no event, no commit) — the G13 rule, locally
+  if (action === 'start' && !rec.resumed && !rec.dry_run) appendEvent(projectRoot, activeSession, { type: 'QuickStarted', payload: { id: rec.id, key: rec.key } });
+  if (action === 'cancel' && rec.cancelled) appendEvent(projectRoot, activeSession, { type: 'QuickAbandoned', payload: { id: rec.id, key: rec.key, reason: rec.cancel.reason, evidence: rec.cancel.evidence } });
+  if (action === 'done' && rec.closed) appendEvent(projectRoot, activeSession, { type: 'QuickDone', payload: { id: rec.id, key: rec.key, commits: rec.commits.length, verify_ok: rec.verify ? rec.verify.ok : null } });
+  // OXB-C20 #9: --no-alm explicitly disables ALM for fast parallel quick runs (silent null, no warning)
+  if (options.noAlm) return { ...rec, alm: null };
+  // a card named but no ALM here: say it, never a silent OK (OxeSpace 14/11, OXE-144 in a worktree with no alm block)
+  if (!cfg && rec.key && !rec.resumed && !(action === 'done' && rec.closed === false)) return { ...rec, alm: { skipped: true, why: `ALM não configurado aqui: nada foi gravado no card ${rec.key} (rode na pasta que tem o bloco "alm" do .oxe/config.json, ou use --alm-dir <pasta>)` } };
+  // the card: only when there is one, an ALM, and the quick is not a resume or a failed verification
+  if (!cfg || !rec.key || rec.resumed || (action === 'done' && !rec.closed)) return { ...rec, alm: null };
+  const env = options.env || process.env;
+  const dry = lib.isDry(cfg, options);
+  // G21: a reader session records the writes as pending requests the writer drains (`alm pending apply`)
+  if (!dry && !lib.isWriter(cfg, env)) {
+    const phase = action === 'start' ? 'start' : action === 'cancel' ? 'cancel' : 'done';
+    const by = `quick ${rec.id}`;
+    const pendingRoot = almFrom || projectRoot;
+    const pending = [lib.addPending(pendingRoot, { op: 'comment', key: rec.key, text: q.cardComment(rec, phase), by })];
+    if (action === 'start' && cfg.states.in_progress) pending.push(lib.addPending(pendingRoot, { op: 'move', key: rec.key, stage: 'in_progress', by }));
+    return { ...rec, alm: { pending: pending.map((p) => ({ id: p.id, op: p.op, key: p.key, stage: p.stage || null })), ...(almFrom ? { from: almFrom, from_kind: almFromKind } : {}), why: `${lib.writerError(cfg).message} — ${pending.length} pedido(s) gravado(s) para o escritor${almFrom ? ` em ${almFrom}` : ''}: oxe-cc alm pending apply` } };
+  }
+  if (!dry) lib.warnApply(cfg, options);
+  const programDir = almFrom && fs.existsSync(path.join(almFrom, '.oxe', 'program'))
+    ? path.join(almFrom, '.oxe', 'program')
+    : (paths.programDir || path.join(projectRoot, '.oxe', 'program'));
+  const net = { http: options.http, env, sleep: options.sleep, retries: options.retries, dryRun: dry, apply: options.apply, userEnv: options.userEnv };
+  const alm = {};
+  // OXB-C28-9: the comment and the move are independent writes — a failed comment (Q-20261121-df4b: HTTP 404) no longer
+  // skips the move to in_progress; each error is named
+  const errors = [];
+  try {
+    alm.comment = await lib.comment(programDir, cfg, rec.key, q.cardComment(rec, action === 'start' ? 'start' : action === 'cancel' ? 'cancel' : 'done'), net);
+  } catch (err) { errors.push(`comentário: ${err.message}`); }
+  if (action === 'start' && cfg.states.in_progress) {
+    try { alm.move = await lib.moveForward(programDir, cfg, rec.key, 'in_progress', net); } catch (err) { errors.push(`mover para in_progress: ${err.message}`); }
+  }
+  if (errors.length) alm.error = errors.join(' · ');
+  return { ...rec, alm: { dry_run: dry, ...alm, ...(almFrom ? { from: almFrom, from_kind: almFromKind } : {}) } };
+}
+
+/**
+ * G5/G8 — `oxe-cc ship status --pr <n> | --card <KEY> | --repo [--comment [--apply]]`: PRs outside a phase, a card's
+ * PRs, or the whole repository (with the merge-train labels), each with its CI verdict against the repository's known
+ * failures. `--comment` puts the verdict on the PR (a write: --apply, as every write).
+ */
+function runtimeShipPr(projectRoot, activeSession, options = {}) {
+  const kf = require('./oxe-known-failures.cjs');
+  const shipPr = require('./oxe-ship-pr.cjs');
+  const spawn = options.ghSpawn || spawnSync;
+  const config = readProjectConfig(projectRoot) || {};
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const known = kf.listAll(projectRoot, programDir, { spawn, prState: shipPr.prState(spawn, projectRoot) });
+  const trainLabels = config.ship && Array.isArray(config.ship.train_labels) ? config.ship.train_labels.map(String) : undefined;
+  const out = shipPr.status(projectRoot, { pr: options.pr, card: options.card, repo: options.repo, limit: options.limit }, { spawn, known, trainLabels, itemOpen: options.itemOpen });
+  out.expired = known.filter((k) => k.expired).map((k) => ({ id: k.id, pattern: k.pattern, why: k.expired_by }));
+  if (options.comment) {
+    const rows = out.prs.filter((p) => p.ci);
+    out.comments = options.apply && !options.dryRun
+      ? rows.map((r) => { try { return shipPr.publishVerdict(projectRoot, r, { spawn }); } catch (err) { return { pr: r.pr, error: err.message }; } })
+      : rows.map((r) => ({ pr: r.pr, planned: true, body: shipPr.verdictComment(r) }));
+  }
+  return out;
+}
+
+/** G11 — `oxe-cc ship check-origin [<#PR>|<range>]`. */
+function runtimeCheckOrigin(projectRoot, activeSession, options = {}) {
+  // works without a local .oxe/ (a CI checkout): git + the versioned oxe.config.json, or --config <file>
+  return require('./oxe-origin.cjs').check(projectRoot, { target: options.target, config: readProjectConfig(projectRoot) || {}, configFile: options.config || null, spawn: options.spawn });
+}
+
+/** G11 — the commit-msg hook (`oxe-cc ship commit-msg <file>`), installed by `oxe-cc guards install`. */
+function runtimeCommitMsg(projectRoot, activeSession, options = {}) {
+  return require('./oxe-origin.cjs').commitMsg(projectRoot, options.file, { config: readProjectConfig(projectRoot) || {}, currentQuick: require('./oxe-quick.cjs').current(projectRoot), spawn: options.spawn });
+}
+
+/**
+ * The automatic sync at the lifecycle points (alm.auto, default on when an ALM is configured). Fire and forget: it
+ * never throws and never fails the OXE command; a failed write stays pending for the next sync.
+ */
+function almAutoSync(projectRoot, activeSession) {
+  try {
+    const cfg = require('./oxe-alm.cjs').almConfig(readProjectConfig(projectRoot) || {});
+    if (!cfg || !cfg.auto || process.env.OXE_ALM_OFF === '1') return null;
+    if (require('./oxe-alm.cjs').checkConfig(cfg).length) return null;
+    if (!require('./oxe-alm.cjs').isWriter(cfg)) return null; // a reader session never moves items
+    return runtimeAlm(projectRoot, activeSession, { action: 'sync', auto: true }).catch(() => null);
+  } catch { return null; }
+}
+
+/**
+ * Pack symbols on a file that already exists and does not define them, for pending tasks. In the task's files: a
+ * warning (the task must create the export, or every attempt fails the stub-check). Outside them: an error (the
+ * task cannot add it there). Another task that declares the same symbol on the same file is its creator: no finding.
+ * @returns {{ errors: string[], warnings: string[] }}
+ */
+function packSymbolProblems(projectRoot, plan) {
+  const out = { errors: [], warnings: [] };
+  const packFile = path.join(projectRoot, '.oxe', 'IMPLEMENTATION-PACK.json');
+  if (!fs.existsSync(packFile)) return out;
+  const pack = JSON.parse(fs.readFileSync(packFile, 'utf8'));
+  const entries = Array.isArray(pack && pack.tasks) ? pack.tasks.filter(Boolean) : [];
+  const stub = require('./oxe-stub-check.cjs');
+  const norm = (p) => String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  const tasks = new Map((plan && plan.tasks ? plan.tasks : []).map((t) => [t.id, t]));
+  const declaredBy = new Map();
+  for (const e of entries) for (const s of Array.isArray(e.symbols) ? e.symbols : []) {
+    if (!s || typeof s !== 'object') continue;
+    const key = `${norm(s.path || s.file)}#${String(s.name || '').trim()}`;
+    declaredBy.set(key, [...(declaredBy.get(key) || []), e.id || e.task]);
+  }
+  const texts = new Map();
+  const read = (f) => { if (!texts.has(f)) { try { texts.set(f, fs.readFileSync(path.join(projectRoot, f), 'utf8')); } catch { texts.set(f, null); } } return texts.get(f); };
+  for (const e of entries) {
+    const id = e.id || e.task;
+    const task = tasks.get(id);
+    if (!task || task.done) continue;
+    const scope = (task.files || []).map(norm);
+    for (const s of Array.isArray(e.symbols) ? e.symbols : []) {
+      if (!s || typeof s !== 'object' || s.exported === false) continue;
+      const name = String(s.name || '').trim();
+      const file = norm(s.path || s.file);
+      if (!/^[A-Za-z_$][\w$]*$/.test(name) || !file || file.includes('*')) continue;
+      const text = read(file);
+      if (text == null || stub.definesSymbol(text, name)) continue;
+      if ((declaredBy.get(`${file}#${name}`) || []).some((other) => other !== id)) continue;
+      const inScope = scope.some((f) => f === file || (f.endsWith('/') ? file.startsWith(f) : file.startsWith(`${f}/`)));
+      if (inScope) out.warnings.push(`${id}: o pack declara \`${name}\` em ${file}, que existe e não define \`${name}\` — a tarefa terá de criar esse export, senão o stub-check reprova e o execute para (plan_defect). Se o nome foi deduzido do nome do arquivo, corrija o IMPLEMENTATION-PACK`);
+      else out.errors.push(`${id}: o pack declara \`${name}\` em ${file}, que existe, não define \`${name}\` e está fora de files de ${id} — a tarefa não pode criá-lo; corrija o símbolo no IMPLEMENTATION-PACK ou inclua o arquivo em files`);
+    }
+  }
+  return out;
+}
+
+/** An index.html (root, public/, src/ or www/) and no bundler, framework or Electron among the package.json deps. */
+function looksLikeStaticFileApp(projectRoot) {
+  if (!projectRoot) return false;
+  const hasIndex = ['index.html', 'public/index.html', 'src/index.html', 'www/index.html'].some((p) => fs.existsSync(path.join(projectRoot, p)));
+  if (!hasIndex) return false;
+  let pkg = null;
+  try { pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8')); } catch { return true; }
+  const deps = Object.keys({ ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) });
+  const BUILT = /^(electron|electron-vite|vite|webpack|webpack-cli|rollup|esbuild|parcel|@parcel\/.*|next|nuxt|react-scripts|@angular\/.*|@vue\/cli-service|@sveltejs\/kit|astro|expo|react-native|@remix-run\/.*|gatsby|snowpack|turbopack|tsup|vitepress)$/;
+  return !deps.some((d) => BUILT.test(d));
+}
+
 /**
  * Static-analysis lints for common pitfalls detectable before execution.
  * Returns hint strings to be appended to validationErrors (shown at compile time).
@@ -1963,7 +3663,9 @@ function lintPlanForCommonPitfalls(parsedPlan, parsedSpec, projectRoot, rawSpecT
   // Detects: spec mentions HTML/SPA + no files restriction, but no verify command
   // checks for fetch() absence. Warns to add a fetch-detection verify.
   const isHtmlApp = /html|spa|browser|page|frontend|estático|static|aplicação web|web app|web page|interface web|\.html/i.test(specText);
-  if (isHtmlApp) {
+  // Only a project that looks like a static file:// app: an index.html and no bundler, framework or Electron in
+  // package.json. An Electron app (oxespace-152-mobile) got this hint for a SPEC that never mentions file:// or fetch.
+  if (isHtmlApp && looksLikeStaticFileApp(projectRoot)) {
     const hasFetchGuard = planTasks.some(t =>
       t.verifyCommand && /fetch|XMLHttpRequest|file:\/\//i.test(t.verifyCommand)
     );
@@ -2034,7 +3736,32 @@ function applyTaskGatesToGraph(projectRoot, artifactPaths, compiledGraph) {
       if (!String(node.verify.command || '').includes(cmd)) node.verify.command = [node.verify.command, cmd].filter(Boolean).join(' && ');
     }
   }
-  if (!gates.length && !anySuites) { appendStubCheck(projectRoot, doc, compiledGraph); return; }
+  // P0 (OxeSpace 14/11, Celular F2 CR-03): a task reopened by an open CR runs, in its own verify, the frozen tests
+  // that resolve that CR (bound by task, or by criterion when the entry names none). Without them the redo passed
+  // the old verify and reused the old checkpoint: a false green.
+  try {
+    const programDir0 = resolveRuntimeArtifactPaths(projectRoot, null).programDir || path.join(projectRoot, '.oxe', 'program');
+    const openCr = new Set(require('./oxe-change.cjs').listChanges(programDir0).filter((c) => c.status === 'open').map((c) => c.id));
+    if (openCr.size) {
+      const nodesCr = Array.isArray(compiledGraph.nodes) ? compiledGraph.nodes : Object.values(compiledGraph.nodes);
+      const tasksById = new Map((doc.tasks || []).filter(Boolean).map((t) => [t.id, t]));
+      for (const node of nodesCr) {
+        const task = node && tasksById.get(node.id);
+        if (!task || task.done) continue;
+        const crCmds = (doc.acceptance_tests || []).filter((a) => a && typeof a.command === 'string' && a.command.trim() && Array.isArray(a.resolves) && a.resolves.some((id) => openCr.has(id))
+          && ((a.task && String(a.task).toUpperCase() === node.id) || (!a.task && (task.acceptance || []).includes(a.criterion)))).map((a) => a.command.trim());
+        node.verify = node.verify && typeof node.verify === 'object' ? node.verify : {};
+        for (const cmd of crCmds) if (!String(node.verify.command || '').includes(cmd)) node.verify.command = [node.verify.command, cmd].filter(Boolean).join(' && ');
+        if (crCmds.length) node.verify.cr_tests = crCmds;
+      }
+    }
+  } catch { /* sem CRs: segue */ }
+  if (!gates.length && !anySuites) {
+    appendStubCheck(projectRoot, doc, compiledGraph);
+    appendFileSizeCheck(projectRoot, doc, compiledGraph, jsonPath);
+    appendCssGuardCheck(projectRoot, doc, compiledGraph);
+    return;
+  }
   const byId = new Map((doc.tasks || []).filter(Boolean).map((t) => [t.id, t]));
   const nodeList = Array.isArray(compiledGraph.nodes) ? compiledGraph.nodes : Object.values(compiledGraph.nodes);
   for (const node of nodeList) {
@@ -2047,6 +3774,91 @@ function applyTaskGatesToGraph(projectRoot, artifactPaths, compiledGraph) {
     node.verify.task_gates = commands.map((c) => c.id);
   }
   appendStubCheck(projectRoot, doc, compiledGraph);
+  appendFileSizeCheck(projectRoot, doc, compiledGraph, jsonPath);
+  appendCssGuardCheck(projectRoot, doc, compiledGraph);
+}
+
+/** G34: what a UI card's spec still lacks (BRD-n, target, measures in the CAs, both themes, both densities). */
+function criteriaOnlyReadSharedLocales(crit) {
+  if (!Array.isArray(crit) || !crit.length) return false;
+  const combined = crit.map((c) => String((c && c.text) || '')).join('\n');
+  if (!/\bshared\/locales(?:\/[^\s`'",)*]+)?/i.test(combined)) return false;
+  const PATH_RE = /\b(?:src|shared|app|mobile|packages|desktop|web|client|server)\/[\w./*{}-]+/gi;
+  const TEST_FILE_RE = /(^|\/)(?:tests?|__tests__|specs?|e2e|playwright)\/|\.(?:test|spec)\.[cm]?[jt]sx?$/i;
+  for (const m of combined.matchAll(PATH_RE)) {
+    const p = m[0];
+    if (TEST_FILE_RE.test(p)) continue;
+    if (!/^shared\/locales(?:\/|$)/i.test(p)) return false;
+  }
+  // OXB-C9 (OXE-270): citing test files like `u62-u63-fold-and-composer.test.tsx:79` in a catalog CA stays exempt
+  const NON_LOCALE_EXT_RE = /\b[\w.-]+\.(?:tsx|jsx|css|scss|less|kt)\b/gi;
+  for (const m of combined.matchAll(NON_LOCALE_EXT_RE)) {
+    if (!/\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(m[0])) return false;
+  }
+  return true;
+}
+
+const NON_UI_DOMAIN_LABEL_RE = /^(?:area-(?:desempenho|performance|perf|backend|infra(?:estrutura)?|dados|db|database|seguran[cç]a|security|arquitetura|architecture|ipc|runtime|terminal|git|ci|build|cli|core|engine)|desempenho|performance|perf|backend|infra(?:estrutura)?|seguran[cç]a|security|arquitetura|database|db)$/i;
+
+function uiCardGaps(md, collected = {}, options = {}) {
+  const text = String(md || '');
+  const labels = (collected.labels || []).map((l) => String(l).toLowerCase());
+  const hasMarca = labels.includes('area-marca');
+  const hasVisualLabel = labels.some((l) => /^(?:area-marca|visual|polish|ui|design)$/i.test(l));
+  if (collected.kind === 'epic' && !hasMarca) return { isUi: false, gaps: [], epic_exempt: true };
+  if (!hasMarca && !hasVisualLabel && options && options.projectRoot) {
+    const uiDirs = ['src/ui', 'src/styles', 'src/design', 'src/renderer', 'src/components', 'mobile/android'];
+    const hasUiTree = uiDirs.some((d) => fs.existsSync(path.join(options.projectRoot, d)));
+    if (!hasUiTree) return { isUi: false, gaps: [], no_ui_tree_exempt: true };
+  }
+  const hasExplicitNonUiLabel = !hasMarca && labels.some((l) => NON_UI_DOMAIN_LABEL_RE.test(l));
+  const crit = refineLibCriteria(text);
+  const critText = crit.map((c) => String((c && c.text) || '')).join('\n');
+  const UI_PATHS = /\b(src\/(renderer|ui|styles|design|components)\/|mobile\/android\/[\w/.-]*\/ui\/)/;
+  // OXB-C10 (OXE-178 / OXE-41 / OXE-57): cards with an explicit non-UI domain label (e.g. area-desempenho, backend)
+  // and without area-marca often reference src/components/ for profiling/lazy-loading — require explicit styling/UI
+  // paths (src/styles|design|ui) inside the CAs themselves before applying UI geometry checks.
+  const STRICT_UI_PATHS = /\b(src\/(ui|styles|design)\/|mobile\/android\/[\w/.-]*\/ui\/)/;
+  const isUi = hasMarca || (hasExplicitNonUiLabel ? STRICT_UI_PATHS.test(critText) : UI_PATHS.test(text));
+  if (!isUi) return { isUi: false, gaps: [] };
+  // OXB-C6 #7 (P3): catalog/copy cards whose criteria only inspect `shared/locales/**` (e.g. OXE-233, OXE-253) are not UI geometry cards
+  if (criteriaOnlyReadSharedLocales(crit)) return { isUi: false, gaps: [], locale_only_exempt: true };
+  // OXB-C20 #4: logical bugs (e.g. OXE-294 in TerminalPane.tsx) without visual/brand labels that explicitly declare
+  // `BRD: nenhum` and do not alter CSS/tokens/geometry should not require light/dark + compact/comfortable UI checklists.
+  const declaresNoBrd = /\b(?:sem BRD|BRD:\s*(?:nenhum|n\/a|—|-))\b/i.test(text);
+  const touchesStyleOrTokens = /\.(?:css|scss|less)\b|var\(--[\w-]+\)|--(?:bar|row|control|fs|radius|space)-|src\/(?:styles|design)\//i.test(text);
+  if (collected.kind === 'bug' && !hasVisualLabel && declaresNoBrd && !touchesStyleOrTokens) {
+    return { isUi: false, gaps: [], bug_non_visual_exempt: true };
+  }
+  // OXB-C28-6 (OXE-332/333): a card whose only UI path is src/components/ (a behavior card: a handler, a state) is not a
+  // geometry card unless it says something visual — a measure, a token, a style file, a theme/density, a visual label
+  if (!hasMarca && !hasVisualLabel && !/\b(src\/(renderer|ui|styles|design)\/|mobile\/android\/[\w/.-]*\/ui\/)/.test(text)) {
+    const VISUAL_RE = /\b\d+(?:[.,]\d+)?\s*(?:px|dp|sp|rem|em)\b|var\(--[\w-]+\)|\.(?:css|scss|less)\b|\b(?:raio|altura|largura|fonte|espa[cç]amento|padding|margem|margin|borda|sombra|temas?|densidades?|alinhamento|geometria|tokens?|cores?|contraste|tamanho)\b|\bBRD-\d+\b/i;
+    if (!VISUAL_RE.test(text)) return { isUi: false, gaps: [], behavior_component_exempt: true };
+  }
+  const gaps = [];
+  // a card with no BRD (a new function, OxeSpace 15/11 OXE-170) says so: "BRD: nenhum" / "sem BRD" / "função nova"
+  if (!/\bBRD-\d+\b/.test(text) && !/\bsem BRD\b|\bBRD:\s*(nenhum|n\/a|—|-)|\bfun[cç][aã]o nova\b|\bnova fun[cç][aã]o\b/i.test(text)) gaps.push('qual é o BRD-n deste card? (a referência do rebranding; sem BRD, escreva "BRD: nenhum (função nova)")');
+  // the approved target: a file (also src/design/targets/brd-NN.json), a playground, or a claude.ai artifact link
+  const target = /(\.brand-audit\/|playground|src\/[\w/.-]+\.(tsx?|css|kt|json)|mobile\/android\/[\w/.-]+\.kt|[\w/.-]+\.(png|fig|html)|https?:\/\/claude\.ai\/[\w/-]*artifact\/[\w-]+|\bartefato\s+[A-Za-z0-9]{12,})/.test(text);
+  if (!target) gaps.push('qual é o alvo aprovado (arquivo, playground ou artefato da marca)?');
+  const measured = crit.filter((c) => (
+    /\b\d+(?:[.,]\d+)?\s*(?:px|dp|sp|ms)\b|var\(--[\w-]+\)|--[a-z][\w-]+|Oxe(?:Radius|Theme|Space)\.\w+|\b(?:raio|altura|fonte|peso)\s+\d+|\bforced-colors\b/i.test(c.text)
+    || /\b(?:Highlight(?:Text)?|Canvas(?:Text)?)\b/.test(c.text)
+  ));
+  if (!crit.length || !measured.length) gaps.push('quais medidas os critérios conferem (altura, fonte, raio, cor como token)?');
+  if (!/(dois temas|ambos os temas|claro e (o )?escuro|escuro e (o )?claro|noite e (o )?dia|light and dark|dark and light)/i.test(text)) gaps.push('as medidas valem nos dois temas (claro e escuro)?');
+  if (!/(duas densidades|compacta e (a )?confortável|confortável e (a )?compacta|data-density|densidade)/i.test(text)) gaps.push('as medidas valem nas duas densidades (compacta e confortável)?');
+  return { isUi: true, gaps };
+}
+const refineLibCriteria = (md) => { try { return require('./oxe-alm-refine.cjs').parseCriteria(md); } catch { return []; } };
+
+/** The open CRs that reopened a task (cr.tasks names it). */
+function reopeningCrsOf(projectRoot, taskId) {
+  try {
+    const programDir = resolveRuntimeArtifactPaths(projectRoot, null).programDir || path.join(projectRoot, '.oxe', 'program');
+    return require('./oxe-change.cjs').listChanges(programDir).filter((c) => c.status === 'open' && (c.tasks || []).map((t) => String(t).toUpperCase()).includes(String(taskId).toUpperCase())).map((c) => c.id);
+  } catch { return []; }
 }
 
 /** OXB-108: every code task's verify ends with the anti-stub check (exists + substantive, on what the task added). */
@@ -2061,6 +3873,61 @@ function appendStubCheck(projectRoot, doc, compiledGraph) {
       if (!task || !gatesLib.taskWritesCode(task)) continue;
       node.verify = node.verify && typeof node.verify === 'object' ? node.verify : {};
       if (!String(node.verify.command || '').includes('oxe-stub-check')) node.verify.command = [node.verify.command, `node "${stubScript}" --task ${node.id}`].filter(Boolean).join(' && ');
+    }
+  } catch { /* auxiliar */ }
+}
+
+/**
+ * OXB-C1 Adendo 2 (OQ T1 / OXE-220): appends the repo's file-size rule (`oxe-file-size-guard.cjs`) to each code task's
+ * verify command so oversized files fail in the attempt's own verify (and in the prompt's Verificação) before checkpoint.
+ */
+function appendFileSizeCheck(projectRoot, doc, compiledGraph, jsonPath) {
+  try {
+    const cfg = readProjectConfig(projectRoot) || {};
+    if (cfg.integration_checks === false || cfg.verify_file_size === false) return;
+    const fsg = require('./oxe-file-size-guard.cjs');
+    const policy = fsg.detectFileSizePolicy(projectRoot, cfg);
+    if (!policy.enabled) return;
+    const gatesLib = require('./oxe-task-gates.cjs');
+    const guardScript = path.join(__dirname, 'oxe-file-size-guard.cjs').replace(/\\/g, '/');
+    const relPlan = jsonPath ? path.relative(projectRoot, jsonPath).replace(/\\/g, '/') : null;
+    const planArg = relPlan && relPlan !== '.oxe/PLAN.json' && !relPlan.startsWith('..') ? ` --plan "${relPlan}"` : '';
+    const nodes = Array.isArray(compiledGraph.nodes) ? compiledGraph.nodes : Object.values(compiledGraph.nodes);
+    for (const node of nodes) {
+      const task = node && (doc.tasks || []).find((t) => t && t.id === node.id);
+      if (!task || !gatesLib.taskWritesCode(task)) continue;
+      node.verify = node.verify && typeof node.verify === 'object' ? node.verify : {};
+      const existing = String(node.verify.command || '');
+      if (!existing.includes('oxe-file-size-guard') && !existing.includes('check-file-size')) {
+        node.verify.command = [node.verify.command, `node "${guardScript}" --verify --task ${node.id}${planArg}`].filter(Boolean).join(' && ');
+      }
+    }
+  } catch { /* auxiliar */ }
+}
+
+/**
+ * OXB-C1 Adendo 2 (G14, OQ T13 / OXE-223): when the repo has a CSS classes guard suite (e.g. tests/unit/css-classes-guard.test.ts)
+ * and a task touches/removes a stylesheet, run the guard suite in the task's own verify.
+ */
+function appendCssGuardCheck(projectRoot, doc, compiledGraph) {
+  try {
+    const cfgCss = readProjectConfig(projectRoot) || {};
+    if (cfgCss.verify_css_guard === false) return;
+    const dh = require('./oxe-dom-hooks.cjs');
+    const cssGuards = dh.findCssGuardTests(projectRoot);
+    if (!cssGuards.length) return;
+    const nodesCss = Array.isArray(compiledGraph.nodes) ? compiledGraph.nodes : Object.values(compiledGraph.nodes);
+    for (const node of nodesCss) {
+      const task = node && (doc.tasks || []).find((t) => t && t.id === node.id);
+      if (!task) continue;
+      const allTaskPaths = [...(task.files || []), ...(task.removed_paths || [])].map((f) => String(typeof f === 'string' ? f : f.path));
+      if (!allTaskPaths.some((f) => dh.CSS_FILE_RE.test(f))) continue;
+      node.verify = node.verify && typeof node.verify === 'object' ? node.verify : {};
+      const guardCmd = `npx vitest run ${cssGuards.join(' ')} --maxWorkers=1`;
+      const curCmd = String(node.verify.command || '');
+      if (!cssGuards.some((g) => curCmd.includes(g))) {
+        node.verify.command = [node.verify.command, guardCmd].filter(Boolean).join(' && ');
+      }
     }
   } catch { /* auxiliar */ }
 }
@@ -2269,6 +4136,17 @@ function compileExecutionGraphFromArtifacts(projectRoot, activeSession, options 
 
   const current = options.runState || readRunState(projectRoot, activeSession) || {};
   const runId = current.run_id || makeRunId();
+  const excludedIds = excludedCompletedIdsFromPlan(projectRoot, activeSession, runId);
+  const sanitizedCurrent = current.canonical_state
+    ? { ...current, canonical_state: stripTasksFromCanonicalState(current.canonical_state, excludedIds).state }
+    : current;
+  const mergedCanonical = mergeCanonicalStateWithRunState(
+    reduceCanonicalRunState(projectRoot, activeSession, { runState: { ...sanitizedCurrent, run_id: runId } }),
+    { ...sanitizedCurrent, run_id: runId },
+    activeSession,
+    compiledGraph
+  );
+  stripTasksFromCanonicalState(mergedCanonical, excludedIds);
   const next = writeRunState(projectRoot, activeSession, {
     ...current,
     run_id: runId,
@@ -2278,14 +4156,7 @@ function compileExecutionGraphFromArtifacts(projectRoot, activeSession, options 
     source_hash: planSourceHash(projectRoot, activeSession),
     acceptance_lock: freezeAcceptanceTests(projectRoot, parsedPlan),
     graph_version: compiledGraph.metadata && compiledGraph.metadata.plan_hash ? compiledGraph.metadata.plan_hash : 'compiled',
-    canonical_state: serializeCanonicalState(
-      mergeCanonicalStateWithRunState(
-        reduceCanonicalRunState(projectRoot, activeSession, { runState: { ...current, run_id: runId } }),
-        { ...current, run_id: runId },
-        activeSession,
-        compiledGraph
-      )
-    ),
+    canonical_state: serializeCanonicalState(mergedCanonical),
     projections: current.projections || {},
   });
   appendEvent(projectRoot, activeSession, {
@@ -2315,6 +4186,13 @@ function compileExecutionGraphFromArtifacts(projectRoot, activeSession, options 
  * @returns {{ spec: object, outOfPhase: { count: number, phases: string[] } | null }}
  */
 function scopeSpecToActivePhase(artifactPaths, parsedSpec, parsedPlan) {
+  // R34: a criterion only superseded tasks held (plan task supersede) is the replacing phase's to prove — with or
+  // without a program, it leaves the verify's criteria (its subcriteria too)
+  const sup = new Set((parsedPlan && parsedPlan.supersededCriteria) || []);
+  if (sup.size && parsedSpec && Array.isArray(parsedSpec.criteria)) {
+    const ids = require('./oxe-criteria-ids.cjs');
+    parsedSpec = { ...parsedSpec, criteria: parsedSpec.criteria.filter((c) => !sup.has(c.id) && !sup.has(ids.parentOf(c.id))) };
+  }
   if (!parsedSpec || !Array.isArray(parsedSpec.criteria) || !artifactPaths.programDir) return { spec: parsedSpec, outOfPhase: null };
   let state = null;
   try { state = require('./oxe-program.cjs').readProgram(artifactPaths.programDir); } catch { state = null; }
@@ -2624,11 +4502,30 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
   }
 
   async function runRuntimeExecute(projectRoot, activeSession, options = {}) {
-    applyChildEnvPolicy(projectRoot);
+    const restoreChildEnv = applyChildEnvPolicy(projectRoot);
+    try {
+      return await runRuntimeExecuteInner(projectRoot, activeSession, options);
+    } finally {
+      restoreChildEnv();
+    }
+  }
+
+  async function runRuntimeExecuteInner(projectRoot, activeSession, options = {}) {
+    const liveSinceMs = Date.now();
     const runtime = loadRuntimeModule();
     if (!runtime) throw new Error('Runtime package não está disponível. Rode npm run build:runtime.');
   const parsers = loadSdkParsers();
   if (!parsers) throw new Error('SDK parsers não disponíveis.');
+
+  // OxeSpace 15/11 (OQ polish wave 8): a new execute after `runtime pause` refuses — nothing runs, no model call —
+  // until `runtime resume` (a wave loop's next `execute --wave N` started a paid attempt under the pause)
+  {
+    const held = runtimePauseHold(projectRoot, activeSession);
+    if (held) {
+      appendEvent(projectRoot, activeSession, { type: 'ExecuteRefusedPaused', run_id: held.run.run_id || null, payload: { pause: held.pause } });
+      return { mode: options.wave != null ? 'wave' : 'single', agentPlan: null, paused: true, result: { run_id: held.run.run_id || null, status: 'paused', completed: [], failed: [], blocked: ['runtime_paused'], reason: held.reason }, run: held.run };
+    }
+  }
 
   // Auto-wire LlmTaskExecutor (via adapter) if providerConfig or adapter is supplied
   let executor = options.executor || null;
@@ -2679,11 +4576,15 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     // never executed as is — it re-ran done tasks and checkpointed the old write set.
     if (current && current.compiled_graph && !options.runState) {
       const nowHash = planSourceHash(projectRoot, activeSession);
-      if (current.source_hash !== nowHash) {
+      const cachedNodes = current.compiled_graph.nodes
+        ? (Array.isArray(current.compiled_graph.nodes) ? current.compiled_graph.nodes : Object.values(current.compiled_graph.nodes))
+        : [];
+      const hasLegacyInternalExternalDep = cachedNodes.some((n) => n && n.policy && Array.isArray(n.policy.external_dependency) && n.policy.external_dependency.some((d) => /^(?:scope_insufficient|waiting_shared_files):/.test(String(d))));
+      if (current.source_hash !== nowHash || hasLegacyInternalExternalDep) {
         appendEvent(projectRoot, activeSession, {
           type: 'VerificationSuiteRecompiled',
           run_id: current.run_id,
-          payload: { reason: 'plan_changed_since_compile', previous: current.source_hash || null, current: nowHash, scope: 'graph' },
+          payload: { reason: hasLegacyInternalExternalDep ? 'legacy_internal_wait_classification' : 'plan_changed_since_compile', previous: current.source_hash || null, current: nowHash, scope: 'graph' },
         });
         current = compileExecutionGraphFromArtifacts(projectRoot, activeSession, { runState: current }).run;
       }
@@ -2774,6 +4675,8 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     budgetLedger = budgetLib.openBudget(projectRoot, current.run_id, {
       turns: options.budgetTurns,
       usd: options.budgetUsd,
+      usdAdd: options.budgetAddUsd,
+      turnsAdd: options.budgetAddTurns,
       reset: Boolean(options.budgetReset),
       plan: planBudget,
       policy: programBudgetPolicy,
@@ -2794,7 +4697,13 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
       };
     }
     touchProgramPhase(projectRoot, activeSession, 'executing', { run_id: current.run_id });
-    const checkpointCommits = Boolean(options.checkpointCommits || readProjectConfig(projectRoot).checkpoint_commits);
+    // with the origin gate on (an origin block in .oxe/config.json or the versioned oxe.config.json), the execute
+    // commits each task by default: its OXE-Task commit is the only way the work passes check-origin (OxeSpace 14/11:
+    // a CR redo verified green and stayed unstaged). checkpoint_commits: false still turns it off.
+    const cfgCp = readProjectConfig(projectRoot) || {};
+    const originOn = (() => { try { return Boolean(require('./oxe-origin.cjs').resolveConfig(projectRoot, cfgCp).origin); } catch { return false; } })();
+    const checkpointCommits = Boolean(options.checkpointCommits || cfgCp.checkpoint_commits || (originOn && cfgCp.checkpoint_commits !== false));
+    if (originOn && !checkpointCommits) process.stderr.write('  ! trava de origem ligada e checkpoint_commits: false — as tarefas vão terminar sem commit e não passam no check-origin; ao fim, oxe-cc runtime commit-task Tn (ou T1,T2 --together)\n');
     const checkpointFailures = [];
     const schedulerRef = { current: null };
     // OXB-114: live UI verification after each wave with completed UI tasks (opt-in: PLAN.json ui_verify).
@@ -2838,7 +4747,33 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     // OXB-051: `--wave N` runs only that wave (it used to run every pending wave and paid for the next one too).
     if (options.wave != null && graph && Array.isArray(graph.waves)) {
       const only = Number(options.wave);
+      // cross-review 15/11 (R29): `--wave abc` / `--wave 99` is a typo, never "nothing to run, all done" with exit 0
+      if (!Number.isInteger(only) || only < 1) throw new Error(`--wave ${options.wave}: informe o número de uma onda do plano (1, 2, …)`);
+      let planTasks = [];
+      try { planTasks = ((readPlanJsonDoc(projectRoot, activeSession).doc || {}).tasks || []).filter(Boolean); } catch { planTasks = []; }
+      const waveTasks = planTasks.filter((t) => Number(t.wave) === only);
+      const compiledWaves = graph.waves.map((w) => Number(w.wave_number));
+      if (planTasks.length && !waveTasks.length && !compiledWaves.includes(only)) {
+        const known = [...new Set(planTasks.map((t) => Number(t.wave)).filter(Number.isFinite))].sort((a, b) => a - b);
+        throw new Error(`onda ${only} não existe no plano (ondas: ${known.join(', ') || 'nenhuma'})`);
+      }
       graph.waves = graph.waves.filter((w) => Number(w.wave_number) === only);
+      // OxeSpace 15/11 (OxeQuery polish wave 3): every task of the wave already done (a checkpoint retry in the
+      // preflight committed it) → nothing to run, a success — never "Bloqueados: 18" listing other waves' tasks
+      const planDone = new Set(planTasks.filter((t) => t.done === true).map((t) => t.id));
+      const compiledIds = graph.waves.flatMap((w) => w.node_ids || []);
+      // the compile drops done tasks from the waves: the plan's own list names them
+      const ids = compiledIds.length ? compiledIds : waveTasks.map((t) => t.id);
+      if (!compiledIds.length || compiledIds.every((id) => planDone.has(id))) {
+        appendEvent(projectRoot, activeSession, { type: 'WaveNothingToRun', run_id: current.run_id, payload: { wave: only, tasks: ids } });
+        return {
+          mode: 'wave',
+          agentPlan: null,
+          nothing_to_run: true,
+          result: { run_id: current.run_id, status: 'completed', completed: [], failed: [], blocked: [], reason: `onda ${only}: nada a rodar, todas as tarefas já estão done${ids.length ? ` (${ids.join(', ')})` : ''}` },
+          run: current,
+        };
+      }
     }
     // OXB-023: `--max-retries` / PLAN.json budget.max_retries replace the compile default (2) for this execution.
     if (maxRetriesOverride != null && graph && graph.nodes) {
@@ -2890,7 +4825,31 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     : Number(((readProjectConfig(projectRoot) || {}).executor || {}).max_run_ms) > 0 ? Number(readProjectConfig(projectRoot).executor.max_run_ms) : Number.MAX_SAFE_INTEGER;
   const execVerifyTimeoutMs = Number(options.verifyTimeoutMs) > 0
     ? Number(options.verifyTimeoutMs)
-    : Number(readProjectConfig(projectRoot).verify_timeout_ms) > 0 ? Number(readProjectConfig(projectRoot).verify_timeout_ms) : 600_000;
+    : resolveConfigVerifyTimeoutMs(projectRoot, readProjectConfig(projectRoot));
+  // cross-review 15/11: with --retry-policy-once in a LATER execute, attempt 1 already is the one extra attempt for a
+  // task this run saw refused — the scheduler must not add a second one
+  const policyRefusedBefore = [];
+  // cross-review 15/11: the extra attempt already SPENT (refused, then refused again — or ≥ 2 policy blocks), counted
+  // since the task's last reopen: a further --retry-policy-once execute must not pay attempt 1 again
+  const policyRetryExhausted = [];
+  if (options.schedulerOptions && options.schedulerOptions.retryPolicyOnce) {
+    try {
+      const blocks = new Map();
+      const retried = new Set();
+      for (const e of readEvents(projectRoot, activeSession)) {
+        if (!e || !e.work_item_id || (e.run_id && e.run_id !== current.run_id)) continue;
+        const p = e.payload || {};
+        const id = e.work_item_id;
+        if (e.type === 'PlanTaskReopened' || e.type === 'TaskReopened') { blocks.delete(id); retried.delete(id); continue; }
+        if (e.type === 'WorkItemBlocked' && p.failure_class === 'policy') blocks.set(id, (blocks.get(id) || 0) + 1);
+        if (e.type === 'RetryScheduled' && p.reason === 'policy_retry_once') retried.add(id);
+        if ((e.type === 'WorkItemBlocked' && p.failure_class === 'policy') || (e.type === 'RetryScheduled' && p.reason === 'policy_retry_once')) {
+          if (!policyRefusedBefore.includes(id)) policyRefusedBefore.push(id);
+        }
+      }
+      for (const [id, n] of blocks) if (n >= 2 || (retried.has(id) && n >= 1)) policyRetryExhausted.push(id);
+    } catch { /* no event log: nothing refused before */ }
+  }
   const ctx = createExecutionContext(projectRoot, activeSession, {
     runId: current.run_id,
     executor,
@@ -2898,7 +4857,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     pluginRegistry: options.pluginRegistry || buildRuntimePluginRegistry(projectRoot),
     // OXB-165: no run-level timeout by default (the scheduler's 30 min aborted at the first wave past it); the
     // stale-progress guard covers hangs. --max-run-ms > config executor.max_run_ms.
-    schedulerOptions: { verifyTimeoutMs: execVerifyTimeoutMs, maxRunDurationMs: execMaxRunMs, outOfScopeRequirements: execScopeGaps, deferFailed: ((readProjectConfig(projectRoot) || {}).execute || {}).defer_failed !== false, dispatch: ((readProjectConfig(projectRoot) || {}).execute || {}).dispatch === 'stream' ? 'stream' : 'wave', failureClasses: ((readProjectConfig(projectRoot) || {}).execute || {}).failure_classes || undefined, ...(options.schedulerOptions || {}) },
+    schedulerOptions: { verifyTimeoutMs: execVerifyTimeoutMs, maxRunDurationMs: execMaxRunMs, outOfScopeRequirements: execScopeGaps, deferFailed: ((readProjectConfig(projectRoot) || {}).execute || {}).defer_failed !== false, policyAutoRetry: ((readProjectConfig(projectRoot) || {}).execute || {}).policy_auto_retry !== false, dispatch: ((readProjectConfig(projectRoot) || {}).execute || {}).dispatch === 'stream' ? 'stream' : 'wave', failureClasses: ((readProjectConfig(projectRoot) || {}).execute || {}).failure_classes || undefined, allSegments: Boolean(options.allSegments || (((readProjectConfig(projectRoot) || {}).verify || {}).all_segments === true) || (((readProjectConfig(projectRoot) || {}).execute || {}).all_segments === true)), ...(options.schedulerOptions || {}), ...(policyRefusedBefore.length ? { policyRefusedBefore } : {}), ...(policyRetryExhausted.length ? { policyRetryExhausted } : {}) },
     // The scheduler already persists every event through the runtime bus (events/bus.ts →
     // appendEvent). This hook only forwards progress; writing here again duplicated the log.
     attemptChanges: (id) => lastAttemptChanges.get(id) || null,
@@ -2969,6 +4928,11 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
               wave: event.payload && event.payload.wave != null ? event.payload.wave : null,
             },
           });
+          // G27: the card moves to in_progress when the task starts, not only when the execute ends (fire and forget)
+          almAutoSync(projectRoot, activeSession);
+          // the run is live: "running" with the task as cursor (runtime status reads it; a stale "paused" while a task
+          // runs invited a second executor) — never over a pause requested during this execute
+          markRunLive(projectRoot, activeSession, taskId, liveSinceMs);
         } catch { /* auxiliary persistence */ }
       }
       if (taskId && inplaceRun && gitRepo) {
@@ -3100,9 +5064,17 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
           try {
             const sbNow = sharedBases.get(event.work_item_id);
             const unsep = sbNow && sbNow.unseparable ? Object.entries(sbNow.unseparable) : [];
+            const foreignDirty = new Set();
+            for (const [otherId, otherFiles] of interruptedWork.entries()) {
+              if (otherId === event.work_item_id) continue;
+              const ot = planTaskById.get(otherId);
+              if (ot && ot.done === true) continue;
+              for (const f of otherFiles || []) foreignDirty.add(f);
+            }
             const cp = unsep.length
               ? { committed: false, failed: true, kind: 'shared_file_conflict', reason: `shared_file_conflict: ${unsep.map(([p, ids]) => `${p} tem edições de ${event.work_item_id} e de ${ids.join(', ')}`).join('; ')} — sem a base da 1ª tentativa (histórico anterior à 1.21.2-rc.36) não dá para separar; commite à mão o hunk de cada tarefa (ou plan done --commit)` }
-              : commitTaskCheckpoint(projectRoot, current, event.work_item_id, { task: planTaskById.get(event.work_item_id), phase: phaseCtxForCommits.phase, baseline: taskBaseline.get(event.work_item_id) || null });
+              : commitTaskCheckpoint(projectRoot, current, event.work_item_id, { task: planTaskById.get(event.work_item_id), phase: phaseCtxForCommits.phase, baseline: taskBaseline.get(event.work_item_id) || null, foreignDirty, activeSession });
+            if (cp.ratchets_lowered) appendEvent(projectRoot, activeSession, { type: 'RatchetLowered', run_id: current.run_id, work_item_id: event.work_item_id, payload: { task: event.work_item_id, ratchets: cp.ratchets_lowered } });
             if (!cp.committed && cp.failed && !cp.kind && /sobrepõe edições de outra tarefa/.test(String(cp.reason || ''))) {
               const pt = planTaskById.get(event.work_item_id) || {};
               const others = [...planTaskById.values()].filter((o) => o.id !== event.work_item_id && !o.done && (o.files || []).some((f) => (pt.files || []).includes(f))).map((o) => o.id);
@@ -3117,28 +5089,81 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
                 checkpointFailure = { reason: `checkpoint incompleto: ${cp.leftover.length} arquivo(s) do escopo fora do commit (${cp.leftover.slice(0, 5).join(', ')})`, commit: cp.commit, leftover: cp.leftover };
               }
             } else if (!cp.failed) {
-              // OXB-176: the attempt added nothing. Done only with an earlier checkpoint of this task (its work is
-              // already committed); otherwise empty_checkpoint — never "completed with no commit" and on to the next.
+              // OXB-176 / OXB-C6 #2: [verify] passed with nothing new to commit. Reused only if scope is clean and not
+              // reopened by an open CR: first check this task's own checkpoint, then inspect git log touching `task.files`
+              // (`git log -n 1 --format=%H -- <scope>`, NEVER blind HEAD) in case another task/commit already delivered it.
               const earlier = findTaskCheckpoint(projectRoot, event.work_item_id, phaseCtxForCommits);
               const planTaskNow = planTaskById.get(event.work_item_id) || {};
-              const scopeNow = (planTaskNow.files || []).map((p) => String(p).replace(/\\/g, '/')).filter((p) => p && !p.includes('*'));
+              const rawScopeNow = (planTaskNow.files || [])
+                .map((p) => String(typeof p === 'string' ? p : (p && p.path) || '').replace(/\\/g, '/').replace(/^\.\//, ''))
+                .filter(Boolean);
+              const scopeNow = rawScopeNow.filter((p) => !p.includes('*'));
+              const gitScopeArgs = rawScopeNow
+                .map((p) => p.replace(/\/\*\*$/, '').replace(/\/\*$/, ''))
+                .filter((p) => p && !p.includes('*'));
               const dirtyNow = scopeNow.length ? changedPathsUnder(projectRoot, scopeNow) : [];
-              if (!scopeNow.length || isVerifyOnlyNode(event.work_item_id) || planTaskNow.kind === 'external_delivery' || (planTaskNow.meta && ['external_delivery', 'spike'].includes(planTaskNow.meta.kind))) {
+              const crsNow = reopeningCrsOf(projectRoot, event.work_item_id);
+              if (!rawScopeNow.length || isVerifyOnlyNode(event.work_item_id) || planTaskNow.kind === 'external_delivery' || (planTaskNow.meta && ['external_delivery', 'spike'].includes(planTaskNow.meta.kind))) {
                 // no file scope (verify-only / external / spike): nothing to commit, done as before
+              } else if (!dirtyNow.length && crsNow.length) {
+                // P0: a task reopened by an open CR never reuses an older checkpoint — the redo must change something,
+                // or the CR is not resolved (OxeSpace 14/11, Celular F2 CR-03: f1cbce07 reused)
+                checkpointFailure = { kind: 'empty_checkpoint', reason: `empty_checkpoint: ${event.work_item_id} foi reaberta por ${crsNow.join(', ')} e a tentativa não mudou nada — o checkpoint anterior${earlier ? ` (${String(earlier).slice(0, 8)})` : ''} é de antes do CR e não vale` };
               } else if (earlier && !dirtyNow.length) {
                 checkpoint = earlier;
                 appendEvent(projectRoot, activeSession, { type: 'GateResolved', run_id: current.run_id, work_item_id: event.work_item_id, payload: { gate: 'checkpoint', commit: earlier, reused: true } });
+              } else if (!dirtyNow.length && gitScopeArgs.length) {
+                const deliveredSha = (gitLines(projectRoot, ['log', '-n', '1', '--format=%H', '--', ...gitScopeArgs]) || [])[0] || null;
+                // Require at least one parent commit so synthetic root-init repos with no delivery history still report empty_checkpoint
+                const hasParentCommit = deliveredSha
+                  ? gitRun(projectRoot, ['rev-parse', '--verify', '-q', `${deliveredSha}^`]).ok
+                  : false;
+                if (deliveredSha && hasParentCommit) {
+                  const commitBody = gitRun(projectRoot, ['log', '-1', '--format=%B', deliveredSha]).stdout || '';
+                  const subj = (commitBody.split(/\r?\n/)[0] || '').trim();
+                  const taskMatch = /^OXE-Task:\s*(?:F\d+\/)?(T\d+)\s*$/m.exec(commitBody) || /^oxe\((T\d+)\):/i.exec(subj);
+                  const authorLabel = taskMatch ? taskMatch[1] : (subj ? subj.slice(0, 60) : 'commit anterior no escopo');
+                  checkpoint = deliveredSha;
+                  appendEvent(projectRoot, activeSession, {
+                    type: 'GateResolved',
+                    run_id: current.run_id,
+                    work_item_id: event.work_item_id,
+                    payload: {
+                      gate: 'checkpoint',
+                      commit: deliveredSha,
+                      reused: true,
+                      already_delivered: true,
+                      delivered_by: taskMatch ? taskMatch[1] : null,
+                      note: `entregue por ${deliveredSha.slice(0, 8)} (${authorLabel})`,
+                    },
+                  });
+                } else {
+                  checkpointFailure = {
+                    kind: 'empty_checkpoint',
+                    reason: 'empty_checkpoint: a tarefa completou sem nenhuma mudança e sem checkpoint anterior dela — confira se o trabalho já está na base (oxe-cc plan done Tn --commit <sha>) ou reabra',
+                  };
+                }
               } else {
                 checkpointFailure = {
                   kind: 'empty_checkpoint',
+                  // the uncommitted edits in the scope (waiting_shared_files waits only on a task that left some)
+                  ...(dirtyNow.length ? { leftover: dirtyNow } : {}),
                   reason: dirtyNow.length
                     ? `empty_checkpoint: a tentativa não acrescentou diff, e as mudanças no escopo (${dirtyNow.slice(0, 6).join(', ')}) estavam na árvore antes dela sem serem atribuídas à tarefa — o próximo execute as atribui (restos da própria tarefa) e commita`
                     : 'empty_checkpoint: a tarefa completou sem nenhuma mudança e sem checkpoint anterior dela — confira se o trabalho já está na base (oxe-cc plan done Tn --commit <sha>) ou reabra',
                 };
               }
             } else if (cp.failed) {
-              checkpointFailure = { reason: cp.reason, ...(cp.snapshot ? { snapshot: cp.snapshot } : {}), ...(cp.kind ? { kind: cp.kind } : {}), ...(cp.related_red ? { related_red: cp.related_red } : {}) };
-              if (cp.kind === 'scope_insufficient') appendEvent(projectRoot, activeSession, { type: 'ScopeInsufficient', run_id: current.run_id, work_item_id: event.work_item_id, payload: { task: event.work_item_id, reason: 'related_tests_outside_scope', tests: cp.related_red || [], at: 'checkpoint' } });
+              checkpointFailure = {
+                reason: cp.reason,
+                ...(cp.snapshot ? { snapshot: cp.snapshot } : {}),
+                ...(cp.kind ? { kind: cp.kind } : {}),
+                ...(cp.related_red ? { related_red: cp.related_red } : {}),
+                ...(cp.real_regressions ? { real_regressions: cp.real_regressions } : {}),
+                ...(cp.later_owned_reds && cp.later_owned_reds.length ? { later_owned_reds: cp.later_owned_reds } : {}),
+                ...(cp.preexisting_reds && cp.preexisting_reds.length ? { preexisting_reds: cp.preexisting_reds } : {}),
+              };
+              if (cp.kind === 'scope_insufficient') appendEvent(projectRoot, activeSession, { type: 'ScopeInsufficient', run_id: current.run_id, work_item_id: event.work_item_id, payload: { task: event.work_item_id, reason: 'related_tests_outside_scope', tests: cp.related_red || [], ...(cp.later_owned_reds && cp.later_owned_reds.length ? { later_owned_reds: cp.later_owned_reds } : {}), at: 'checkpoint' } });
             }
           } catch (err) {
             checkpointFailure = { reason: `checkpoint falhou: ${err && err.message ? err.message : err}` };
@@ -3182,6 +5207,19 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
   });
 
   if (budgetLedger) ctx.budget = budgetLib.schedulerBudget(budgetLedger);
+  // OxeSpace 14/11: `runtime pause` from another process held nothing — T3 finished and T4 started. A pause requested
+  // AFTER this execute started stops it before the next task (the one in progress finishes).
+  const executeStartedMs = Date.now();
+  ctx.pauseRequested = () => {
+    const rs = readRunState(projectRoot, activeSession);
+    if (rs && rs.pause_requested) return `runtime pause${rs.pause_requested.reason ? `: ${rs.pause_requested.reason}` : ''}`;
+    if (!rs || rs.status !== 'paused') return null;
+    const at = Date.parse(rs.updated_at || '') || 0;
+    if (at < executeStartedMs) return null;
+    let reason = '';
+    try { const ev = readEvents(projectRoot, activeSession).filter((e) => e.type === 'run_paused').pop(); reason = ev && ev.payload && ev.payload.reason ? ev.payload.reason : ''; } catch { reason = ''; }
+    return `runtime pause${reason ? `: ${reason}` : ''}`;
+  };
 
   // Gap 5: multi-agent path if plan-agents.json exists
   if (agentPlanPath) {
@@ -3273,10 +5311,32 @@ function syncRunStateAfterExecute(projectRoot, activeSession, current, result, m
   ];
   // `failures` must be in the state handed to the reducer: the scheduler reports an exhausted
   // task as WorkItemBlocked, so the failed set comes from here, not from the event log.
-  const base = { ...current, status, updated_at: now, failures, active_tasks: [] };
-  const canonical = reduceCanonicalRunState(projectRoot, activeSession, { runState: base, runId: current.run_id })
-    || current.canonical_state
+  // a pause requested while this execute ran (on disk, not in this execute's snapshot) survives its end
+  let onDisk = null;
+  try { onDisk = readRunState(projectRoot, activeSession); } catch { onDisk = null; }
+  const held = onDisk && onDisk.run_id === current.run_id && onDisk.pause_requested ? onDisk.pause_requested : null;
+  const failedCheckpointIds = new Set([
+    ...((Array.isArray(safeResult.checkpoint_failed) ? safeResult.checkpoint_failed : []).map((f) => f && f.task).filter(Boolean)),
+    ...excludedCompletedIdsFromPlan(projectRoot, activeSession, current.run_id),
+  ]);
+  const sanitizedCurrentCanonical = current.canonical_state
+    ? stripTasksFromCanonicalState(current.canonical_state, failedCheckpointIds).state
+    : current.canonical_state;
+  const base = {
+    ...current,
+    canonical_state: sanitizedCurrentCanonical,
+    status: held ? 'paused' : status,
+    updated_at: now,
+    failures,
+    active_tasks: [],
+    ...(held ? { pause_requested: held } : {}),
+  };
+  let canonical = reduceCanonicalRunState(projectRoot, activeSession, { runState: base, runId: current.run_id })
+    || base.canonical_state
     || null;
+  if (canonical && failedCheckpointIds.size) {
+    canonical = stripTasksFromCanonicalState(canonical, failedCheckpointIds).state;
+  }
   return writeRunState(projectRoot, activeSession, {
     ...base,
     canonical_state: canonical,
@@ -3654,20 +5714,49 @@ function writeRecoverySummaryMarkdown(projectRoot, activeSession, runState, reco
   return summaryPath;
 }
 
-/** 1.21.1 (OXB-042): the project's env policy for every child process of this execute/verify. */
+const childEnvPolicyStack = [];
+
+/** 1.21.1 (OXB-042) + 1.23.0 (OXB-G02): the project's env policy for every child process of this execute/verify. */
 function applyChildEnvPolicy(projectRoot) {
   const runtime = loadRuntimeModule();
-  if (!runtime || typeof runtime.configureChildEnv !== 'function') return;
+  if (!runtime || typeof runtime.configureChildEnv !== 'function') return () => {};
   const cfg = readProjectConfig(projectRoot);
-  runtime.configureChildEnv({
-    // OXB-118: `{ kind: "env", strip: "OXESPACE_" }` policy rules strip the prefix from every child process.
-    scrub: [...(Array.isArray(cfg.env_scrub) ? cfg.env_scrub : []), ...require('./oxe-policy-rules.cjs').envStripPatterns(cfg.policy_rules)],
-    allow: Array.isArray(cfg.env_allow) ? cfg.env_allow : [],
-  });
+  const policy = require('./oxe-env-sanitize.cjs').toChildEnvPolicy(cfg);
+  childEnvPolicyStack.push(policy);
+  runtime.configureChildEnv(policy);
+  let restored = false;
+  return () => {
+    if (restored) return;
+    restored = true;
+    const idx = childEnvPolicyStack.lastIndexOf(policy);
+    if (idx >= 0) childEnvPolicyStack.splice(idx, 1);
+    const prev = childEnvPolicyStack.length ? childEnvPolicyStack[childEnvPolicyStack.length - 1] : {};
+    runtime.configureChildEnv(prev);
+  };
+}
+
+function childEnvForProject(projectRoot, baseEnv = process.env) {
+  const restore = applyChildEnvPolicy(projectRoot);
+  try {
+    const rt = loadRuntimeModule();
+    return rt && typeof rt.childProcessEnv === 'function'
+      ? rt.childProcessEnv(baseEnv)
+      : (() => { const e = { ...baseEnv }; delete e.NODE_TEST_CONTEXT; return e; })();
+  } finally {
+    restore();
+  }
 }
 
 async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
-  applyChildEnvPolicy(projectRoot);
+  const restoreChildEnv = applyChildEnvPolicy(projectRoot);
+  try {
+    return await runRuntimeVerifyInner(projectRoot, activeSession, options);
+  } finally {
+    restoreChildEnv();
+  }
+}
+
+async function runRuntimeVerifyInner(projectRoot, activeSession, options = {}) {
   const runtime = loadRuntimeModule();
   const parsers = loadSdkParsers();
   if (!runtime || typeof runtime.verifyRun !== 'function') {
@@ -3754,18 +5843,80 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
       regression_checks: regressionChecks.length,
     },
   });
-  const report = await runtime.verifyRun({
-    projectRoot,
-    runId: current.run_id,
-    workItemId: String(targetWorkItem),
-    cwd: options.cwd || projectRoot,
-    suite: runSuite,
-    pluginRegistry: registry || undefined,
-    evidenceStore,
-    attemptNumber: options.attemptNumber || 1,
-    // OXB-072: --timeout-ms > config verify_timeout_ms > 10 min. The runtime's 60 s default timed out Electron suites.
-    timeoutMs: options.timeoutMs || (Number(projectConfig.verify_timeout_ms) > 0 ? Number(projectConfig.verify_timeout_ms) : 600_000),
-  });
+  // 1.21.2: verify.remote — the heavy checks (e2e, packaged build, Android) run in the repository's CI; the rest here.
+  const remoteLib = require('./oxe-verify-remote.cjs');
+  const rcfg = options.remote === false ? null : remoteLib.remoteConfig(projectConfig);
+  let localSuite = runSuite;
+  let remoteChecks = [];
+  let bothIds = new Set();
+  let hints = { jobs: new Map() };
+  if (rcfg) {
+    let planDoc = null;
+    try { planDoc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { planDoc = null; }
+    hints = remoteLib.planHints(planDoc);
+    const where = new Map((runSuite.checks || []).map((c) => [c, remoteLib.whereFor(c, rcfg, hints)]));
+    remoteChecks = (runSuite.checks || []).filter((c) => where.get(c) === 'remote' || where.get(c) === 'both');
+    // `both`: also here — a red only in the CI is then told apart (ci_only)
+    bothIds = new Set(remoteChecks.filter((c) => where.get(c) === 'both').map((c) => c.id));
+    localSuite = { ...runSuite, checks: (runSuite.checks || []).filter((c) => where.get(c) !== 'remote') };
+  }
+  // OXB-f: below verify.min_free_mb of free memory, no heavy check runs on this machine — it goes to the CI when
+  // verify.remote exists, otherwise it is "not verified" (low memory) instead of being killed half-way.
+  const minFree = projectConfig.verify && Number(projectConfig.verify.min_free_mb) > 0 ? Number(projectConfig.verify.min_free_mb) : 0;
+  const freeMb = Math.round((options.freeMemBytes != null ? options.freeMemBytes : require('os').freemem()) / (1024 * 1024));
+  let lowMemSkipped = [];
+  if (minFree && freeMb < minFree) {
+    const heavy = (localSuite.checks || []).filter((c) => remoteLib.HEAVY_RE.test(String(c.command || '')));
+    if (heavy.length) {
+      localSuite = { ...localSuite, checks: localSuite.checks.filter((c) => !heavy.includes(c)) };
+      if (rcfg) remoteChecks = [...remoteChecks, ...heavy.filter((c) => !remoteChecks.includes(c))];
+      else lowMemSkipped = heavy;
+    }
+  }
+  const report = localSuite.checks && localSuite.checks.length
+    ? await runtime.verifyRun({
+      projectRoot,
+      runId: current.run_id,
+      workItemId: String(targetWorkItem),
+      cwd: options.cwd || projectRoot,
+      suite: localSuite,
+      pluginRegistry: registry || undefined,
+      evidenceStore,
+      attemptNumber: options.attemptNumber || 1,
+      // OXB-072: --timeout-ms > config verify_timeout_ms > 10 min. The runtime's 60 s default timed out Electron suites.
+      timeoutMs: options.timeoutMs || (Number(projectConfig.verify_timeout_ms) > 0 ? Number(projectConfig.verify_timeout_ms) : 600_000),
+    })
+    : { status: remoteChecks.length ? 'passed' : 'partial', suite: localSuite, executed: null, gaps: remoteChecks.length ? [] : ['Nenhum check executável foi compilado a partir de SPEC/PLAN.'], verification_results: [], check_results: [], manifest: null, risk_ledger: null, evidence_coverage: null };
+  if (lowMemSkipped.length) {
+    report.check_results = [...(report.check_results || []), ...lowMemSkipped.map((c) => ({ check_id: c.id, acceptance_ref: c.acceptance_ref || null, status: 'skip', stdout: '', stderr: `memória livre ${freeMb} MB < verify.min_free_mb ${minFree} MB`, exit_code: null, duration_ms: 0, error: null, evidence_refs: [], skip_reason: 'low_memory' }))];
+    report.gaps = [...(report.gaps || []), `Memória baixa (${freeMb} MB livres < ${minFree} MB): ${lowMemSkipped.length} check(s) pesado(s) não rodaram aqui — ${lowMemSkipped.map((c) => c.id).join(', ')}; configure verify.remote para mandá-los à CI, ou rode de novo com memória livre`];
+    if (report.status === 'passed') report.status = 'partial';
+  }
+  if (remoteChecks.length) {
+    const programDirR = artifactPaths.programDir || path.join(projectRoot, '.oxe', 'program');
+    const remote = remoteLib.runRemote({ checks: remoteChecks, rcfg, cwd: options.cwd || projectRoot, spawn: options.ghSpawn, push: Boolean(options.push), sleep: options.sleep, now: options.now, jobs: hints.jobs, stateFile: path.join(programDirR, 'remote-verify.json'), artifactsDir: path.join(projectRoot, '.oxe', 'evidence', 'remote', String(Date.now())) });
+    const localById = new Map((report.check_results || []).map((r) => [r.check_id, r]));
+    const merged = remote.results.map((r) => {
+      const cr = remoteLib.toCheckResult(r, remote.run);
+      if (!bothIds.has(r.check.id)) return cr;
+      const local = localById.get(r.check.id);
+      const ciOnly = cr.status === 'fail' && local && local.status === 'pass';
+      return { ...cr, check_id: `${r.check.id}@ci`, ...(ciOnly ? { ci_only: true, stderr: `falhou só na CI (passa aqui) — leia o trace da CI${remote.artifacts && remote.artifacts.dir ? ` em ${path.relative(projectRoot, remote.artifacts.dir).split(path.sep).join('/')}` : ''}, não a reprodução local. ${cr.stderr}`.trim() } : {}) };
+    });
+    report.check_results = [...(report.check_results || []), ...merged];
+    report.remote = { status: remote.status, reason: remote.reason || null, run: remote.run || null, pending: Boolean(remote.pending), artifacts: remote.artifacts || null, checks: merged.map((m) => ({ id: m.check_id, status: m.remote.status, job: m.remote.job, url: m.remote.url, ...(m.ci_only ? { ci_only: true } : {}) })) };
+    const failed = merged.filter((m) => m.status === 'fail');
+    const notVerified = merged.filter((m) => m.remote.status === 'not_verified');
+    if (failed.length) report.status = 'failed';
+    if (notVerified.length) {
+      report.gaps = [...(report.gaps || []), `Verificação remota: ${notVerified.length} check(s) não verificado(s) — ${notVerified[0].remote.reason || remote.reason}${rcfg.required ? ' (verify.remote.required: o close exige o remoto)' : ' (a fase segue com o local)'}`];
+      if (rcfg.required && report.status === 'passed') report.status = 'partial';
+    }
+    if (remote.run && remote.run.id) {
+      try { gatesLib.attachCiRun(artifactPaths.programDir || path.join(projectRoot, '.oxe', 'program'), { run: String(remote.run.id), head: remote.run.head, phase: programPhaseId }); } catch { /* evidência auxiliar */ }
+    }
+    appendEvent(projectRoot, activeSession, { type: 'RemoteVerification', run_id: current.run_id, payload: { status: remote.status, run: remote.run ? remote.run.url : null, reused: Boolean(remote.run && remote.run.reused), passed: merged.filter((m) => m.status === 'pass').length, failed: failed.length, not_verified: notVerified.length } });
+  }
   // A passing re-verify of a fully executed run restores `completed` (a previous failed verify
   // must not leave it stuck in `running`).
   const graphNodes = current.compiled_graph && current.compiled_graph.nodes
@@ -3810,6 +5961,9 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
         checkResults: report.check_results,
       });
       gateSummary.changes = recorded.created.map((cr) => cr.id);
+      // a gate that failed by the network (infra) opens no CR: rerun the verify (the code was not judged)
+      gateSummary.infra = recorded.infra || [];
+      for (const i of gateSummary.infra) appendEvent(projectRoot, activeSession, { type: 'GateInfraFailure', run_id: current.run_id, payload: { gate: i.gate, excerpt: i.excerpt } });
       for (const cr of recorded.created) {
         appendEvent(projectRoot, activeSession, { type: 'ChangeRequested', run_id: current.run_id, payload: { id: cr.id, class: cr.class, phase: cr.phase, criteria: [], gate: cr.gate, by: cr.by } });
       }
@@ -3857,6 +6011,9 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
     verification_status: report.status,
     // OXB-124: the commit the phase verify judged (the close refuses a verify of an older code tree).
     verification_head: require('./oxe-verdicts.cjs').headOf(projectRoot),
+    // lean 1.1: the tree of the files the verify actually ran on. A commit-task made after the verify with exactly
+    // these files is the same code — the close accepts it without a second verify.
+    verification_tree: require('./oxe-verdicts.cjs').worktreeTree(projectRoot),
     verified_at: new Date().toISOString(),
     verification_regression: regressionSummary,
     verification_gates: gateSummary,
@@ -3906,15 +6063,30 @@ function programCloseGateReasons(projectRoot, activeSession, ctx) {
     plan = null;
   }
   const gates = gatesLib.readPhaseGates({ phase_gates: plan && plan.phaseGates }, config);
+  // cross-review 15/11: the verify runs the IMPLICIT gates too (stub-check, nfr-*, deps, decision-*); the close read
+  // only the declared ones and withdrew their open CRs as "gate removed from the plan"
+  let implicit = [];
+  try { implicit = implicitPhaseGates(projectRoot, ctx.state, ctx.phase && ctx.phase.id, config) || []; } catch { implicit = []; }
   // OXB-078: a CR of a gate no longer declared is withdrawn before the close counts open CRs.
   try {
     const orphanDir = ctx.paths.programDir || path.join(projectRoot, '.oxe', 'program');
-    const withdrawn = require('./oxe-change.cjs').reconcileChanges(orphanDir, ctx.phase.id, plan, [], { declaredGates: gates.map((g) => g.id) });
+    const withdrawn = require('./oxe-change.cjs').reconcileChanges(orphanDir, ctx.phase.id, plan, [], { declaredGates: [...gates, ...implicit].map((g) => g.id) });
     for (const id of withdrawn.resolved) appendEvent(projectRoot, activeSession, { type: 'ChangeResolved', run_id: ctx.run && ctx.run.run_id, payload: { id, reason: 'gate_removed' } });
   } catch { /* auxiliar */ }
-  if (!gates.length) return out;
-  const verifyGates = gates.filter((g) => g.when === 'phase_verify');
   const ran = (ctx.run && ctx.run.verification_gates) || null;
+  // an implicit gate RED in the last verify blocks the close like a declared one (one that did not run does not: a
+  // verify of an older version never ran it)
+  // close --by-ci (OxeSpace 15/11, user decision): the phase's green CI is the proof — the gates that run only in the
+  // phase verify are not asked; they are listed in the close record instead (out.verify_gates_skipped)
+  if (ctx.byCi) {
+    out.verify_gates_skipped = [...implicit, ...gates].filter((g) => g && g.when === 'phase_verify').map((g) => g.id);
+  } else {
+    for (const g of implicit) {
+      if (g && g.when === 'phase_verify' && ran && (ran.failed || []).includes(g.id)) out.reasons.push(`gate do projeto vermelho no último verify: ${g.id}`);
+    }
+  }
+  if (!gates.length) return out;
+  const verifyGates = ctx.byCi ? [] : gates.filter((g) => g.when === 'phase_verify');
   for (const g of verifyGates) {
     if (!ran || !(ran.passed || []).includes(g.id)) {
       out.reasons.push(ran && (ran.failed || []).includes(g.id)
@@ -3926,11 +6098,7 @@ function programCloseGateReasons(projectRoot, activeSession, ctx) {
   const checks = gatesLib.gateChecks(gates, 'program_close', { programDir, phase: ctx.phase.id, defaultRunner: config.phase_gates_runner || null });
   for (const check of checks) {
     // Same env policy as every runtime child (OXB-042): no node:test context, no live-app tokens or secrets.
-    applyChildEnvPolicy(projectRoot);
-    const rt = loadRuntimeModule();
-    const gateEnv = rt && typeof rt.childProcessEnv === 'function'
-      ? rt.childProcessEnv(process.env)
-      : (() => { const e = { ...process.env }; delete e.NODE_TEST_CONTEXT; return e; })();
+    const gateEnv = childEnvForProject(projectRoot, process.env);
     const res = spawnSync(check.command, { cwd: projectRoot, shell: true, encoding: 'utf8', timeout: check.timeout_ms, maxBuffer: 4 * 1024 * 1024, windowsHide: true, env: gateEnv });
     const result = { check_id: check.id, status: res.status === 0 ? 'pass' : 'fail', stdout: res.stdout || '', stderr: res.stderr || '', error: res.error ? String(res.error) : null };
     out.results.push(result);
@@ -3984,7 +6152,43 @@ function runtimeCiAttach(projectRoot, activeSession, options = {}) {
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
   const program = programLib.readProgram(programDir);
   const phase = options.phase || (program && program.active_phase) || null;
-  return require('./oxe-phase-gates.cjs').attachCiRun(programDir, { run: options.run, repo: options.repo, head: options.head, phase });
+  const activePhaseWarning = (program && !options.phase && !program.active_phase)
+    ? 'PROGRAM.json está com active_phase: null — rode `oxe-cc runtime program start --phase F1` (ou passe `--phase Fn`)'
+    : null;
+  const gatesLib = require('./oxe-phase-gates.cjs');
+  const record = gatesLib.attachCiRun(programDir, { run: options.run, repo: options.repo, head: options.head, phase });
+  // OxeSpace 15/11 (Celular F3 CR-F3-1): a constraint CR opened by a red `kind: ci` gate stayed open after a green run
+  // was attached (the close passed anyway; `feedback resolve --no-amendment` is for spec_gap). A GREEN attached run
+  // resolves the open CRs of this phase raised by its ci gates — the run is the proof the gate asked for.
+  try {
+    const config = readProjectConfig(projectRoot) || {};
+    let planDoc = null;
+    try { planDoc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { planDoc = null; }
+    const ciGates = [...gatesLib.readPhaseGates(planDoc, config), ...implicitPhaseGates(projectRoot, program, phase, config)].filter((g) => g && g.kind === 'ci');
+    const lower = (s) => String(s || '').toLowerCase();
+    // cross-review 15/11: a gate's own repo counts — the run is checked in the gate's repo when the attach names none,
+    // and a run of one repo never settles the CR of a gate of another (multi-repo phases)
+    const statusByRepo = new Map();
+    const greenFor = (gate) => {
+      if (record.repo && gate.repo && lower(record.repo) !== lower(gate.repo)) return false;
+      const repo = record.repo || gate.repo || null;
+      if (!statusByRepo.has(lower(repo))) statusByRepo.set(lower(repo), gatesLib.ciRunStatus({ ...record, repo }, { spawn: options.spawn }));
+      const st = statusByRepo.get(lower(repo));
+      return Boolean(st && st.ok);
+    };
+    const changeLib = require('./oxe-change.cjs');
+    const resolved = [];
+    for (const cr of changeLib.listChanges(programDir)) {
+      if (cr.status !== 'open' || !cr.gate || (phase && cr.phase && cr.phase !== phase)) continue;
+      const gate = ciGates.find((g) => g.id === cr.gate);
+      if (!gate || !greenFor(gate)) continue;
+      changeLib.setChangeStatus(programDir, cr.id, 'resolved', { resolution: `run de CI ${record.run} verde anexado (gate ${cr.gate})`, by: 'ci_attach' });
+      appendEvent(projectRoot, activeSession, { type: 'ChangeResolved', payload: { id: cr.id, status: 'resolved', by: 'ci_attach', run: String(record.run) } });
+      resolved.push(cr.id);
+    }
+    if (resolved.length) return { ...record, resolved_changes: resolved, ...(activePhaseWarning ? { warning: activePhaseWarning } : {}) };
+  } catch { /* auxiliar: the attach itself stands */ }
+  return activePhaseWarning ? { ...record, warning: activePhaseWarning } : record;
 }
 
 /**
@@ -3998,11 +6202,10 @@ function runtimeDeployAttach(projectRoot, activeSession, options = {}) {
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
   const program = programLib.readProgram(programDir);
   const phase = options.phase || (program && program.active_phase) || null;
-  applyChildEnvPolicy(projectRoot);
-  const rt = loadRuntimeModule();
-  const envVars = rt && typeof rt.childProcessEnv === 'function' ? rt.childProcessEnv(process.env) : { ...process.env };
+  const envVars = childEnvForProject(projectRoot, process.env);
   const record = require('./oxe-phase-gates.cjs').attachDeploy(programDir, { env: options.env, version: options.version, ref: options.ref, phase, by: options.by || null, checks: options.checks || [], cwd: projectRoot, spawn: options.spawn, env_vars: envVars });
   appendEvent(projectRoot, activeSession, { type: 'DeployAttached', payload: { phase, env: record.env, version: record.version, ref: record.ref, ok: record.ok, checks: record.checks.map((c) => ({ id: c.id, ok: c.ok, exit: c.exit })) } });
+  almAutoSync(projectRoot, activeSession);
   return record;
 }
 
@@ -4053,8 +6256,10 @@ function attachAcceptanceLock(parsedPlan, runState, projectRoot) {
   const runtime = loadRuntimeModule();
   const lateFrozen = [];
   for (const entry of parsedPlan.acceptanceTests) {
-    // OXB-205: an audited `plan amend-test` records `amended` + updated sha256/hashes in PLAN.json; honor it.
-    if (Array.isArray(entry.amended) && entry.amended.length > 0) {
+    // OXB-205: an audited `plan amend-test` records `amended` + updated sha256/hashes in PLAN.json; honor it. So is a
+    // re-freeze for a CR (`spec freeze --cr`, `resolves`): OxeSpace 14/11, the F2 close read the re-frozen A6 test as
+    // acceptance_changed against the run's first lock.
+    if ((Array.isArray(entry.amended) && entry.amended.length > 0) || (Array.isArray(entry.resolves) && entry.resolves.length > 0 && (entry.hashes || entry.sha256))) {
       for (const file of entry.files || []) {
         const amendedSha = (entry.hashes && entry.hashes[file])
           || (entry.files.length === 1 && typeof entry.sha256 === 'string' ? entry.sha256 : null);
@@ -4143,8 +6348,11 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
   const pack = readJsonQuiet(paths.implementationPack);
   const programLib = require('./oxe-program.cjs');
   const program = paths.programDir ? programLib.readProgram(paths.programDir) : null;
-  const phase = program && program.active_phase
-    ? program.phases.find((p) => p.id === program.active_phase) || null
+  // with no active phase (a plan written before `program start`), the plan's own `phase` field names it (OxeSpace
+  // 15/11, OxeChat: the lint required every closed phase's amendments of the new plan)
+  const phaseId = (program && program.active_phase) || (plan && plan.phase) || null;
+  const phase = program && phaseId
+    ? program.phases.find((p) => p.id === phaseId) || null
     : null;
   const config = readJsonQuiet(path.join(projectRoot, '.oxe', 'config.json')) || {};
   const maxTasksPerWave = Number(options.maxTasksPerWave || config.plan_max_tasks_per_wave || 0) || 0;
@@ -4158,7 +6366,7 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     amendments = new Map([...amendments].filter(([criterion]) => critIds.inPhase(criterion, own) && !critIds.isGlobal(criterion) || own.has(criterion)));
   }
   const result = planJson.lintPlan({
-    plan, spec, pack, phase, maxTasksPerWave, projectRoot,
+    plan, spec, pack, phase, maxTasksPerWave, projectRoot, config,
     standing: require('./oxe-criteria-ids.cjs').standingAcceptance(projectRoot),
     amendments,
     requireAcceptanceTests: Boolean(options.requireAcceptanceTests || config.acceptance_tests_required),
@@ -4214,6 +6422,20 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     (config.acceptance_tests_required || options.requireAcceptanceTests ? result.errors : result.warnings).push(...uncovered);
     result.ok = result.errors.length === 0;
   }
+  // executable disambiguation: the example the user chose in the grill is in the frozen test of its criterion
+  if (specText) {
+    const grillLib = require('./oxe-grill.cjs');
+    const { examples, questions } = grillLib.status(grillPaths(projectRoot, activeSession).dir);
+    if (examples.length) {
+      result.errors.push(...require('./oxe-grill-cases.cjs').planFindings({
+        questions,
+        criteria: require('./oxe-spec-check.cjs').criteria(specText).list,
+        doc: readPlanJsonDoc(projectRoot, activeSession).doc,
+        readFile: (f) => readTextIfExists(path.join(projectRoot, f)),
+      }));
+      result.ok = result.errors.length === 0;
+    }
+  }
   result.warnings.push(...anchorWarnings);
   // OXB-147: a verify that would change node_modules / git, or a sentence instead of a command, is a structural error.
   {
@@ -4242,6 +6464,14 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
         if (ids.length > 1) result.warnings.push(`acoplamento de compilação: ${ids.join(', ')} compilam juntos em \`${cmd.slice(0, 80)}\` — os testes congelados de uma tarefa não compilam enquanto faltarem os símbolos das outras; commite antes um esqueleto (stubs com TODO) dos symbols do pack`);
       }
     }
+    // A pack symbol on a file that exists and does not define it: the task must create it, or the stub-check fails
+    // every attempt. oxespace-152-mobile: `text` in remote/text.ts (a name guessed from the file) cost two correct
+    // attempts. Outside the task's files it cannot be created there at all → error.
+    try {
+      const ps = packSymbolProblems(projectRoot, plan);
+      result.errors.push(...ps.errors);
+      result.warnings.push(...ps.warnings);
+    } catch { /* the pack is checked by the rationality gaps */ }
     // OXB-152: on Windows a `./script.sh` verify needs a .cmd/.bat sibling (gradlew/mvnw are mapped automatically).
     if (process.platform === 'win32' || options.platform === 'win32') {
       for (const task of plan.tasks || []) {
@@ -4280,6 +6510,7 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     const health = require('./oxe-project-health.cjs');
     const p = health.oxePaths(projectRoot);
     const rationality = require('./oxe-rationality.cjs').buildExecutionRationality({
+      lean: health.isLeanCeremony(projectRoot, null),
       plan: paths.plan || p.plan,
       planAgents: p.planAgents,
       implementationPackJson: paths.implementationPack || p.implementationPackJson,
@@ -4290,6 +6521,7 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
       spec: paths.spec || p.spec,
       visualInputsJson: p.visualInputsJson,
       visualInputsMd: p.visualInputsMd,
+      assumeApplicable: !planText && options.preflight !== false && config.plan_lint_preflight !== false,
     });
     // OXB-041: the preflight blocks on these whenever it applies (a PLAN.md exists), pack or not — so lint does too.
     // (Before, without an IMPLEMENTATION-PACK they were warnings: lint said "ok" and execute refused.)
@@ -4333,10 +6565,18 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     // anexa (gap B). Um "Como verificar" velho na SPEC quebrava o verify inline sem o dry-run perceber.
     const criteriaById = new Map(((spec && spec.criteria) || []).map((c) => [c.id, c]));
     const closersForDry = planJson.criterionClosers(plan.tasks);
+    // a task reopened by an open CR also runs the frozen test that resolves it (bound by task, or by criterion when the
+    // entry names no task): a reopened task whose CR test is red is never "already green" (OxeSpace 14/11, CR-02)
+    const openCrIds = new Set((paths.programDir ? require('./oxe-change.cjs').listChanges(paths.programDir) : []).filter((c) => c.status === 'open').map((c) => c.id));
+    const crTestsOf = (task) => (Array.isArray(plan.acceptanceTests) ? plan.acceptanceTests : [])
+      .filter((a) => a && a.command && Array.isArray(a.resolves) && a.resolves.some((id) => openCrIds.has(id))
+        && ((a.task && a.task === task.id) || (!a.task && (task.aceite || []).includes(a.criterion))))
+      .map((a) => a.command);
     const effective = {
       ...plan,
       tasks: plan.tasks.map((task) => {
         const extra = [];
+        for (const cmd of crTestsOf(task)) if (!(task.verifyCommand || '').includes(cmd) && !extra.includes(cmd)) extra.push(cmd);
         for (const ref of task.aceite || []) {
           const closing = closersForDry.get(ref);
           if (closing && closing.closer !== task.id) continue; // OXB-053: only the closing task runs the criterion check
@@ -4352,7 +6592,8 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     // OXB-084: progress per command, a resume cache keyed by the tree, and --only / --changed.
     const cacheDir = paths.programDir ? path.dirname(paths.programDir) : path.join(projectRoot, '.oxe');
     dryVerify = require('./oxe-verify-dryrun.cjs').dryRunVerifyCommands(projectRoot, effective, {
-      timeoutMs: options.dryVerifyTimeoutMs,
+      // per command; config dry_verify.timeout_ms (e.g. a verify that goes to a remote runner and waits in a queue)
+      timeoutMs: options.dryVerifyTimeoutMs || (() => { const v = (readProjectConfig(projectRoot) || {}).dry_verify; return v && Number(v.timeout_ms) > 0 ? Number(v.timeout_ms) : undefined; })(),
       onProgress: options.onProgress,
       cachePath: options.dryVerifyCache === false ? null : path.join(cacheDir, 'cache', 'dry-verify.json'),
       resume: Boolean(options.resume),
@@ -4452,6 +6693,12 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
       result.warnings.push(...dl.warnings);
     }
   } catch { /* auxiliar */ }
+  // 1.21.2: PRD traceability (stories ↔ SPEC criteria) and the phase's RFC.
+  try {
+    const docs = productDocsLint(projectRoot, activeSession, { specText, specCriteria: spec && Array.isArray(spec.criteria) ? spec.criteria.map((c) => c.id) : [] });
+    result.errors.push(...docs.errors);
+    result.warnings.push(...docs.warnings);
+  } catch { /* auxiliar */ }
   // OXB-123: the probe sections of the SPEC (statuses, reasons, open edges without an assumption in the plan).
   try {
     const specP = readTextIfExists(resolveRuntimeArtifactPaths(projectRoot, activeSession).spec) || '';
@@ -4519,6 +6766,224 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
       }
     }
   } catch { /* auxiliar */ }
+  // G36 part 2: each pending task's frozen test against a stub, repeated — a hang or a flaky result is an error before
+  // any paid attempt depends on it. Runs by default when the plan has new/modified frozen tests (disable with --no-precheck).
+  const cfgPrecheck = ((readProjectConfig(projectRoot) || {}).lint || {}).precheck;
+  const precheckDisabled = !options.precheckE2e && (options.noPrecheck === true || options.precheckTests === false || (cfgPrecheck === false && options.precheckTests !== true));
+  if (!precheckDisabled) {
+    try {
+      const { doc: pjp, paths: pp } = readPlanJsonDoc(projectRoot, activeSession);
+      if (pjp) {
+        const pre = require('./oxe-test-precheck.cjs');
+        const explicitPrecheck = options.precheckTests === true;
+        const runStateForPrecheck = explicitPrecheck ? null : readRunState(projectRoot, activeSession);
+        const newEntries = explicitPrecheck
+          ? null
+          : pre.newFrozenAcceptance(projectRoot, pjp, {
+            baseCommit: phase ? phase.base_commit : null,
+            acceptanceLock: runStateForPrecheck ? runStateForPrecheck.acceptance_lock : null,
+            allowWithoutGit: Boolean(options.precheckWorkspace),
+          });
+        // OXB-C27-2: --precheck-e2e runs each NEW frozen e2e (remote ones too) once at HEAD + stub and requires it red on a
+        // contract assertion, not on setup (all pending e2e when nothing is new)
+        const e2eEntries = options.precheckE2e
+          ? ((Array.isArray(newEntries) && newEntries.length ? newEntries : pre.pendingAcceptance(pjp)).filter((a) => pre.isE2e(a)))
+          : null;
+        const shouldRunPrecheck = options.precheckE2e ? true : explicitPrecheck || (Array.isArray(newEntries) && newEntries.length > 0);
+        if (options.precheckE2e && !e2eEntries.length) result.warnings.push('precheck --precheck-e2e: nenhum teste e2e congelado pendente');
+        if (shouldRunPrecheck && (!e2eEntries || e2eEntries.length)) {
+          const entriesToRun = e2eEntries || (explicitPrecheck ? pre.pendingAcceptance(pjp) : newEntries);
+          const mode = e2eEntries ? 'e2e' : explicitPrecheck ? 'explicit' : 'auto';
+          const cachePath = options.precheckCache === false ? false : path.join(path.dirname(pp.plan), 'precheck-cache.json');
+          const runsLabel = Math.max(2, Number(options.precheckRuns) || 2);
+          if (typeof options.onProgress === 'function') {
+            if (mode === 'e2e') {
+              options.onProgress(`precheck e2e: ${entriesToRun.length} teste(s) e2e congelado(s), 1 vez cada contra o HEAD + stub — precisa ficar vermelho numa asserção do contrato, não na montagem`);
+            } else if (mode === 'explicit') {
+              options.onProgress(`precheck: ${entriesToRun.length} teste(s) de aceite contra o stub, ${runsLabel} vez(es) cada (remote-verify: 1 vez) — veredito parcial em ${path.relative(projectRoot, path.join(path.dirname(pp.plan), 'precheck-last.json')).split(path.sep).join('/')}`);
+            } else {
+              const cachePreview = cachePath ? pre.readPrecheckCache(cachePath) : null;
+              const runnableAuto = entriesToRun.filter((a) => !(cachePreview && pre.isEntryCachedOk(projectRoot, a, cachePreview)) && !pre.isRemoteVerify(a.command));
+              if (runnableAuto.length > 0) {
+                options.onProgress(`precheck (padrão — ${runnableAuto.length} teste(s) congelado(s) novo(s); desligue com --no-precheck): contra o stub, até ${runsLabel} vez(es) cada`);
+              }
+            }
+          }
+          // G30b part 2: with --precheck-tests, the suites outside the verify that import the task files run once at HEAD
+          let suites = [];
+          if (explicitPrecheck) {
+            const rt0 = (readProjectConfig(projectRoot) || {}).checkpoint_related_tests;
+            const tpl = rt0 && typeof rt0 === 'object' && typeof rt0.run_command === 'string' && rt0.run_command.includes('{files}') ? rt0.run_command : 'npx vitest run {files}';
+            try {
+              const found = require('./oxe-suite-impact.cjs').suiteImpact(projectRoot, pjp);
+              const seenS = new Set();
+              for (const f of found) for (const s of f.suites || []) if (!seenS.has(s.test)) { seenS.add(s.test); suites.push({ file: s.test, task: f.task, command: tpl.replace('{files}', s.test) }); }
+            } catch { suites = []; }
+          }
+          const r = pre.precheck(projectRoot, pjp, readJsonQuiet(pp.implementationPack), {
+            entries: entriesToRun,
+            mode,
+            cachePath,
+            // next to the session's PLAN.json, like the cache (the auto mode writes precheck-auto-last.json there)
+            progressPath: options.precheckProgress === false ? false : path.join(path.dirname(pp.plan), 'precheck-last.json'),
+            runs: options.precheckRuns,
+            suites,
+            onProgress: options.onProgress,
+            selectorLevel: ((readProjectConfig(projectRoot) || {}).lint || {}).precheck_e2e_selector === 'error' ? 'error' : 'warn',
+            ...(options.precheckTimeoutMs > 0 ? { timeoutMs: options.precheckTimeoutMs } : {}),
+            ...(options.precheckRun ? { run: options.precheckRun } : {}),
+            ...(options.precheckWorkspace ? { workspace: options.precheckWorkspace } : {}),
+          });
+          if (mode === 'auto') {
+            if (r.ran > 0) {
+              r.notes = [
+                `precheck padrão ativado: ${r.ran} teste(s) congelado(s) novo(s) detectado(s) (use --no-precheck para desligar)`,
+                ...(r.notes || []),
+              ];
+            } else if (r.cached > 0) {
+              r.notes = [
+                `precheck padrão: ${r.cached} teste(s) congelado(s) novo(s) já aprovado(s) no cache (sem mudança de hash)`,
+                ...(r.notes || []),
+              ];
+            }
+          }
+          const msg = pre.messages(r);
+          result.errors.push(...msg.errors);
+          result.warnings.push(...msg.warnings);
+          result.precheck = r;
+        }
+      }
+    } catch (err) { result.warnings.push(`precheck dos testes não rodou: ${err && err.message ? err.message : err}`); }
+  }
+  // G30: the existing suites that import a task's files and are not in its verify/scope (three paid redos, 14/11).
+  try {
+    const { doc: pjs } = readPlanJsonDoc(projectRoot, activeSession);
+    const mode = ((readProjectConfig(projectRoot) || {}).lint || {}).suite_impact || 'error';
+    if (pjs && mode !== 'off') {
+      const si = require('./oxe-suite-impact.cjs');
+      const findings = si.suiteImpact(projectRoot, pjs);
+      const msg = si.messages(findings, { mode });
+      result.errors.push(...msg.errors);
+      result.warnings.push(...msg.warnings);
+      result.suite_impact = findings;
+      // G38 (OxeSpace 15/11, OxeCode F6 T27): a test in the verify that only a later pending task turns green
+      const later = si.laterOwnedTests(pjs);
+      if (later.length) {
+        const lm = si.laterOwnedMessages(later, { mode });
+        result.errors.push(...lm.errors);
+        result.warnings.push(...lm.warnings);
+        result.later_owned_tests = later;
+      }
+      // G40 (OxeSpace 15/11, PR #863): a frozen e2e that acts right after launch, before a readiness wait (a warning)
+      try {
+        const lintCfg = ((readProjectConfig(projectRoot) || {}).lint || {});
+        const racy = require('./oxe-e2e-ready.cjs').racyFrozenE2e(projectRoot, pjs, { helpers: Array.isArray(lintCfg.e2e_ready_helpers) ? lintCfg.e2e_ready_helpers : [] });
+        if (racy.length) { result.warnings.push(...require('./oxe-e2e-ready.cjs').racyMessages(racy)); result.racy_e2e = racy; }
+        // G40c (OQ T14): geometry measured inside an overlay before its entrance animation finished
+        const og = require('./oxe-e2e-ready.cjs').overlayGeometryFrozenE2e(projectRoot, pjs, { helpers: Array.isArray(lintCfg.e2e_ready_helpers) ? lintCfg.e2e_ready_helpers : [] });
+        if (og.length) { (lintCfg.e2e_overlay_geometry === 'error' ? result.errors : result.warnings).push(...require('./oxe-e2e-ready.cjs').overlayGeometryMessages(og)); result.overlay_geometry = og; }
+        // G40b (#862): a case-sensitive regex accessible name that the app's real string (catalogs) cannot match
+        const er = require('./oxe-e2e-ready.cjs');
+        const labels = er.labelMismatches(projectRoot, pjs, { catalogs: Array.isArray(lintCfg.ui_strings) ? lintCfg.ui_strings : [] });
+        if (labels.length) { result.warnings.push(...er.labelMessages(labels)); result.label_mismatches = labels; }
+        // G41 (Celular F4 T13): a frozen Paparazzi test that changes locale/fontScale through the context
+        const lh = er.layoutlibHazards(projectRoot, pjs);
+        if (lh.length) { result.warnings.push(...er.layoutlibMessages(lh)); result.layoutlib_hazards = lh; }
+        // G42 (PR #867): a container guard that does not check the engine's OSType; a skip with no reason
+        const cg = er.containerGuardHazards(projectRoot, pjs);
+        if (cg.length) { result.warnings.push(...er.containerGuardMessages(cg)); result.container_guard_hazards = cg; }
+      } catch { /* auxiliar */ }
+      // G43 (OxeSpace 15/11, OxeCode F6 T42): a registry in the task's scope whose checked manifest is not
+      try {
+        const lintCfg43 = ((readProjectConfig(projectRoot) || {}).lint || {});
+        const rg = si.registryManifestGaps(projectRoot, pjs, { pairs: lintCfg43.registry_pairs, detect: lintCfg43.registry_detect === true });
+        if (rg.length) {
+          const rm = si.registryManifestMessages(rg, { level: lintCfg43.registry_pairs_level === 'error' ? 'error' : 'warn' });
+          result.errors.push(...rm.errors);
+          result.warnings.push(...rm.warnings);
+          result.registry_manifest_gaps = rg;
+        }
+      } catch { /* auxiliar */ }
+      // G44 (OxeSpace 15/11, OxeCode F6 T34): a path or component cited in the task / its frozen tests, out of its scope
+      try {
+        const lintCfg44 = ((readProjectConfig(projectRoot) || {}).lint || {});
+        const cp = require('./oxe-cited-paths.cjs');
+        const gaps = cp.citedPathGaps(projectRoot, pjs);
+        if (gaps.length) {
+          const level = (lintCfg44.cited_paths_level || lintCfg44.registry_pairs_level) === 'error' ? 'error' : 'warn';
+          const cm = cp.citedPathMessages(gaps, { level });
+          result.errors.push(...cm.errors);
+          result.warnings.push(...cm.warnings);
+          result.cited_path_gaps = gaps;
+        }
+      } catch { /* auxiliar */ }
+      // G39 (OxeSpace 15/11, OxeQuery polish T1): an existing frozen test pins by exact equality what a task extends
+      const pinned = si.pinnedByExisting(projectRoot, pjs);
+      if (pinned.length) {
+        const pm = si.pinnedMessages(pinned, { mode });
+        result.errors.push(...pm.errors);
+        result.warnings.push(...pm.warnings);
+        result.pinned_by_existing = pinned;
+      }
+    }
+    if (pjs) {
+      // G45 & G46 (OXB-C1 P2 #5 & #7): cross-card frozen test conflicts (removed/hidden tokens & count bounds) + lint.rate_limits
+      const lintCfg45 = ((readProjectConfig(projectRoot) || {}).lint || {});
+      const ccLib = require('./oxe-cross-card-conflicts.cjs');
+      if (lintCfg45.cross_card_conflicts !== 'off') {
+        const cc = ccLib.crossCardFrozenConflicts(projectRoot, pjs, { specText: readTextIfExists(paths.spec) || '' });
+        if (cc.length) {
+          const cm = ccLib.crossCardConflictMessages(cc, { level: lintCfg45.cross_card_conflicts === 'error' ? 'error' : 'warn' });
+          result.errors.push(...cm.errors);
+          result.warnings.push(...cm.warnings);
+          result.cross_card_conflicts = cc;
+        }
+      }
+      if (lintCfg45.rate_limits) {
+        const rl = ccLib.rateLimitHazards(projectRoot, pjs, { rules: lintCfg45.rate_limits });
+        if (rl.length) {
+          const rm = ccLib.rateLimitMessages(rl, { level: lintCfg45.rate_limits_level === 'error' ? 'error' : 'warn' });
+          result.errors.push(...rm.errors);
+          result.warnings.push(...rm.warnings);
+          result.rate_limit_hazards = rl;
+        }
+      }
+      // G47 (OXB-C1 Adendo 2, OQ T1 / OXE-220): file-size headroom warning (<= ~20 lines from cap) + task.notes delegation note
+      if (lintCfg45.file_size !== false && lintCfg45.file_size !== 'off') {
+        const fsg = require('./oxe-file-size-guard.cjs');
+        const packDoc47 = readJsonQuiet(paths.implementationPack);
+        const cfg47 = readProjectConfig(projectRoot) || {};
+        const fsh = fsg.fileSizeHeadroomFindings(projectRoot, pjs, { pack: packDoc47, config: cfg47 });
+        if (fsh.length) {
+          const fsm = fsg.fileSizeHeadroomMessages(fsh, { level: lintCfg45.file_size_level === 'error' ? 'error' : 'warn' });
+          result.errors.push(...fsm.errors);
+          result.warnings.push(...fsm.warnings);
+          result.file_size_headroom = fsh;
+          if (options.annotateFileSize !== false && lintCfg45.file_size_annotate !== false) {
+            const planJsonPath47 = require('./oxe-plan-json.cjs').planJsonPathFor(paths.plan);
+            if (planJsonPath47 && fs.existsSync(planJsonPath47)) {
+              const ann = fsg.annotatePlanFileSizeNotes(projectRoot, pjs, { findings: fsh, pack: packDoc47, config: cfg47 });
+              if (ann.updatedTasks.length) {
+                fs.writeFileSync(planJsonPath47, `${JSON.stringify(pjs, null, 2)}\n`, 'utf8');
+                result.file_size_notes_updated = ann.updatedTasks;
+              }
+            }
+          }
+        }
+      }
+      // G48 (OXB-C1 Adendo 2, OQ T13 / OXE-223): CSS class removal in plan with out-of-scope consumers in src/
+      if (lintCfg45.css_classes !== false && lintCfg45.css_classes !== 'off') {
+        const dh48 = require('./oxe-dom-hooks.cjs');
+        const cssGaps = dh48.lintPlanCssRemovals(projectRoot, pjs);
+        if (cssGaps.length) {
+          const cssMsgs = dh48.cssRemovalLintMessages(cssGaps, { level: lintCfg45.css_classes_level === 'error' ? 'error' : 'warn' });
+          result.errors.push(...cssMsgs.errors);
+          result.warnings.push(...cssMsgs.warnings);
+          result.css_removal_gaps = cssGaps;
+        }
+      }
+    }
+  } catch { /* auxiliar */ }
   // OXB-171: the product files a task's frozen tests import/read must be in its scope (or a dependency's); T8 of F2
   // retried 3× a test on shared/types/ipc.ts that was outside its files. config lint.test_scope: "error" makes it fatal.
   try {
@@ -4528,6 +6993,12 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
       const msgs = testScope.scopeGapMessages(testScope.scopeGaps(projectRoot, pj));
       const cfgLint = (readProjectConfig(projectRoot) || {}).lint || {};
       (cfgLint.test_scope === 'error' ? result.errors : result.warnings).push(...msgs);
+      // OXB-C6 #6 (P2): warn when frozen acceptance tests live in a config/dir never executed by package.json or CI workflows
+      const unrunCi = require('./oxe-suite-impact.cjs').findUnrunFrozenAcceptanceCi(projectRoot, pj);
+      if (unrunCi.length) {
+        result.unrun_acceptance_ci = unrunCi;
+        result.warnings.push(...require('./oxe-suite-impact.cjs').unrunFrozenAcceptanceCiMessages(unrunCi));
+      }
     }
   } catch { /* auxiliar */ }
   result.ok = result.errors.length === 0;
@@ -4602,6 +7073,10 @@ function runtimeDossier(projectRoot, activeSession, options = {}) {
   const program = paths.programDir ? programLib.readProgram(paths.programDir) : null;
   const phaseId = options.phase || (program && program.active_phase) || null;
   const phase = program && phaseId ? program.phases.find((p) => p.id === phaseId) || null : null;
+  const hasNextPhase = Boolean(program && Array.isArray(program.phases) && phaseId && program.phases.some((p, idx) => p && p.id === phaseId && idx < program.phases.length - 1));
+  const activePhaseWarning = (program && !options.phase && !program.active_phase)
+    ? 'PROGRAM.json está com active_phase: null — rode `oxe-cc runtime program start --phase F1` (ou passe `--phase Fn`)'
+    : null;
   const run = options.runState || readRunState(projectRoot, activeSession) || {};
   const planText = readTextIfExists(paths.plan) || '';
   const plan = attachAcceptanceLock(parsePlanArtifact(parsers, planText, paths.plan), run, projectRoot);
@@ -4616,19 +7091,47 @@ function runtimeDossier(projectRoot, activeSession, options = {}) {
     run,
     events,
     changes: phaseChanges(projectRoot, base),
+    // Bench B33: files the OXE itself writes (ADRs of `decision add`, `docs publish` targets) are not drift.
+    generatedGlobs: (() => {
+      const cfg = readProjectConfig(projectRoot) || {};
+      const clean = (d) => String(d).replace(/\\/g, '/').replace(/\/+$/, '');
+      const out = [];
+      try { const adr = require('./oxe-adr.cjs').adrDir(cfg); if (adr) out.push(`${clean(adr)}/**`); } catch { /* auxiliary */ }
+      try {
+        const docs = require('./oxe-docs-publish.cjs').docsDir(cfg);
+        if (docs) for (const sub of ['product', 'rfc', 'adr', 'architecture']) out.push(`${clean(docs)}/${sub}/**`);
+      } catch { /* auxiliary */ }
+      return out;
+    })(),
     // OXB-080: frozen tests parked for later phases (config `parked_tests`, default tests/acceptance/**) and the phase's
     // audited drift waivers (`program close --accept-drift <glob> --by --reason`).
     parkedGlobs: (() => {
       const cfg = readProjectConfig(projectRoot) || {};
-      return Array.isArray(cfg.parked_tests) ? cfg.parked_tests.map(String) : ['tests/acceptance/**'];
+      if (Array.isArray(cfg.parked_tests)) return cfg.parked_tests.map(String);
+      // lean (bench): the default was only `tests/acceptance/**`. A project that keeps its frozen tests elsewhere
+      // (`test/acceptance/`) had every shared test helper and every quick's test flagged as drift, and the agent
+      // waived it by itself. The folders where this plan's own frozen tests live are acceptance folders too.
+      const globs = new Set(['tests/acceptance/**', 'test/acceptance/**']);
+      try {
+        const { doc: planDoc } = readPlanJsonDoc(projectRoot, activeSession);
+        for (const a of (planDoc && planDoc.acceptance_tests) || []) {
+          for (const f of a.files || []) {
+            const dir = path.posix.dirname(String(typeof f === 'string' ? f : (f && f.path) || '').replace(/\\/g, '/'));
+            if (dir && dir !== '.') globs.add(`${dir}/**`);
+          }
+        }
+      } catch { /* the defaults stand */ }
+      return [...globs];
     })(),
     waivedGlobs: readNdjsonQuiet(path.join(programDir, 'changes.ndjson'))
       .filter((r) => r && r.kind === 'drift_waiver' && (!phaseId || r.phase === phaseId))
       .flatMap((r) => r.globs || []),
     hashFile: (rel) => { const rt = loadRuntimeModule(); return rt && typeof rt.sha256File === 'function' ? rt.sha256File(path.resolve(projectRoot, rel)) : null; },
+    fileMatches: (rel, sha) => { const rt = loadRuntimeModule(); return rt && typeof rt.frozenFileMatches === 'function' ? rt.frozenFileMatches(path.resolve(projectRoot, rel), sha) : (rt && rt.sha256File(path.resolve(projectRoot, rel))) === sha; },
     decisions: readNdjsonQuiet(path.join(programDir, 'decisions.ndjson')),
     notes: readNdjsonQuiet(path.join(programDir, 'notes.ndjson')).filter((n) => !phaseId || !n.phase || n.phase === phaseId),
     signoffs: readNdjsonQuiet(path.join(programDir, 'signoffs.ndjson')).filter((s) => !phaseId || s.phase === phaseId),
+    byCi: Boolean(options.byCi),
     deploys: readNdjsonQuiet(path.join(programDir, 'deploy.ndjson')).filter((d) => !phaseId || !d.phase || d.phase === phaseId),
   });
   // Gatekeeper: regras do projeto (config.json policy_rules) sobre os arquivos tocados na fase.
@@ -4666,7 +7169,19 @@ function runtimeDossier(projectRoot, activeSession, options = {}) {
   } catch {
     // STATE é projeção auxiliar; nunca falha o dossiê.
   }
-  return { dir, phase: phaseId, base, issues: built.issues, pending: built.pending, untouched: built.untouched, handoff_filled: handoffFilled, totals: built.totals, api_surface: apiSurface };
+  return {
+    dir,
+    phase: phaseId,
+    base,
+    issues: built.issues,
+    pending: built.pending,
+    untouched: built.untouched,
+    handoff_filled: handoffFilled,
+    handoff_required: hasNextPhase,
+    ...(activePhaseWarning ? { warning: activePhaseWarning } : {}),
+    totals: built.totals,
+    api_surface: apiSurface,
+  };
 }
 
 const STATE_PHASE_BY_STATUS = { pending: 'spec_ready', planning: 'spec_ready', executing: 'executing', verifying: 'executing', closed: 'verify_complete', reopened: 'executing' };
@@ -4812,7 +7327,38 @@ function runtimeSignoff(projectRoot, activeSession, options = {}) {
 // ─── Ciclo de correção: Change Requests (1.20b) ───────────────────────────────
 
 function readProjectConfig(projectRoot) {
-  return readJsonQuiet(path.join(projectRoot, '.oxe', 'config.json')) || {};
+  const rootCfg = readJsonQuiet(path.join(projectRoot, 'oxe.config.json'));
+  const dotCfg = readJsonQuiet(path.join(projectRoot, '.oxe', 'config.json'));
+  if (rootCfg && typeof rootCfg === 'object' && dotCfg && typeof dotCfg === 'object') {
+    return { ...rootCfg, ...dotCfg };
+  }
+  return dotCfg || rootCfg || {};
+}
+
+function resolveConfigVerifyTimeoutMs(projectRoot, cfg, defaultMs = 10 * 60_000) {
+  const pick = (c) => {
+    if (!c || typeof c !== 'object') return 0;
+    for (const v of [
+      c.verify_timeout_ms,
+      c.execute && c.execute.verify_timeout_ms,
+      c.executor && c.executor.verify_timeout_ms,
+      c.verify && (c.verify.timeout_ms || c.verify.verify_timeout_ms),
+    ]) {
+      if (Number(v) > 0) return Number(v);
+    }
+    return 0;
+  };
+  const local = pick(cfg || readProjectConfig(projectRoot));
+  if (local > 0) return local;
+  try {
+    const common = (gitLines(projectRoot, ['rev-parse', '--path-format=absolute', '--git-common-dir']) || [])[0];
+    const main = common ? path.dirname(common) : null;
+    if (main && path.resolve(main) !== path.resolve(projectRoot)) {
+      const fromMain = pick(readProjectConfig(main));
+      if (fromMain > 0) return fromMain;
+    }
+  } catch { /* no git */ }
+  return defaultMs;
 }
 
 /**
@@ -4828,14 +7374,25 @@ function runtimeFeedback(projectRoot, activeSession, options = {}) {
   const program = programLib.readProgram(programDir);
   const planText = readTextIfExists(paths.plan) || '';
   const plan = parsers && planText ? parsePlanArtifact(parsers, planText, paths.plan) : { tasks: [] };
+  // OxeSpace 14/11 (Celular F3, CR-X-1): a criterion of a phase not started yet got phase "-"; like spec amend, the
+  // phase is the one that owns the criterion when --phase is not given
+  const firstCriterion = (Array.isArray(options.criteria) ? options.criteria : String(options.criteria || '').split(',')).map((c) => String(c).trim().toUpperCase()).filter(Boolean)[0] || null;
+  const phase = options.phase || (firstCriterion ? phaseOfCriterion(program, firstCriterion) : null) || undefined;
   const result = changeLib.recordChange({
     programDir, program, plan,
     class: options.class, summary: options.summary, criteria: options.criteria, by: options.by,
-    phase: options.phase, amendTo: options.amendTo, evidence: options.evidence, additive: Boolean(options.additive),
+    phase, amendTo: options.amendTo, evidence: options.evidence, additive: Boolean(options.additive),
     specEdit: options.specEdit || null,
+    dryRun: Boolean(options.dryRun),
     tasks: options.tasks ? (Array.isArray(options.tasks) ? options.tasks : String(options.tasks).split(',')).map((t) => String(t).trim().toUpperCase()).filter((t) => /^T\d+$/.test(t)) : [],
     rating: require('./oxe-findings.cjs').rate(projectRoot, { rule: options.rule || null, severity: options.severity || null }),
   });
+  // OXB-C30 P1: --dry-run used to write the CR for real (CR-F6-37). Preview only: nothing in changes.ndjson,
+  // PROGRAM.json, PLAN.json, the event log or STATE.md.
+  if (options.dryRun) {
+    const preview = selectTasksToReopen(paths.plan, plan, result, options.tasks);
+    return { ...result, dry_run: true, would_reopen_phase: result.reopened, reopened: false, program: undefined, reopened_tasks: [], would_reopen_tasks: options.reopen === true && (result.cr.class === 'defect' || result.cr.class === 'spec_gap') ? preview.targets : [], linked_tasks: preview.targets, impacted_not_reopened: result.impacted || [], external_not_reopened: preview.external, ...(preview.unknown.length ? { unknown_tasks: preview.unknown } : {}) };
+  }
   if (result.reopened && result.program) programLib.writeProgram(programDir, result.program);
   // 1.21.1: a defect or spec_gap reopens tasks (done → open), so the next execute redoes exactly them.
   // OXB-061: only what the CR targets. `--tasks T7` names them; without it, the criterion's closer task (the one that
@@ -4846,14 +7403,19 @@ function runtimeFeedback(projectRoot, activeSession, options = {}) {
   // OXB-173: `--tasks` LINKS the CR to the tasks; it reopens them only with `--reopen` (F2 CR-36 flipped T5, done with
   // 335fc004, to open in silence — the next execute would have paid for merge-ready work again).
   const explicitTasks = Boolean(options.tasks && String(options.tasks).trim());
-  const mayReopen = !explicitTasks || options.reopen === true;
+  // 1.21.2: reopening is always explicit (--reopen). A task done with its commit is never reopened in silence — the
+  // CR only links it, and the output says the command that reopens (F2 CR-36: T5 had to be restored by hand).
+  const mayReopen = options.reopen === true;
   if ((result.cr.class === 'defect' || result.cr.class === 'spec_gap') && mayReopen) {
     const planJsonLib = require('./oxe-plan-json.cjs');
     for (const taskId of selection.targets) {
       if (planJsonLib.markPlanTaskOpen(paths.plan, taskId, { by: result.cr.id })) reopenedTasks.push(taskId);
     }
   }
-  if (explicitTasks && !mayReopen) result.linked_tasks = selection.targets;
+  if (!mayReopen && (result.cr.class === 'defect' || result.cr.class === 'spec_gap') && selection.targets.length) {
+    result.linked_tasks = selection.targets;
+    result.reopen_hint = `oxe-cc runtime feedback … --tasks ${selection.targets.join(',')} --reopen (reabre ${selection.targets.join(', ')} para o próximo execute)`;
+  } else if (explicitTasks && !mayReopen) result.linked_tasks = selection.targets;
   result.reopened_tasks = reopenedTasks;
   result.impacted_not_reopened = (result.impacted || []).filter((id) => !reopenedTasks.includes(id) && !selection.external.includes(id));
   result.external_not_reopened = selection.external;
@@ -5025,12 +7587,54 @@ function runtimeSpecAmend(projectRoot, activeSession, options = {}) {
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const specText = readTextIfExists(paths.spec);
   if (!specText) throw new Error(`SPEC.md não encontrada (${paths.spec})`);
-  const edit = specEdit.amendCriterion(specText, id, { text: options.text, append: options.append, verify: options.verify });
+  const edit = specEdit.amendCriterion(specText, id, { text: options.text, append: options.append, verify: options.verify, risk: options.risk });
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
   const program = programLib.readProgram(programDir);
   const current = changeLib.amendmentRequirements(programDir).get(id);
-  const version = (current ? current.required : 1) + 1;
   const phase = options.phase || phaseOfCriterion(program, id) || (program && program.active_phase) || null;
+  // OxeSpace 14/11 (OxeChat F2): the amendment an open spec_gap CR asked for went into a NEW CR and to v3. With
+  // --cr CR-n (or the one open spec_gap CR on this criterion with no amendment yet) it is that CR's amendment: no new
+  // CR, and the version that CR asked for — one bump per CR.
+  const openGap = changeLib.listChanges(programDir).filter((cr) => cr.class === 'spec_gap' && cr.status === 'open' && (cr.criteria || []).includes(id));
+  let target = null;
+  if (options.cr) {
+    const want = String(options.cr).toUpperCase();
+    target = changeLib.listChanges(programDir).find((cr) => cr.id === want) || null;
+    if (!target) throw new Error(`${want} não existe (oxe-cc runtime feedback list)`);
+    if (target.status !== 'open' || !['spec_gap', 'constraint'].includes(target.class)) {
+      throw new Error(`${want} é ${target.class} ${target.status}: só um CR aberto (spec_gap ou constraint) recebe emenda`);
+    }
+    // OxeSpace 15/11 (Approvals polish): A2 and A3 amended under CR-01 opened CR-02/CR-03 by themselves. The CR named
+    // with --cr takes the amendment: a criterion it did not cite joins it (recorded), never a new CR.
+    if (!(target.criteria || []).includes(id)) {
+      changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'criteria', id: target.id, criteria: [id], by, reason, at: new Date().toISOString() });
+      target.criteria = [...(target.criteria || []), id];
+      target._attached = true;
+    }
+  } else {
+    // a CR whose amendment is already in the SPEC (its own spec_edit, or one attached later) asks for nothing more
+    const attached = new Set(changeLib.readNdjson(changeLib.changesFile(programDir)).filter((r) => r && r.kind === 'spec_edit' && r.action === 'amend_criterion' && r.cr).map((r) => r.cr));
+    const pending = openGap.filter((cr) => !cr.spec_edit && !cr.specEdit && !attached.has(cr.id));
+    if (pending.length === 1) target = pending[0];
+  }
+  if (target) {
+    // cross-review 15/11 (R29): a criterion that joins the CR now may already be at v2/v3 by an earlier CR — its version
+    // goes one past its current one (never back); a criterion the CR cited keeps the CR's version (one bump per CR)
+    const joined = Boolean(target._attached);
+    delete target._attached;
+    const isConstraint = target.class === 'constraint';
+    // OXB-C2 #1: a constraint CR (frozen test release) does NOT bump the SPEC required version
+    const version = isConstraint
+      ? (current ? current.required : 1)
+      : (joined ? Math.max(target.amend_to || 2, (current ? current.required : 1) + 1) : target.amend_to || 2);
+    const additive = Boolean(options.additive || target.amendment === 'additive');
+    const record = { kind: 'spec_edit', action: 'amend_criterion', id, cr: target.id, version, ...(isConstraint ? { constraint_release: true } : {}), by, reason, file: path.relative(projectRoot, paths.spec).replace(/\\/g, '/'), before: edit.before, after: edit.after, at: new Date().toISOString() };
+    changeLib.appendNdjson(changeLib.changesFile(programDir), record);
+    writeTextAtomic(paths.spec, edit.text);
+    appendEvent(projectRoot, activeSession, { type: 'SpecAmended', payload: { id, version, cr: target.id, attached: true, additive, phase } });
+    return { cr: target, attached: true, id, version, phase, before: edit.before, after: edit.after, reopened_tasks: [], export: autoExportProgram(projectRoot, activeSession) };
+  }
+  const version = (current ? current.required : 1) + 1;
   const result = runtimeFeedback(projectRoot, activeSession, {
     class: 'spec_gap', summary: reason, criteria: id, by, phase, amendTo: version, additive: Boolean(options.additive),
     specEdit: { file: path.relative(projectRoot, paths.spec).replace(/\\/g, '/'), before: edit.before, after: edit.after },
@@ -5054,7 +7658,7 @@ function runtimeSpecAdd(projectRoot, activeSession, options = {}) {
   const specText = readTextIfExists(paths.spec);
   if (!specText) throw new Error(`SPEC.md não encontrada (${paths.spec})`);
   const edit = kind === 'criterion'
-    ? specEdit.addCriterion(specText, options.id, { text: options.text, verify: options.verify, allowGap: options.allowGap })
+    ? specEdit.addCriterion(specText, options.id, { text: options.text, verify: options.verify, risk: options.risk, allowGap: options.allowGap })
     : specEdit.addRequirement(specText, options.id, { text: options.text, version: options.version, criteria: options.criteria, before: options.before, allowGap: options.allowGap });
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
   const record = {
@@ -5084,6 +7688,65 @@ function runtimeSpecAdd(projectRoot, activeSession, options = {}) {
 }
 
 /**
+ * OXB-C30 (8e 22/11): `oxe-cc program phase restore-close Fn --from-history --by <papel> --reason "…" [--dry-run]`.
+ * A phase reopened by a CR that changed no code (the pre-C30 constraint CR of a frozen-test release reopened 152code
+ * F6) gets its close back: status, closed_at and closed_commit from the last close in its history, so the close's
+ * coverage stands. Refused when a code-changing CR (defect / spec_gap, not withdrawn) on the phase landed after that
+ * close, or when the closed commit is gone. PROGRAM.json is never edited by hand.
+ */
+function runtimeProgramPhaseRestoreClose(projectRoot, activeSession, options = {}) {
+  const programLib = require('./oxe-program.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const dryRun = Boolean(options.dryRun);
+  const { by, reason } = dryRun ? { by: String(options.by || '').trim() || '?', reason: String(options.reason || '').trim() } : requireEditReason(options);
+  if (!options.fromHistory) throw new Error('informe a fonte do close: --from-history (o último close do histórico da fase)');
+  const phaseId = String(options.phase || '').trim().toUpperCase();
+  if (!/^F\d+$/.test(phaseId)) throw new Error('informe a fase: oxe-cc program phase restore-close Fn --from-history --by <papel> --reason "…"');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const program = programLib.readProgram(programDir);
+  if (!program) throw new Error('sem programa (.oxe/program/PROGRAM.json)');
+  const phase = program.phases.find((p) => p.id === phaseId);
+  if (!phase) throw new Error(`fase ${phaseId} não existe no programa`);
+  if (phase.status === 'closed') throw new Error(`fase ${phaseId} já está fechada`);
+  const last = [...(phase.history || [])].reverse().find((h) => h && h.closed_at);
+  if (!last) throw new Error(`fase ${phaseId} não tem close no histórico: não há o que restaurar (feche com oxe-cc runtime program close)`);
+  const closedAt = Date.parse(last.closed_at);
+  const blocking = changeLib.listChanges(programDir).filter((cr) => cr.phase === phaseId
+    && (cr.class === 'defect' || cr.class === 'spec_gap')
+    && cr.status !== 'withdrawn'
+    && Number.isFinite(Date.parse(cr.at)) && Date.parse(cr.at) > closedAt);
+  if (blocking.length) {
+    throw new Error(`${phaseId}: ${blocking.map((cr) => `${cr.id} (${cr.class}, ${cr.status})`).join(', ')} chegou depois do close de ${last.closed_at} e muda código ou critério — a fase precisa de um close novo (oxe-cc runtime program close), ou retire o CR (runtime feedback withdraw) se ele não vale`);
+  }
+  if (last.closed_commit) {
+    const r = spawnSync('git', ['cat-file', '-e', `${last.closed_commit}^{commit}`], { cwd: projectRoot, windowsHide: true });
+    if (r.status !== 0) throw new Error(`o commit do close (${String(last.closed_commit).slice(0, 12)}) não existe neste repositório: não dá para restaurar`);
+  }
+  const reopenCr = last.cr ? changeLib.listChanges(programDir).find((cr) => cr.id === last.cr) || null : null;
+  const out = {
+    phase: phaseId, from_status: phase.status, closed_at: last.closed_at, closed_commit: last.closed_commit || null,
+    reopened_at: last.reopened_at || null, reopened_by_cr: last.cr || null, reopened_by_class: reopenCr ? reopenCr.class : null,
+    dry_run: dryRun,
+  };
+  if (dryRun) return out;
+  const at = new Date().toISOString();
+  const next = JSON.parse(JSON.stringify(program));
+  const target = next.phases.find((p) => p.id === phaseId);
+  target.status = 'closed';
+  target.closed_at = last.closed_at;
+  target.closed_commit = last.closed_commit || null;
+  target.history = [...(target.history || []), { restored_at: at, restored_close_at: last.closed_at, from_status: phase.status, by, reason }];
+  if (next.active_phase === phaseId) next.active_phase = null;
+  next.updated_at = at;
+  programLib.writeProgram(programDir, next);
+  changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'phase_restore_close', phase: phaseId, closed_at: last.closed_at, closed_commit: last.closed_commit || null, reopened_by_cr: last.cr || null, from_status: phase.status, by, reason, at });
+  appendEvent(projectRoot, activeSession, { type: 'PhaseCloseRestored', payload: { phase: phaseId, closed_at: last.closed_at, closed_commit: last.closed_commit || null, reopened_by_cr: last.cr || null, by } });
+  try { projectStateMd(projectRoot, activeSession); } catch { /* projeção auxiliar */ }
+  return { ...out, export: autoExportProgram(projectRoot, activeSession) };
+}
+
+/**
  * `oxe-cc program phase add --after Fn --title … --requirements R14 --acceptance A42,A43 [--scope …]`: inserts phase
  * F(n+1) in ROADMAP.md and PROGRAM.json and renumbers the later phases (+1). It refuses when a phase it would renumber
  * has started (status ≠ pending, plan_ref, run_id or started_at). Change records that pointed at a renumbered phase
@@ -5107,6 +7770,17 @@ function runtimeProgramPhaseAdd(projectRoot, activeSession, options = {}) {
   const list = (v) => (Array.isArray(v) ? v : String(v || '').split(',')).map((x) => x.trim().toUpperCase()).filter(Boolean);
   const requirements = list(options.requirements);
   const acceptance = list(options.acceptance);
+  // OxeSpace 14/11 (OxeCode F4): run twice, phase add duplicated F4/F5 and wrote the ROADMAP three times. Same title
+  // right after --after → already done (idempotent, nothing written); the title or a criterion owned by another
+  // phase → refused (a criterion moves with `program criterion move`).
+  const normTitle = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const sameTitle = state.phases.find((p) => normTitle(p.title) === normTitle(title));
+  if (sameTitle) {
+    if (state.phases[idx + 1] === sameTitle) return { phase: sameTitle.id, after: afterNorm, already: true, renumbered: [], moved_change_records: 0, warnings: [`${sameTitle.id} "${sameTitle.title}" já existe depois de ${afterNorm}: nada foi gravado`], leftovers: [] };
+    throw new Error(`já existe a fase ${sameTitle.id} "${sameTitle.title}" — nada foi gravado (edite-a com program phase edit ${sameTitle.id})`);
+  }
+  const owned = acceptance.map((a) => [a, state.phases.find((p) => (p.acceptance || []).map((x) => String(x).toUpperCase()).includes(a))]).filter(([, p]) => p);
+  if (owned.length) throw new Error(`critério(s) já de outra fase: ${owned.map(([a, p]) => `${a} (${p.id})`).join(', ')} — nada foi gravado; mova com program criterion move ${owned[0][0]} --to <fase>`);
   const later = state.phases.slice(idx + 1);
   const started = later.filter((p) => p.status !== 'pending' || p.plan_ref || p.run_id || p.started_at || state.active_phase === p.id);
   if (started.length) {
@@ -5130,8 +7804,13 @@ function runtimeProgramPhaseAdd(projectRoot, activeSession, options = {}) {
   if (depMap.size) {
     roadmapEdit.text = roadmapEdit.text.replace(/^(\*\*(?:Depende de|Depends on|Dependências|Dependencies):\*\*)(.*)$/gim, (_m, label, rest) => `${label}${rest.replace(/\bF(\d+)\b/g, (id) => depMap.get(id) || id)}`);
   }
+  // --depends-on was accepted but not stored (OxeSpace 14/11, OxeCode F4 after F3 depending on F2): the start then
+  // asked to close F3 first. Ids follow the renumbering above.
+  const dependsOn = list(options.dependsOn).map((d) => (/^\d+$/.test(d) ? `F${d}` : d)).map((d) => depMap.get(d) || d);
+  for (const d of dependsOn) if (!next.phases.some((p) => p.id === d)) throw new Error(`--depends-on ${d}: a fase não existe no programa`);
   next.phases.splice(idx + 1, 0, {
     id: newId, title, requirements, acceptance, scope: options.scope ? String(options.scope) : null,
+    ...(dependsOn.length ? { depends_on: dependsOn } : {}),
     status: 'pending', plan_ref: null, run_id: null, started_at: null, closed_at: null, closed_commit: null, regression_ref: null, interfaces_ref: null,
   });
   next.updated_at = new Date().toISOString();
@@ -5180,22 +7859,99 @@ function dirtyProjectPaths(projectRoot) {
 }
 
 /** runChildCommand, plus the whole (bounded) output — OXB-172 reads the failing test files from it. */
-function runChildCommandFull(projectRoot, command, timeoutMs = 600_000) {
-  applyChildEnvPolicy(projectRoot);
+/**
+ * The verify timeout of `runtime commit-task` for one command (R53): an explicit --verify-timeout-ms wins; a
+ * remote-verify command gets at least its own 30 min (the CI queue and run), above the project's verify_timeout_ms.
+ */
+function commitTaskVerifyTimeout(projectRoot, options, cmd, base) {
+  if (Number(options.verifyTimeoutMs) > 0) return Number(options.verifyTimeoutMs);
+  try {
+    const pc = require('./oxe-test-precheck.cjs');
+    if (pc.isRemoteVerify(cmd)) return Math.max(base, pc.REMOTE_VERIFY_TIMEOUT_MS);
+  } catch { /* the base */ }
+  return base;
+}
+
+/** "… estourou o tempo (cmd, N min; …)" with the output's tail when there is one (R53). */
+function timedOutMessage(what, cmd, ms, res) {
+  const snippet = String((res && (res.tail || res.output)) || '').trim().slice(-300);
+  return `${what} estourou o tempo (\`${cmd}\`, ${ms >= 60_000 ? `${Math.round(ms / 60_000)} min` : `${Math.round(ms / 1000)} s`}; verify_timeout_ms no config ou --verify-timeout-ms)${snippet ? `: ${snippet}` : ''}`;
+}
+
+function splitVerifyCommandSegments(command) {
   const rt = loadRuntimeModule();
-  const env = rt && typeof rt.childProcessEnv === 'function' ? rt.childProcessEnv(process.env) : (() => { const e = { ...process.env }; delete e.NODE_TEST_CONTEXT; return e; })();
-  const res = spawnSync(command, { cwd: projectRoot, shell: true, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, windowsHide: true, env });
+  if (rt && typeof rt.splitVerifySegments === 'function') return rt.splitVerifySegments(command);
+  const out = [];
+  let cur = '';
+  let q = null;
+  const s = String(command || '');
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i];
+    if (q) { if (ch === q) q = null; }
+    else if (ch === '"' || ch === "'") q = ch;
+    else if (ch === '&' && s[i + 1] === '&') {
+      if (cur.trim()) out.push(cur.trim());
+      cur = '';
+      i += 1;
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out.length ? out : [s];
+}
+
+/**
+ * OXB-C1 (#6): Runs every segment of `commands` (splitting `&&` subcommands), collecting all failing segments when
+ * `allSegments` is enabled (default true in `commit-task`, opt-out via `--fail-fast` or `verify.all_segments: false`).
+ */
+function runVerifyCommandSegments(projectRoot, options, commands, verifyTimeoutMs, label, { allSegments = true } = {}) {
+  const segments = (commands || []).flatMap((c) => splitVerifyCommandSegments(c)).map((s) => String(s || '').trim()).filter(Boolean);
+  const failed = [];
+  for (let i = 0; i < segments.length; i += 1) {
+    const seg = segments[i];
+    const ms = commitTaskVerifyTimeout(projectRoot, options, seg, verifyTimeoutMs);
+    const res = runChildCommandFull(projectRoot, seg, ms);
+    if (!res.ok) {
+      failed.push({ index: i + 1, total: segments.length, command: seg, ms, res });
+      if (!allSegments) break;
+    }
+  }
+  if (!failed.length) return { ok: true, segments: segments.length, failed: [] };
+  if (failed.length === 1) {
+    const f = failed[0];
+    if (f.res.timedOut) throw new Error(timedOutMessage(label, f.command, f.ms, f.res));
+    throw new Error(`${label} falhou (\`${f.command}\`): ${String(f.res.tail || f.res.output || '').trim().slice(-500)}`);
+  }
+  const lines = failed.map((f) => {
+    const detail = f.res.timedOut
+      ? timedOutMessage(label, f.command, f.ms, f.res)
+      : `exit ${f.res.status ?? 1}: ${String(f.res.tail || f.res.output || '').trim().slice(-350)}`;
+    return `  [${f.index}/${f.total}] \`${f.command}\` — ${detail}`;
+  });
+  throw new Error(`${label} falhou em ${failed.length}/${segments.length} segmentos:\n${lines.join('\n')}`);
+}
+
+function runChildCommandFull(projectRoot, command, timeoutMs = 600_000) {
+  const rt = loadRuntimeModule();
+  const env = childEnvForProject(projectRoot, process.env);
+  const inv = rt && typeof rt.shellInvocation === 'function' ? rt.shellInvocation(command) : null;
+  const res = inv
+    ? spawnSync(inv.file, inv.args, { cwd: projectRoot, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, windowsHide: true, windowsVerbatimArguments: inv.windowsVerbatimArguments, env })
+    : spawnSync(command, { cwd: projectRoot, shell: true, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, windowsHide: true, env });
   const output = `${res.stdout || ''}\n${res.stderr || ''}`;
-  return { ok: res.status === 0, status: res.status, tail: output.split(/\r?\n/).filter(Boolean).slice(-15).join('\n'), output: output.slice(-200_000) };
+  // killed by the timeout (OxeSpace 15/11, OQ T18): a timed-out verify is not a failed one
+  const timedOut = Boolean(res.error && res.error.code === 'ETIMEDOUT');
+  return { ok: res.status === 0, status: res.status, timedOut, tail: output.split(/\r?\n/).filter(Boolean).slice(-15).join('\n'), output: output.slice(-200_000) };
 }
 
 function runChildCommand(projectRoot, command, timeoutMs = 600_000) {
-  applyChildEnvPolicy(projectRoot);
   const rt = loadRuntimeModule();
-  const env = rt && typeof rt.childProcessEnv === 'function'
-    ? rt.childProcessEnv(process.env)
-    : (() => { const e = { ...process.env }; delete e.NODE_TEST_CONTEXT; return e; })();
-  const res = spawnSync(command, { cwd: projectRoot, shell: true, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, windowsHide: true, env });
+  const env = childEnvForProject(projectRoot, process.env);
+  const inv = rt && typeof rt.shellInvocation === 'function' ? rt.shellInvocation(command) : null;
+  const res = inv
+    ? spawnSync(inv.file, inv.args, { cwd: projectRoot, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, windowsHide: true, windowsVerbatimArguments: inv.windowsVerbatimArguments, env })
+    : spawnSync(command, { cwd: projectRoot, shell: true, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, windowsHide: true, env });
   const output = `${res.stdout || ''}\n${res.stderr || ''}`;
   return { ok: res.status === 0, status: res.status, tail: output.split(/\r?\n/).filter(Boolean).slice(-15).join('\n') };
 }
@@ -5205,22 +7961,60 @@ function runChildCommand(projectRoot, command, timeoutMs = 600_000) {
  * through bin/lib/oxe-progress-run.cjs. `quiet` keeps the progress off the terminal (tests, --json).
  */
 function runProgressCommand(cwd, command, timeoutMs = 1_800_000, options = {}) {
-  applyChildEnvPolicy(cwd);
-  const rt = loadRuntimeModule();
-  const env = rt && typeof rt.childProcessEnv === 'function'
-    ? rt.childProcessEnv(process.env)
-    : (() => { const e = { ...process.env }; delete e.NODE_TEST_CONTEXT; return e; })();
+  let canonicalCwd = cwd;
+  try {
+    canonicalCwd = fs.realpathSync.native ? fs.realpathSync.native(cwd) : fs.realpathSync(cwd);
+  } catch { canonicalCwd = cwd; }
+  const env = childEnvForProject(canonicalCwd, process.env);
+  if (env.PWD) env.PWD = canonicalCwd;
   const heartbeat = Number(options.heartbeatMs || process.env.OXE_PROGRESS_HEARTBEAT_MS) || 60_000;
   const res = spawnSync(process.execPath, [path.join(__dirname, 'oxe-progress-run.cjs'), options.label || 'pr:ready', String(timeoutMs), String(heartbeat), '--', command], {
-    cwd, env, encoding: 'utf8', windowsHide: true, maxBuffer: 16 * 1024 * 1024, timeout: timeoutMs + 120_000,
+    cwd: canonicalCwd, env, encoding: 'utf8', windowsHide: true, maxBuffer: 16 * 1024 * 1024, timeout: timeoutMs + 120_000,
     stdio: ['ignore', 'pipe', options.quiet ? 'pipe' : 'inherit'],
   });
   try {
     const out = JSON.parse(String(res.stdout || '').trim());
     return { ok: out.status === 0, status: out.status, tail: out.tail, timed_out: out.timed_out, scripts: out.scripts };
   } catch {
-    return runChildCommand(cwd, command, timeoutMs);
+    return runChildCommand(canonicalCwd, command, timeoutMs);
   }
+}
+
+function promoteWorktreeSlug(taskIds, taskId) {
+  const ids = Array.isArray(taskIds) ? taskIds.filter(Boolean).map((t) => String(t).trim()) : [];
+  if (ids.length > 1) {
+    const first = ids[0].toLowerCase().replace(/[^a-z0-9_-]/g, '') || 'batch';
+    const hash = require('crypto').createHash('sha1').update(String(taskId || ids.join('-'))).digest('hex').slice(0, 6);
+    return `${first}-${ids.length}t-${hash}`;
+  }
+  const clean = String(taskId || ids[0] || 'task').toLowerCase().replace(/[^a-z0-9_-]/g, '') || 'task';
+  if (clean.length > 16) {
+    const hash = require('crypto').createHash('sha1').update(clean).digest('hex').slice(0, 6);
+    return `${clean.slice(0, 8)}-${hash}`;
+  }
+  return clean;
+}
+
+function allocatePromoteWorktreePath(projectRoot, taskIds, taskId, buildSha) {
+  const ts = Date.now().toString(36);
+  const slug = promoteWorktreeSlug(taskIds, taskId);
+  const localDir = path.join(projectRoot, '.oxe', 'promote-ws', `${slug}-${ts}`);
+  const pidFile = `${localDir}.pid`;
+  if (process.platform !== 'win32') {
+    return { wt: localDir, pidFile, external: false };
+  }
+  let maxRelLen = 150;
+  try {
+    const tracked = gitLines(projectRoot, ['ls-tree', '-r', '--name-only', buildSha || 'HEAD']) || [];
+    for (const p of tracked) {
+      if (p.length > maxRelLen) maxRelLen = p.length;
+    }
+  } catch { /* fallback to conservative 150 */ }
+  if (localDir.length + 1 + maxRelLen < 250) {
+    return { wt: localDir, pidFile, external: false };
+  }
+  const extDir = path.join(os.tmpdir(), 'oxe-pw', `${slug}-${ts}`);
+  return { wt: extDir, pidFile, external: true };
 }
 
 /**
@@ -5231,19 +8025,23 @@ function runProgressCommand(cwd, command, timeoutMs = 1_800_000, options = {}) {
 function sweepStalePromoteWorkspaces(projectRoot, options = {}) {
   const root = path.join(projectRoot, '.oxe', 'promote-ws');
   const removed = [];
-  let names = [];
-  try { names = fs.readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name); } catch { return removed; }
+  let entries = [];
+  try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { return removed; }
   const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return Boolean(e && e.code === 'EPERM'); } };
-  for (const name of names) {
-    const dir = path.join(root, name);
-    const pidFile = `${dir}.pid`;
+  const sweepOne = (dir, pidFile, minAgeMs) => {
     let pid = null;
-    try { pid = Number(JSON.parse(fs.readFileSync(pidFile, 'utf8')).pid) || null; } catch { pid = null; }
-    if (pid && pid !== process.pid && alive(pid)) continue;
+    let paused = false;
+    try {
+      const meta = JSON.parse(fs.readFileSync(pidFile, 'utf8'));
+      pid = Number(meta.pid) || null;
+      paused = meta.paused === true;
+    } catch { pid = null; }
+    if (paused) return;
+    if (pid && pid !== process.pid && alive(pid)) return;
     if (!pid) {
       let age = 0;
       try { age = Date.now() - fs.statSync(dir).mtimeMs; } catch { age = 0; }
-      if (age < (options.minAgeMs != null ? options.minAgeMs : 30 * 60_000)) continue;
+      if (age < minAgeMs) return;
     }
     try {
       const rt = loadRuntimeModule();
@@ -5252,11 +8050,30 @@ function sweepStalePromoteWorkspaces(projectRoot, options = {}) {
     } catch { /* */ }
     let linkLeft = false;
     try { linkLeft = fs.lstatSync(path.join(dir, 'node_modules')).isSymbolicLink(); } catch { linkLeft = false; }
-    if (linkLeft) continue; // never a forced removal with the junction in place
+    if (linkLeft) return; // never a forced removal with the junction in place
     const rm = gitRun(projectRoot, ['worktree', 'remove', '--force', dir]);
-    if (!rm.ok) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { continue; } }
+    if (!rm.ok) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { return; } }
     try { fs.rmSync(pidFile, { force: true }); } catch { /* */ }
-    removed.push(path.relative(projectRoot, dir).replace(/\\/g, '/'));
+    const rel = path.relative(projectRoot, dir).replace(/\\/g, '/');
+    removed.push(rel.startsWith('..') ? dir.replace(/\\/g, '/') : rel);
+  };
+  const minAgeMs = options.minAgeMs != null ? options.minAgeMs : 30 * 60_000;
+  const seenDirs = new Set();
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    const dir = path.join(root, e.name);
+    seenDirs.add(path.resolve(dir));
+    sweepOne(dir, `${dir}.pid`, minAgeMs);
+  }
+  for (const e of entries) {
+    if (!e.isFile() || !e.name.endsWith('.pid')) continue;
+    const pidFile = path.join(root, e.name);
+    try {
+      const meta = JSON.parse(fs.readFileSync(pidFile, 'utf8'));
+      if (meta && meta.dir && !seenDirs.has(path.resolve(meta.dir))) {
+        sweepOne(meta.dir, pidFile, minAgeMs);
+      }
+    } catch { /* ignore */ }
   }
   if (removed.length) gitRun(projectRoot, ['worktree', 'prune']);
   return removed;
@@ -5391,27 +8208,544 @@ function runtimeSync(projectRoot, activeSession, options = {}) {
   return result;
 }
 
+function collectPromoteRiskSuites(repoDir, { projectRoot, activeSession, planTasks, touchedFiles, excludeSuites = [], config = null }) {
+  const promoteHelpers = require('./oxe-promote-helpers.cjs');
+  const pcfg = config || readProjectConfig(projectRoot) || {};
+  const excludedList = (excludeSuites || []).map((s) => String(s || '').replace(/\\/g, '/'));
+  const riskSuites = promoteHelpers.discoverMainCiRiskSuites(repoDir, touchedFiles || [], {
+    excludeSuites: excludedList,
+  });
+  let planDoc = null;
+  try { planDoc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { planDoc = null; }
+  // OXB-C6 #1: Include non-frozen active unit/integration/e2e specs discovered by extended G45 on `repoDir`
+  try {
+    const lintCfg = (pcfg && pcfg.lint) || {};
+    if (lintCfg.cross_card_conflicts !== 'off') {
+      const pathsG45 = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+      const g45Hits = require('./oxe-cross-card-conflicts.cjs').crossCardFrozenConflicts(
+        repoDir,
+        {
+          tasks: (planTasks || []).map((t) => ({ ...t, done: false })),
+          acceptance_tests: (planDoc && planDoc.acceptance_tests) || [],
+        },
+        { specText: readTextIfExists(pathsG45.spec) || '' },
+      );
+      const excludedSet = new Set(excludedList);
+      const existingSuites = new Set(riskSuites.map((s) => s.suite));
+      for (const f of g45Hits) {
+        if (!f || !f.test || excludedSet.has(f.test) || existingSuites.has(f.test)) continue;
+        existingSuites.add(f.test);
+        const isE2e = /(^|\/)(e2e|playwright)\//i.test(f.test) || /\.e2e\./i.test(f.test)
+          || (/\.spec\.[cm]?[jt]sx?$/i.test(f.test) && /@playwright\/test|playwright/i.test(readTextIfExists(path.join(repoDir, f.test)) || ''));
+        riskSuites.push({ suite: f.test, kind: isE2e ? 'e2e' : 'unit_g45', covers: [f.component || f.token || f.test] });
+      }
+    }
+  } catch { /* auxiliar */ }
+  return { riskSuites, planDoc };
+}
+
+function finalizePromotedWorktree({
+  projectRoot,
+  activeSession,
+  work,
+  result,
+  taskId,
+  planTasks,
+  phaseCtx,
+  base,
+  baseSha,
+  buildSha,
+  branch,
+  programTip,
+  withFixtures,
+  preserveMergedFixtures,
+  ordered,
+  verifyTests,
+  resolvedCapFiles,
+  pushArgs,
+  options,
+}) {
+  const promoteHelpers = require('./oxe-promote-helpers.cjs');
+  const preserveMergedSet = new Set(Array.isArray(preserveMergedFixtures) ? preserveMergedFixtures : []);
+  const originTrailers = [
+    ...planTasks.map((t) => `OXE-Task: ${phaseCtx.phase ? `${phaseCtx.phase}/` : ''}${t.id}`),
+    ...[...new Set(planTasks.map((t) => t.run_id).filter(Boolean))].map((r) => `OXE-Run: ${r}`),
+  ].join('\n');
+  const commitWorkFiles = (files, subject, body, errLabel) => {
+    if (!files || !files.length) return true;
+    gitRun(work, ['add', '--', ...files]);
+    if (gitRun(work, ['diff', '--cached', '--quiet']).ok) return true;
+    const cm = gitRun(work, ['commit', '-q', '-m', subject, '-m', body, '-m', originTrailers]);
+    if (!cm.ok) {
+      result.error = `${errLabel}: ${(cm.stderr || cm.stdout || '').trim().split(/\r?\n/).pop()}`;
+      return false;
+    }
+    return true;
+  };
+  const eqLf = (a, b) => a != null && b != null && a.replace(/\r\n/g, '\n') === b.replace(/\r\n/g, '\n');
+  // OXB-156 (b): the task's frozen tests as files from the program tip; identical-on-base ones are skipped.
+  // OXB-C8: fixtures modified on both `base` and the task's commits preserve cherry-pick's merge instead of overwriting with tip.
+  if (!result.conflict && withFixtures.length) {
+    const added = [];
+    for (const file of withFixtures) {
+      if (preserveMergedSet.has(file) && fs.existsSync(path.join(work, file))) continue;
+      const tip = gitRun(projectRoot, ['show', `${programTip}:${file}`]);
+      if (!tip.ok) continue;
+      const onBase = gitRun(projectRoot, ['show', `${baseSha}:${file}`]);
+      const current = fs.existsSync(path.join(work, file)) ? fs.readFileSync(path.join(work, file), 'utf8') : null;
+      if ((onBase.ok && eqLf(onBase.stdout, tip.stdout)) || eqLf(current, tip.stdout)) continue;
+      const r = spawnSync('git', ['show', `${programTip}:${file}`], { cwd: projectRoot, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+      fs.mkdirSync(path.dirname(path.join(work, file)), { recursive: true });
+      fs.writeFileSync(path.join(work, file), r.stdout);
+      added.push(file);
+    }
+    if (added.length) {
+      commitWorkFiles(
+        added,
+        `test(acceptance): frozen tests of ${taskId}`,
+        `From the program branch at ${String(programTip).slice(0, 10)}: ${added.join(', ')}`,
+        'commit dos testes congelados falhou',
+      );
+    }
+    result.frozen_tests = added;
+  }
+  if (!result.conflict && !result.error) {
+    const pcfg = readProjectConfig(projectRoot) || {};
+    const lockAdj = promoteHelpers.reconcilePromotedEnforcedLocks(
+      projectRoot,
+      work,
+      buildSha,
+      Array.isArray(ordered) ? ordered : null,
+      { resolve: options && options.resolve },
+    );
+    if (lockAdj.adjusted.length) {
+      const lockMsg = lockAdj.adjusted.map((a) => `${a.file}: removido(s) [${a.removed_ids.join(', ') || 'stale'}] de fora de ${base}`).join('\n');
+      commitWorkFiles(
+        lockAdj.files,
+        `chore(lock): reconcile enforced lock of ${taskId} on ${base}`,
+        lockMsg,
+        'commit de ajuste de enforced.lock falhou',
+      );
+      result.enforced_locks_adjusted = lockAdj.adjusted;
+      const pruned = [...new Set(lockAdj.adjusted.flatMap((a) => a.removed_ids || []))];
+      if (pruned.length) {
+        result.warnings.push(`enforced.lock reconciliado contra ${base} + ${taskId}: removido(s) ${pruned.join(', ')} (já ausente(s)/retirado(s) em ${base})`);
+      }
+    }
+    const ratchetAdj = promoteHelpers.reconcilePromotedRatchets(work, buildSha, pcfg, { resolvedCapFiles: [...resolvedCapFiles] });
+    if (ratchetAdj.adjusted.length) {
+      commitWorkFiles(
+        ratchetAdj.files,
+        `chore(ratchet): reconcile ratchet caps of ${taskId} on ${base}`,
+        ratchetAdj.adjusted.map((a) => `${a.file}:${a.line} ${a.program_cap} -> ${a.promoted_cap} (real count: ${a.real_count})`).join('\n'),
+        'commit de ajuste de ratchet falhou',
+      );
+      result.ratchets_adjusted = ratchetAdj.adjusted;
+      result.warnings.push(`ratchet(s) recalculado(s) contra ${base} + ${taskId}: ${ratchetAdj.adjusted.map((a) => `${a.file}:${a.line} ${a.program_cap} → ${a.promoted_cap}`).join(', ')}`);
+    }
+    const enforcedCheck = promoteHelpers.checkPromotedEnforcedTargets(work, buildSha, { base, config: pcfg });
+    if (enforcedCheck.gaps.length) {
+      result.enforced_scene_gaps = enforcedCheck.gaps;
+      result.warnings.push(...enforcedCheck.warnings);
+    }
+  }
+  if (!result.conflict && !result.error) {
+    const icLib = require('./oxe-integration-checks.cjs');
+    const parked = icLib.findTrackedParkedAcceptance(work, { baseRef: baseSha });
+    if (parked.length) {
+      result.parked_acceptance = parked;
+      result.error = `gate de PR bloqueado em ${branch}: ${icLib.formatParkedAcceptanceError(parked)}`;
+    }
+  }
+  if (!result.conflict && !result.error && options.integrationChecks !== false) {
+    const ic = require('./oxe-integration-checks.cjs').runIntegrationChecks(work, { configRoot: projectRoot, baseRef: baseSha });
+    if (ic.ran.length) result.integration_checks = ic.ran;
+    if (!ic.ok) result.error = `check de integração vermelho em ${branch}: \`${ic.failed.command}\` (exit ${ic.failed.exit})${ic.failed.tail ? `\n${String(ic.failed.tail).split(/\r?\n/).slice(-5).map((l) => `    ${l}`).join('\n')}\n` : ''} — nada foi enviado; a branch local ${branch} fica (não enviada). Corrija no programa (ex.: um quick que reduz o arquivo acima do teto, ou npm run notices:generate) e rode o promote de novo: a branch é refeita com o conserto`;
+  }
+  if (!result.conflict && !result.error) {
+    const pcfg = readProjectConfig(projectRoot) || {};
+    const promotedDiffFiles = gitLines(work, ['diff', '--name-only', buildSha, 'HEAD']) || [];
+    const { riskSuites, planDoc } = collectPromoteRiskSuites(work, {
+      projectRoot,
+      activeSession,
+      planTasks,
+      touchedFiles: promotedDiffFiles,
+      excludeSuites: [...verifyTests, ...(result.frozen_tests || [])],
+      config: pcfg,
+    });
+    if (riskSuites.length) result.ci_risk_suites = riskSuites;
+    if (options.previewCi) {
+      const previewCmds = promoteHelpers.buildPreviewCiCommands(work, riskSuites, pcfg, { projectRoot, planTasks, planDoc });
+      const previewRuns = [];
+      let previewOk = true;
+      const baseVerifyTimeout = Number(pcfg.verify_timeout_ms) > 0 ? Number(pcfg.verify_timeout_ms) : 10 * 60_000;
+      for (const cmd of previewCmds) {
+        const ms = commitTaskVerifyTimeout(projectRoot, options, cmd, baseVerifyTimeout);
+        const r = runChildCommandFull(work, cmd, ms);
+        const failInfo = !r.ok ? promoteHelpers.extractPreviewCiFailure(r.output || r.tail) : null;
+        previewRuns.push({
+          command: cmd,
+          ok: r.ok,
+          status: r.status,
+          timed_out: r.timedOut,
+          tail: failInfo ? failInfo.summary : r.tail,
+          ...(failInfo && failInfo.failing_specs.length ? { failing_specs: failInfo.failing_specs } : {}),
+        });
+        if (!r.ok) {
+          previewOk = false;
+          const specLine = failInfo && failInfo.failing_specs.length
+            ? `\n    spec(s) falhando: ${failInfo.failing_specs.join(', ')}`
+            : '';
+          const detailText = failInfo ? failInfo.summary : String(r.tail || '');
+          const detailLines = detailText
+            ? `\n${detailText.split(/\r?\n/).filter(Boolean).slice(-8).map((l) => `    ${l}`).join('\n')}`
+            : '';
+          result.error = r.timedOut
+            ? timedOutMessage(`preview-ci em ${branch}`, cmd, ms, { ...r, tail: detailText || r.tail })
+            : `preview-ci vermelho em ${branch}: \`${cmd}\` (exit ${r.status})${specLine}${detailLines}`;
+          break;
+        }
+      }
+      result.preview_ci = { ok: previewOk, suites: riskSuites.map((s) => s.suite), runs: previewRuns };
+    }
+  }
+  if (!result.conflict && options.openPr && !result.error) {
+    const push = gitRun(work, pushArgs());
+    if (!push.ok) result.error = `push falhou: ${push.stderr.trim().split(/\r?\n/).slice(-2).join(' · ')}`;
+    else result.pushed = true;
+  }
+  if (!result.conflict && !result.error) {
+    let pkg = null;
+    try { pkg = JSON.parse(fs.readFileSync(path.join(work, 'package.json'), 'utf8')); } catch { pkg = null; }
+    if (pkg && pkg.scripts && pkg.scripts['pr:ready'] && options.prReady !== false) {
+      const ready = runProgressCommand(work, 'npm run pr:ready', 1_800_000, { quiet: options.quietProgress === true || process.env.OXE_PROGRESS === '0' });
+      const tail = String(ready.tail || '');
+      const STATUS_LINE = /not on GitHub yet|push it first|(post|create|set)\w*\s+(the\s+)?(commit\s+)?status/i;
+      const otherLines = tail.split(/\r?\n/).filter((l) => !STATUS_LINE.test(l) && !/^\s*npm (ERR!|error|warn)\b/i.test(l)).join('\n');
+      const statusOnly = !ready.ok && STATUS_LINE.test(tail) && !/\bFAIL\b|\bfailed\b|✗|×|error TS\d+|\d+ (failing|failed)/i.test(otherLines);
+      result.pr_ready = { ok: ready.ok || statusOnly, tail: ready.tail, ...(statusOnly ? { status_post_failed: true } : {}) };
+    }
+  }
+}
+
+function finalizePromotePrBodyAndEvents({
+  projectRoot,
+  activeSession,
+  result,
+  task,
+  taskId,
+  criteria,
+  ordered,
+  branch,
+  original,
+  base,
+  remote,
+  stack,
+  pushArgs,
+  options,
+}) {
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const crs = require('./oxe-change.cjs').listChanges(paths.programDir || path.join(projectRoot, '.oxe', 'program'))
+    .filter((cr) => (cr.criteria || []).some((a) => criteria.has(a)));
+  const body = [
+    `## ${taskId} — ${task.title || ''}`.trim(),
+    '',
+    options.testsOnly
+      ? `Promovida de \`${original}\` por \`oxe-cc runtime promote --tests-only\` (apenas ${((result.frozen_tests || []).length)} arquivo(s) de testes congelados e fixtures; commits de código já na base).`
+      : `Promovida de \`${original}\` por \`oxe-cc runtime promote\` (cherry-pick -x de ${ordered.length} commit(s)).`,
+    '',
+    ...(stack ? [
+      `> **Empilhada sobre ${stack.task}** (${stack.pr ? `PR ${stack.pr}, ` : ''}branch \`${stack.branch}\`), ainda não mergeada em \`${base}\`: este PR traz os commits dela até ela entrar. Mergeie ${stack.task} primeiro; depois disso o diff deste PR encolhe para os commits de ${taskId}.`,
+      '',
+    ] : []),
+    '### Arquivos',
+    ...(task.files || []).map((f) => `- \`${f}\``),
+    '',
+    `### Critérios: ${[...criteria].join(', ') || '—'}`,
+    ...(crs.length ? ['', '### Change requests', ...crs.map((cr) => `- ${cr.id} (${cr.class}, ${cr.status}): ${cr.summary}`)] : []),
+    '',
+    '### Commits da tarefa',
+    ...(ordered.length ? ordered.map((sha) => `- ${sha.slice(0, 10)} ${(gitLines(projectRoot, ['log', '-1', '--format=%s', sha]) || [''])[0]}`) : ['- —']),
+    '',
+    '### Testes congelados (arquivos do tip do programa)',
+    ...((result.frozen_tests || []).length ? result.frozen_tests.map((f) => `- \`${f}\``) : ['- — (já na base, ou nenhum)']),
+    ...((result.quick_commits || []).length ? ['', '### Quicks incluídos', ...result.quick_commits.map((q) => `- ${q.sha.slice(0, 10)} (${q.quick}${q.card ? `, ${q.card}` : ''})`)] : []),
+    ...((result.ratchets_adjusted || []).length ? ['', '### Ratchets ajustados para a base', ...result.ratchets_adjusted.map((a) => `- \`${a.file}:${a.line}\`: ${a.program_cap} → ${a.promoted_cap} (contagem real na branch: ${a.real_count})`)] : []),
+    ...(result.suggested_promote_order && result.suggested_promote_order.length ? ['', `### Ordem sugerida de promoção: ${result.suggested_promote_order.join(' → ')}`] : []),
+    ...(((result.ci_risk_suites && result.ci_risk_suites.length) || (result.enforced_scene_gaps && result.enforced_scene_gaps.length)) ? [
+      '',
+      '### Riscos de CI na main (fora do verify da tarefa)',
+      ...((result.ci_risk_suites || []).map((s) => `- \`${s.suite}\` (${s.kind} — cobre ${s.covers.map((c) => `\`${c}\``).join(', ')})`)),
+      ...((result.enforced_scene_gaps || []).map((g) => `- \`${g.file}\` → \`${g.id}\`: seletor \`${g.selector}\` ausente na cena de conformidade (sugestão: manter \`${g.proposed_status}\` — ${g.proposed_reason})`)),
+    ] : []),
+    ...(result.preview_ci ? ['', `### preview-ci: ${result.preview_ci.ok ? 'verde' : 'VERMELHO'} (${result.preview_ci.suites.length} suíte(s))`] : []),
+    ...(result.pr_ready ? ['', `### pr:ready: ${result.pr_ready.ok ? 'verde' : 'VERMELHO'}`] : []),
+    '',
+  ].join('\n');
+  const bodyFile = path.join(projectRoot, '.oxe', 'promote', `${taskId}.md`);
+  writeTextAtomic(bodyFile, body);
+  result.body_file = path.relative(projectRoot, bodyFile).replace(/\\/g, '/');
+  let almKey = null;
+  const lookupIds = [taskId, ...(Array.isArray(options.taskIds) ? options.taskIds : [])].filter(Boolean);
+  try {
+    const almLib = require('./oxe-alm.cjs');
+    const cfgAlm = almLib.almConfig(readProjectConfig(projectRoot) || {});
+    const ph = activeProgramPhase(projectRoot, activeSession);
+    const pd = resolveRuntimeArtifactPaths(projectRoot, activeSession).programDir || path.join(projectRoot, '.oxe', 'program');
+    if (cfgAlm) {
+      for (const lid of lookupIds) {
+        almKey = almLib.keyFor(pd, cfgAlm, ph ? ph.id : null, lid);
+        if (almKey) break;
+      }
+    }
+  } catch { almKey = null; }
+  if (almKey) result.alm_key = almKey;
+  if (almKey) {
+    try {
+      const almLib = require('./oxe-alm.cjs');
+      const cfgAlm = almLib.almConfig(readProjectConfig(projectRoot) || {});
+      const ph = activeProgramPhase(projectRoot, activeSession);
+      const pd = resolveRuntimeArtifactPaths(projectRoot, activeSession).programDir || path.join(projectRoot, '.oxe', 'program');
+      const docM = readPlanJsonDoc(projectRoot, activeSession).doc;
+      const promotedSet = new Set(lookupIds);
+      const docForMarker = docM && promotedSet.size > 1 && Array.isArray(docM.tasks)
+        ? { ...docM, tasks: docM.tasks.map((t) => (t && promotedSet.has(t.id) ? { ...t, done: true } : t)) }
+        : docM;
+      const mk = require('./oxe-alm-prs.cjs').prMarkerFor(almKey, taskId, docForMarker, (id) => almLib.keyFor(pd, cfgAlm, ph ? ph.id : null, id));
+      if (mk) {
+        result.alm_marker = mk.marker;
+        writeTextAtomic(bodyFile, `${body}\n${mk.marker}${mk.open_tasks.length ? ` (ainda abertas no card: ${mk.open_tasks.join(', ')})` : ''}\n`);
+      }
+    } catch { /* auxiliar: o PR segue sem o marcador */ }
+  }
+  const title = `${taskId}: ${task.title || 'promote'}${almKey ? ` (${almKey})` : ''}`;
+  const prBase = base.replace(new RegExp(`^${remote}/`), '');
+  result.commands = [
+    `git push -u ${remote} ${branch}`,
+    `gh pr create --base ${prBase} --head ${branch} --title ${JSON.stringify(title)} --body-file ${result.body_file}`,
+  ];
+  if (options.openPr && !result.error) {
+    if (result.pr_ready && !result.pr_ready.ok) {
+      result.error = `pr:ready vermelho em ${branch} — PR não aberto (a branch já está em ${remote}; corrija e rode os comandos abaixo — o PR vai contra ${prBase}${stack ? `, não contra a branch de ${stack.task}` : ''})`;
+    } else {
+      const push = result.pushed ? { ok: true } : gitRun(projectRoot, pushArgs());
+      if (!push.ok) result.error = `push falhou: ${push.stderr.trim().split(/\r?\n/).slice(-2).join(' · ')}`;
+      else {
+        const gh = (options.ghSpawn || spawnSync)('gh', ['pr', 'create', '--base', prBase, '--head', branch, '--title', title, '--body-file', bodyFile], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
+        if (gh.status === 0) result.pr = String(gh.stdout || '').trim().split(/\r?\n/).pop();
+        else result.error = `gh pr create falhou: ${String(gh.stderr || gh.stdout || '').trim().split(/\r?\n/).slice(-2).join(' · ')}`;
+      }
+    }
+  }
+  appendEvent(projectRoot, activeSession, { type: 'TaskPromoted', work_item_id: taskId, payload: { base, branch, commits: ordered, pr_ready: result.pr_ready ? result.pr_ready.ok : null, pr: result.pr, ...(stack ? { stacked_on: result.stacked_on } : {}) } });
+  almAutoSync(projectRoot, activeSession);
+  return result;
+}
+
+function cleanupPromoteWorktree(projectRoot, wt, linked) {
+  const rel = path.relative(projectRoot, wt).replace(/\\/g, '/');
+  try {
+    const rt = loadRuntimeModule();
+    if (rt && typeof rt.unlinkExternalLinks === 'function') rt.unlinkExternalLinks(wt);
+    else if (linked && fs.existsSync(path.join(wt, 'node_modules'))) fs.unlinkSync(path.join(wt, 'node_modules'));
+  } catch { /* */ }
+  let rm = gitRun(projectRoot, ['worktree', 'remove', wt]);
+  if (!rm.ok) {
+    let linkLeft = false;
+    try { linkLeft = fs.lstatSync(path.join(wt, 'node_modules')).isSymbolicLink(); } catch { linkLeft = false; }
+    if (!linkLeft) rm = gitRun(projectRoot, ['worktree', 'remove', '--force', wt]);
+  }
+  if (rm.ok) { try { fs.rmSync(`${wt}.pid`, { force: true }); } catch { /* */ } }
+  gitRun(projectRoot, ['worktree', 'prune']);
+  return rm.ok ? null : `worktree ${rel} não removida (${rm.stderr.trim().split(/\r?\n/).pop()}) — remova à mão depois de conferir que não há links dentro`;
+}
+
 /**
  * `oxe-cc runtime promote <Tn> --base main [--branch name] [--open-pr] [--remote origin]`: a branch from the base with
  * the task's checkpoint commits (OXE-Task trailer / done_commit) and the commits of its frozen acceptance tests,
- * cherry-picked with -x in history order. Stops (and cleans up) on a conflict; runs the project's `pr:ready` script
- * when there is one; writes the PR body from the task and its CRs. Push + `gh pr create` only with `--open-pr`.
+ * cherry-picked with -x in history order. Stops (and cleans up, unless `--keep-on-conflict`) on a conflict; resolves
+ * `lint.ratchets` cap-only conflicts and append-only `enforced.lock.json` JSON unions automatically (or per `--resolve`).
  */
 function runtimePromote(projectRoot, activeSession, options = {}) {
+  const promoteHelpers = require('./oxe-promote-helpers.cjs');
+  promoteHelpers.parseResolveRules(options.resolve); // fail fast on malformed --resolve rules
+  if (!gitLines(projectRoot, ['rev-parse', '--git-dir'])) throw new Error('runtime promote exige um repositório git');
+
+  const pendingFile = path.join(projectRoot, '.oxe', 'promote', 'pending-conflict.json');
+  const original = (gitLines(projectRoot, ['rev-parse', '--abbrev-ref', 'HEAD']) || [])[0];
+  const originalSha = (gitLines(projectRoot, ['rev-parse', 'HEAD']) || [])[0];
+  const remote = String(options.remote || 'origin');
+
+  if (options.continue === true) {
+    if (!fs.existsSync(pendingFile)) {
+      throw new Error('nenhum promote pausado em conflito (.oxe/promote/pending-conflict.json não encontrado)');
+    }
+    const saved = JSON.parse(fs.readFileSync(pendingFile, 'utf8'));
+    if ((options.task || options.tasks) && saved.task) {
+      const reqIds = [...new Set((options.tasks ? (Array.isArray(options.tasks) ? options.tasks : String(options.tasks).split(',')) : [options.task]).map((t) => String(t || '').trim().toUpperCase()).filter(Boolean))].join('-');
+      if (reqIds && reqIds !== saved.task) {
+        throw new Error(`promote pausado é para ${saved.task} (worktree ${path.relative(projectRoot, saved.worktree).replace(/\\/g, '/')}), não para ${reqIds}`);
+      }
+    }
+    const work = saved.worktree;
+    if (!fs.existsSync(work)) {
+      throw new Error(`worktree do promote pausado não existe mais (${saved.worktree}) — rode o promote do início sem --continue`);
+    }
+    const taskId = saved.task;
+    const taskIds = saved.taskIds || [];
+    const branch = saved.branch;
+    const base = saved.base;
+    const baseSha = saved.baseSha;
+    const buildSha = saved.buildSha || baseSha;
+    const programTip = saved.programTip || originalSha;
+    const ordered = saved.ordered || [];
+    const remaining = Array.isArray(saved.remaining_commits) ? saved.remaining_commits : [];
+    const withFixtures = saved.withFixtures || [];
+    const verifyTests = saved.verifyTests || [];
+    const sharedSkipped = saved.sharedSkipped || [];
+    const criteria = new Set(saved.criteria || []);
+    const phaseCtx = saved.phaseCtx || taskPhaseContext(projectRoot, activeSession);
+    const { doc } = readPlanJsonDoc(projectRoot, activeSession);
+    const planTasks = taskIds.map((id) => (doc && Array.isArray(doc.tasks) ? doc.tasks.find((x) => x && x.id === id) : null) || { id, acceptance: saved.criteria || [], files: [] });
+    const task = saved.taskMeta || planTasks[0];
+    const resolvedCapFiles = new Set(saved.resolved_cap_files || []);
+    const resolvedConflicts = Array.isArray(saved.resolved_conflicts) ? [...saved.resolved_conflicts] : [];
+    const result = {
+      ...(saved.resultSnapshot || {}),
+      task: taskId,
+      branch,
+      base,
+      base_sha: baseSha,
+      worktree: path.relative(projectRoot, work).replace(/\\/g, '/'),
+      conflict: null,
+      error: undefined,
+      warnings: [...((saved.resultSnapshot && saved.resultSnapshot.warnings) || [])],
+      resumed_from_conflict: true,
+    };
+    if (resolvedConflicts.length) result.resolved_conflicts = resolvedConflicts;
+    const pcfg = readProjectConfig(projectRoot) || {};
+    const linked = (() => { try { return fs.lstatSync(path.join(work, 'node_modules')).isSymbolicLink(); } catch { return false; } })();
+    let keepWorktree = false;
+    const cleanup = () => {
+      if (saved.inPlace) {
+        gitRun(projectRoot, ['checkout', '-q', original && original !== 'HEAD' ? original : originalSha]);
+      } else {
+        const w = cleanupPromoteWorktree(projectRoot, work, linked);
+        if (w) result.cleanup_warning = w;
+      }
+    };
+    const pushArgs = () => ['push', ...(saved.forceLease ? [`--force-with-lease=${branch}:${saved.forceLease}`] : []), '-u', saved.remote || remote, branch];
+    const onSignal = (sig) => { try { if (!keepWorktree) cleanup(); } catch { /* */ } process.exit(sig === 'SIGINT' ? 130 : 143); };
+    const signals = ['SIGINT', 'SIGTERM'];
+    for (const sig of signals) process.once(sig, onSignal);
+    try {
+      const stillUnmerged = gitLines(work, ['diff', '--name-only', '--diff-filter=U']) || [];
+      if (stillUnmerged.length && options.resolve && (Array.isArray(options.resolve) ? options.resolve.length : options.resolve)) {
+        const res = promoteHelpers.tryResolvePromoteCherryPickConflict(projectRoot, work, saved.conflict_commit, pcfg, stillUnmerged, { resolve: options.resolve, skipRatchet: true, commit: false });
+        if (res.resolved && res.resolved_files) {
+          for (const rf of res.resolved_files) {
+            resolvedConflicts.push({ commit: saved.conflict_commit, ...rf });
+            result.warnings.push(`conflito resolvido em ${rf.file} (${rf.strategy})`);
+          }
+        }
+      }
+      const unmergedAfter = gitLines(work, ['diff', '--name-only', '--diff-filter=U']) || [];
+      if (unmergedAfter.length) {
+        keepWorktree = true;
+        result.conflict = { commit: saved.conflict_commit, files: unmergedAfter };
+        result.kept_worktree = result.worktree;
+        result.error = `conflito ainda aberto em ${unmergedAfter.join(', ')} (worktree ${result.worktree}) — resolva, rode \`git add\` e depois \`oxe-cc runtime promote ${taskId} --continue\` (ou passe --resolve <arquivo>=ours|theirs|union-json-array)`;
+      } else if (gitLines(work, ['rev-parse', '--verify', '-q', 'CHERRY_PICK_HEAD'])) {
+        const cached = gitRun(work, ['diff', '--cached', '--quiet']);
+        const contRes = cached.ok
+          ? gitRun(work, ['cherry-pick', '--skip'])
+          : spawnSync('git', ['-c', 'core.editor=true', 'cherry-pick', '--continue'], { cwd: work, encoding: 'utf8', windowsHide: true, env: { ...process.env, GIT_EDITOR: 'true' } });
+        if ((contRes.status != null ? contRes.status : (contRes.ok ? 0 : 1)) !== 0) {
+          keepWorktree = true;
+          result.conflict = { commit: saved.conflict_commit, files: gitLines(work, ['diff', '--name-only', '--diff-filter=U']) || [] };
+          result.kept_worktree = result.worktree;
+          result.error = `cherry-pick --continue falhou em ${result.worktree}: ${String(contRes.stderr || contRes.stdout || '').trim().split(/\r?\n/).slice(-3).join(' · ')}`;
+        }
+      }
+      if (!result.conflict && !result.error) {
+        for (let idx = 0; idx < remaining.length; idx += 1) {
+          const sha = remaining[idx];
+          const pick = gitRun(work, ['cherry-pick', '-x', sha]);
+          if (!pick.ok) {
+            const files = gitLines(work, ['diff', '--name-only', '--diff-filter=U']) || [];
+            const auto = promoteHelpers.tryResolvePromoteCherryPickConflict(projectRoot, work, sha, pcfg, files, { resolve: options.resolve });
+            if (auto.resolved) {
+              for (const rf of auto.resolved_cap_files || []) resolvedCapFiles.add(rf);
+              for (const rf of auto.resolved_files || []) {
+                resolvedConflicts.push({ commit: sha, ...rf });
+                result.warnings.push(`conflito auto-resolvido em ${rf.file} (${rf.strategy})`);
+              }
+              continue;
+            }
+            keepWorktree = true;
+            const updatedPending = { ...saved, conflict_commit: sha, remaining_commits: remaining.slice(idx + 1), resolved_cap_files: [...resolvedCapFiles], resolved_conflicts: resolvedConflicts };
+            writeTextAtomic(pendingFile, `${JSON.stringify(updatedPending, null, 2)}\n`);
+            result.conflict = { commit: sha, files };
+            result.kept_worktree = result.worktree;
+            result.error = `conflito no cherry-pick de ${sha.slice(0, 8)} (${files.join(', ') || 'sem arquivos'}) — worktree mantida em ${result.worktree}; resolva, rode \`git add\` e \`oxe-cc runtime promote ${taskId} --continue\` (ou use --resolve <arquivo>=ours|theirs|union-json-array)`;
+            break;
+          }
+        }
+      }
+      if (!result.conflict && !result.error) {
+        if (resolvedConflicts.length) result.resolved_conflicts = resolvedConflicts;
+        finalizePromotedWorktree({
+          projectRoot,
+          activeSession,
+          work,
+          result,
+          task,
+          taskId,
+          taskIds,
+          planTasks,
+          phaseCtx,
+          base,
+          baseSha,
+          buildSha,
+          branch,
+          remote: saved.remote || remote,
+          programTip,
+          withFixtures,
+          preserveMergedFixtures: saved.preserveMergedFixtures || [],
+          ordered,
+          verifyTests,
+          criteria,
+          resolvedCapFiles,
+          pushArgs,
+          options,
+        });
+        try { fs.rmSync(pendingFile, { force: true }); } catch { /* */ }
+      }
+    } finally {
+      for (const sig of signals) process.removeListener(sig, onSignal);
+      if (!keepWorktree) cleanup();
+    }
+    if (result.conflict) {
+      appendEvent(projectRoot, activeSession, { type: 'TaskPromoteFailed', work_item_id: taskId, payload: { base, reason: result.error || 'conflict', commit: result.conflict.commit, files: result.conflict.files, kept_worktree: result.kept_worktree || null } });
+      return result;
+    }
+    return finalizePromotePrBodyAndEvents({ projectRoot, activeSession, result, task, taskId, criteria, ordered, branch, original: saved.original || original, base, remote: saved.remote || remote, stack: saved.stack || null, pushArgs, options: { ...options, taskIds } });
+  }
+
   // OXB-169: `--tasks T4,T5,T6,T7` builds ONE branch from the tasks' commits in commit order (the execute may commit
   // them out of plan order — a checkpoint retry committed T4/T5 after T6/T7, and T4's diff assumed theirs).
   const taskIds = [...new Set((options.tasks ? (Array.isArray(options.tasks) ? options.tasks : String(options.tasks).split(',')) : [options.task])
     .map((t) => String(t || '').trim().toUpperCase()).filter(Boolean))];
   if (!taskIds.length || !taskIds.every((t) => /^T\d+$/.test(t))) throw new Error('informe a tarefa: oxe-cc runtime promote T<n> --base main  (ou --tasks T4,T5,…)');
   const taskId = taskIds.join('-');
-  if (!gitLines(projectRoot, ['rev-parse', '--git-dir'])) throw new Error('runtime promote exige um repositório git');
+  const testsOnly = options.testsOnly === true;
   // OXB-157: `--base main` used the LOCAL main (11 days old) — the PR conflicted on files identical on origin/main.
-  const resolvedBase = resolvePromoteBase(projectRoot, options.base, String(options.remote || 'origin'), options);
+  const resolvedBase = resolvePromoteBase(projectRoot, options.base, remote, options);
   const base = resolvedBase.ref;
   // OXB-151: by default promote works in its OWN temporary worktree — the program tree (checkout, index, node_modules)
   // is never touched, so it is safe while `runtime execute` runs there. --in-place keeps the old behavior.
   const inPlace = options.inPlace === true;
-  if (inPlace) {
+  if (inPlace && !options.dryRun) {
     const dirty = dirtyProjectPaths(projectRoot);
     if (dirty.length) throw new Error(`working tree com mudanças fora de .oxe/ (${dirty.slice(0, 5).join(', ')}) — faça commit ou stash antes do promote`);
   }
@@ -5439,50 +8773,305 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   // OXB-166: by phase + task; with a done_commit, the phase-less legacy trailers are not searched at all.
   const phaseCtx = taskPhaseContext(projectRoot, activeSession);
   const shas = new Set();
-  const inRangeAll = gitLines(projectRoot, ['rev-list', range]) || [];
-  for (const t of planTasks) {
-    const own = t.done_commit && phaseCtx.phase
-      ? (gitLines(projectRoot, ['log', '--format=%H', '-E', `--grep=^OXE-Task: ${phaseCtx.phase}/${t.id}$`, range]) || [])
-      : taskCommitShas(projectRoot, t.id, range, phaseCtx);
-    for (const sha of own) shas.add(sha);
-    if (t.done_commit) {
-      const full = (gitLines(projectRoot, ['rev-parse', '--verify', `${t.done_commit}^{commit}`]) || [])[0];
-      if (full && inRangeAll.includes(full)) shas.add(full);
+  if (!testsOnly) {
+    const inRangeAll = gitLines(projectRoot, ['rev-list', range]) || [];
+    for (const t of planTasks) {
+      const own = t.done_commit && phaseCtx.phase
+        ? (gitLines(projectRoot, ['log', '--format=%H', '-E', `--grep=^OXE-Task: ${phaseCtx.phase}/${t.id}$`, range]) || [])
+        : taskCommitShas(projectRoot, t.id, range, phaseCtx);
+      for (const sha of own) shas.add(sha);
+      if (t.done_commit) {
+        const full = (gitLines(projectRoot, ['rev-parse', '--verify', `${t.done_commit}^{commit}`]) || [])[0];
+        if (full && inRangeAll.includes(full)) shas.add(full);
+      }
+    }
+  }
+  const quickSelection = (testsOnly || options.quicks === false)
+    ? { quicks: [], skipped: [], warnings: [] }
+    : promoteHelpers.selectPromoteQuickCommits(projectRoot, {
+        range,
+        orderedTaskShas: [...shas],
+        planTasks,
+        allTasks: doc && Array.isArray(doc.tasks) ? doc.tasks : [],
+        phase: phaseCtx.phase,
+        programDir: resolveRuntimeArtifactPaths(projectRoot, activeSession).programDir,
+        config: readProjectConfig(projectRoot) || {},
+      });
+  if (!testsOnly) for (const q of quickSelection.quicks) shas.add(q.sha);
+  // OXB-C27-3 (polish2 989902e60): the planner's single frozen-tests commit (only acceptance test files, of several
+  // tasks) is never cherry-picked — every task PR carried the others' red tests. The task's own frozen tests are
+  // carried as files below (OXB-156); the commit leaves the pick list, named in the warnings.
+  {
+    const frozenOwner = new Map();
+    for (const a of (doc && Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])) {
+      for (const f of (a && a.files) || []) {
+        const rel = String(typeof f === 'string' ? f : (f && f.path) || '').replace(/\\/g, '/').replace(/^\.\//, '');
+        if (!rel) continue;
+        if (!frozenOwner.has(rel)) frozenOwner.set(rel, new Set());
+        frozenOwner.get(rel).add(String(a.task || a.criterion || '?').toUpperCase());
+      }
+    }
+    if (frozenOwner.size) {
+      for (const sha of [...shas]) {
+        const files = (gitLines(projectRoot, ['show', '--name-only', '--format=', '--no-renames', sha]) || []).map((f) => f.replace(/\\/g, '/')).filter((f) => f && !f.startsWith('.oxe/'));
+        if (!files.length || !files.every((f) => frozenOwner.has(f))) continue;
+        const owners = new Set(files.flatMap((f) => [...frozenOwner.get(f)]));
+        const ownCriteria = new Set(planTasks.flatMap((t) => (t.acceptance || []).map((c) => String(c).toUpperCase())));
+        const foreign = [...owners].filter((o) => !idSet.has(o) && !ownCriteria.has(o));
+        if (!foreign.length) continue;
+        shas.delete(sha);
+        resolvedBase.warnings.push(`${sha.slice(0, 8)} é o commit de testes congelados do planejador (também de ${foreign.slice(0, 6).join(', ')}): não vai no PR; os congelados de ${taskIds.join(',')} vão como arquivos [OXB-C27-3]`);
+      }
     }
   }
   const criteria = new Set(Array.isArray(task.acceptance) ? task.acceptance : []);
   // OXB-156: the PR carries (a) the task's OWN commits (OXE-Task trailer / done_commit) and (b) the frozen tests it
   // proves, taken as FILES from the program tip (+ the local fixtures they import) — never the program branch's import
   // commits, which also carry other tasks' and parked tests (F2-T1: a conflict on tests/acceptance/parked-f3/…).
-  const testFiles = [...new Set((Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])
-    .filter((a) => a && ((a.task && idSet.has(a.task)) || (!a.task && criteria.has(a.criterion))))
-    .flatMap((a) => a.files || []))];
-  if (!shas.size && !testFiles.length) throw new Error(`${taskId}: nenhum commit da tarefa fora de ${base} (sem trailer OXE-Task/done_commit em ${base}..HEAD) — já está na base?`);
   const programTip = (gitLines(projectRoot, ['rev-parse', 'HEAD']) || [])[0];
-  // local fixtures the frozen tests import (relative specifiers), one level deep — OXB-160: only what resolves INSIDE
-  // the tests' own tree (fixtures, helpers), resolved like node/TS (file, extensions, then dir/index.*) and only to a
-  // file: product modules the test imports (`../../../shared/types/ipc`, a directory) are never copied.
+  const TEST_FILE_RE = /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$/i;
+  const normRel = (f) => String(typeof f === 'string' ? f : (f && f.path) || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  const differsFromBase = (file) => {
+    const tip = gitRun(projectRoot, ['show', `${programTip}:${file}`]);
+    if (!tip.ok) return false;
+    const onBase = gitRun(projectRoot, ['show', `${baseSha}:${file}`]);
+    return !(onBase.ok && onBase.stdout === tip.stdout);
+  };
+  // OxeSpace 15/11 (OxeCode F6 T30): the task was built against u83 as RE-FROZEN by a CR's quick (cdfd414f9) — a test
+  // in its FILES, not an acceptance entry of it — and the PR carried main's old u83, which its code turns red. The
+  // test files of the task's own scope that differ from the base go in too, as files from the program tip.
+  const scopeCandidates = [...new Set(planTasks.flatMap((t) => (t.files || []).map(normRel)))].filter((f) => f && !f.includes('*') && !f.endsWith('/') && TEST_FILE_RE.test(f) && differsFromBase(f));
+  // cross-review 15/11: a SHARED suite (in the files of several waves) that ANOTHER task already changed on the program
+  // branch is never copied from the tip — it would bring that task's unpromoted assertions into this PR. Only a file
+  // whose changes in the range come from this task or from no task (a CR quick re-freeze) is carried.
+  const otherTaskTouched = (file) => {
+    const bodies = (gitRun(projectRoot, ['log', '--format=%B%x00', `${baseSha}..HEAD`, '--', file]).stdout || '').split('\0');
+    // phase-aware (OXB-166): F5/T3 is not the T3 of F6 being promoted
+    return bodies.some((b) => {
+      if ([...b.matchAll(/^OXE-Task:\s*(?:(F\d+)\/)?(T\d+)\s*$/gm)].some((m) => (phaseCtx.phase && m[1] && m[1] !== phaseCtx.phase) || !idSet.has(m[2]))) return true;
+      // OXB-C23-2 (152chat T5, tests/design-lint.test.ts 415→406): a QUICK that did another task (no OXE-Task trailer,
+      // it names T10) changed the file too — the tip carries that task's assertions. A quick naming this task (a CR
+      // re-freeze of its test) is still ours.
+      if (!/^OXE-Quick:/m.test(b)) return false;
+      const named = [...b.matchAll(/(?:(F\d+)\/)?\b(T\d+)\b/g)].filter((m) => !(phaseCtx.phase && m[1] && m[1] !== phaseCtx.phase)).map((m) => m[2]);
+      return named.length > 0 && !named.some((t) => idSet.has(t));
+    });
+  };
+  const scopeTests = scopeCandidates.filter((f) => !otherTaskTouched(f));
+  const sharedSkipped = scopeCandidates.filter((f) => !scopeTests.includes(f));
+  // OXB-C31-2 (152perf T2, #1050): the planner's commit (OXE-Plan) froze T2's test AND amended tests/agent-state.test.ts,
+  // a NON-frozen test that T2's behavior change makes wrong. The planner commit is never cherry-picked, so the PR would
+  // be born red. When a planner commit touches this task's own frozen tests, the non-frozen tests it amended go too (as
+  // files from the tip) — unless another task's frozen tests share that commit or another task changed the file: then
+  // the promote says the amendment stays out.
+  const ownFrozenFiles = new Set((Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])
+    .filter((a) => a && ((a.task && idSet.has(a.task)) || (!a.task && criteria.has(a.criterion))))
+    .flatMap((a) => (a.files || []).map(normRel)));
+  const anyFrozen = new Map();
+  for (const a of (Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])) {
+    for (const f of (a && a.files) || []) {
+      const rel = normRel(f);
+      if (!rel) continue;
+      if (!anyFrozen.has(rel)) anyFrozen.set(rel, new Set());
+      anyFrozen.get(rel).add(String(a.task || a.criterion || '?').toUpperCase());
+    }
+  }
+  const plannerAmends = [];
+  const plannerWarnings = [];
+  if (!testsOnly && ownFrozenFiles.size) {
+    for (const sha of gitLines(projectRoot, ['rev-list', '--reverse', range]) || []) {
+      const body = (gitRun(projectRoot, ['log', '-1', '--format=%B', sha]).stdout) || '';
+      if (!/^OXE-Plan:/m.test(body)) continue;
+      const files = (gitLines(projectRoot, ['show', '--name-only', '--format=', '--no-renames', sha]) || []).map((f) => f.replace(/\\/g, '/')).filter((f) => f && !f.startsWith('.oxe/'));
+      if (!files.some((f) => ownFrozenFiles.has(f))) continue;
+      const otherFrozenOwners = [...new Set(files.filter((f) => anyFrozen.has(f) && !ownFrozenFiles.has(f)).flatMap((f) => [...anyFrozen.get(f)]))].filter((o) => !idSet.has(o) && !criteria.has(o));
+      for (const f of files.filter((x) => !anyFrozen.has(x) && TEST_FILE_RE.test(x))) {
+        if (plannerAmends.includes(f) || scopeTests.includes(f) || !differsFromBase(f)) continue;
+        if (otherFrozenOwners.length) plannerWarnings.push(`emenda do planejador em ${f} (${sha.slice(0, 8)}) fica de fora: o mesmo commit congela testes de ${otherFrozenOwners.slice(0, 4).join(', ')} — se ${taskId} precisa dela, ponha ${f} nos files da tarefa [OXB-C31-2]`);
+        else if (otherTaskTouched(f)) plannerWarnings.push(`emenda do planejador em ${f} (${sha.slice(0, 8)}) fica de fora: outra tarefa também mudou o arquivo no programa — promova junto se precisar das duas [OXB-C31-2]`);
+        else plannerAmends.push(f);
+      }
+    }
+  }
+  const testFiles = [...new Set([...ownFrozenFiles, ...scopeTests, ...plannerAmends])];
+  // a test the verify runs that differs from the base but is NOT the task's (not in its files nor its entries): the PR
+  // runs the base version — named, with the commits that changed it, never carried silently
+  const verifyTests = [...new Set(planTasks.flatMap((t) => [...((t.verify && t.verify.commands) || []), t.verify && t.verify.command, t.verifyCommand].filter(Boolean).join(' ').replace(/\\/g, '/').match(/[^\s"'`]+/g) || []))]
+    .map(normRel).filter((s) => s.includes('/') && TEST_FILE_RE.test(s) && /\.[cm]?[jt]sx?$/i.test(s));
+  // a shared suite that is ALSO the task's own frozen entry is carried (as before): never reported as not carried
+  const notCarried = [...new Set([...verifyTests.filter((f) => !testFiles.includes(f) && differsFromBase(f)), ...sharedSkipped.filter((f) => !testFiles.includes(f))])];
+  if (!shas.size && !testFiles.length) throw new Error(`${taskId}: nenhum commit da tarefa fora de ${base} (sem trailer OXE-Task/done_commit em ${base}..HEAD) — já está na base?`);
+  const ordered = testsOnly ? [] : (gitLines(projectRoot, ['rev-list', '--reverse', '--topo-order', range]) || []).filter((sha) => shas.has(sha));
+  // local fixtures the frozen tests import (relative specifiers), one level deep — OXB-160 + OXB-C8 (T59 / #917):
+  // carry a local fixture from the program tree ONLY when it is new on `base` (not deleted on `base`) or when THIS
+  // task itself modified it; otherwise keep `base`'s file and warn when `base` has a newer/divergent version.
+  const directTestSet = new Set(testFiles);
+  const mergeBaseWithBase = (gitLines(projectRoot, ['merge-base', baseSha, programTip]) || [])[0] || null;
+  const skippedFixtures = [];
+  const preserveMergedFixtures = [];
+  const fixtureWarnings = [];
   const withFixtures = (() => {
     const out = new Set(testFiles);
+    const seenFixtures = new Set();
     for (const file of testFiles) {
       const root = promoteTestRoot(file);
       const text = (gitRun(projectRoot, ['show', `${programTip}:${file}`]).stdout) || '';
       for (const m of text.matchAll(/(?:from\s+|require\(\s*|import\(\s*)['"](\.{1,2}\/[^'"]+)['"]/g)) {
         const cand = resolveImportAt(projectRoot, programTip, path.posix.normalize(path.posix.join(path.posix.dirname(file), m[1])));
-        if (cand && (cand + '/').startsWith(root + '/') && !/\/src\//.test(`/${cand}`)) out.add(cand);
+        if (!cand || !(cand + '/').startsWith(root + '/') || /\/src\//.test(`/${cand}`)) continue;
+        if (directTestSet.has(cand) || seenFixtures.has(cand)) continue;
+        seenFixtures.add(cand);
+
+        const existsOnBase = gitRun(projectRoot, ['show', `${baseSha}:${cand}`]).ok;
+        const divergesFromBase = differsFromBase(cand);
+        if (!divergesFromBase) {
+          out.add(cand);
+          continue;
+        }
+        const baseChangedAfterFork = mergeBaseWithBase
+          ? (gitLines(projectRoot, ['diff', '--name-only', mergeBaseWithBase, baseSha, '--', cand]) || []).length > 0
+          : false;
+        const existsAtMergeBase = mergeBaseWithBase ? gitRun(projectRoot, ['show', `${mergeBaseWithBase}:${cand}`]).ok : false;
+        const deletedOnBase = !existsOnBase && existsAtMergeBase && baseChangedAfterFork;
+        const taskCommitsTouching = (gitLines(projectRoot, ['log', '--no-merges', '--format=%H', range, '--', cand]) || []).filter((h) => shas.has(h));
+        const inTaskFiles = planTasks.some((t) => (t.files || []).some((f) => normRel(f) === cand));
+        const taskChangedFixture = taskCommitsTouching.length > 0 || (inTaskFiles && !otherTaskTouched(cand));
+
+        if ((existsOnBase || deletedOnBase) && !taskChangedFixture) {
+          const reason = deletedOnBase ? 'removed_on_base' : (baseChangedAfterFork ? 'older_than_base' : 'not_changed_by_task');
+          skippedFixtures.push({ file: cand, reason });
+          fixtureWarnings.push(
+            `fixture ${cand} importada pelo teste congelado difere de ${base}, mas não foi alterada por ${taskId}${deletedOnBase ? ` (removida em ${base})` : baseChangedAfterFork ? ` (cópia do programa é mais antiga que ${base})` : ''} — mantida a versão de ${base}`
+          );
+          continue;
+        }
+
+        if (baseChangedAfterFork) {
+          if (!testsOnly && taskCommitsTouching.length > 0) {
+            preserveMergedFixtures.push(cand);
+            fixtureWarnings.push(
+              `fixture ${cand} alterada por ${taskId} também mudou em ${base} após o fork — mantida a mescla do cherry-pick em vez da cópia antiga do programa`
+            );
+          } else {
+            fixtureWarnings.push(
+              `fixture ${cand} carregada do programa difere de ${base}, que a modificou após o fork (cópia pode estar mais antiga que ${base})`
+            );
+          }
+        }
+        out.add(cand);
       }
     }
     return [...out];
   })();
-  const ordered = (gitLines(projectRoot, ['rev-list', '--reverse', '--topo-order', range]) || []).filter((sha) => shas.has(sha));
+  if (testsOnly) {
+    const differingTests = withFixtures.filter((f) => differsFromBase(f));
+    if (!withFixtures.length || !differingTests.length) {
+      throw new Error(`${taskId}: nenhum teste congelado ou fixture diferente de ${base} para promover com --tests-only`);
+    }
+  }
   // OXB-169: other tasks' unpromoted commits BEFORE this task's, on the same files — this diff assumes them; the
   // cherry-pick will likely conflict. Name them and the combined promote.
-  const assumed = promoteAssumedTasks(projectRoot, range, ordered, idSet, phaseCtx);
-  const original = (gitLines(projectRoot, ['rev-parse', '--abbrev-ref', 'HEAD']) || [])[0];
-  const originalSha = (gitLines(projectRoot, ['rev-parse', 'HEAD']) || [])[0];
-  const branch = String(options.branch || `oxe/promote-${taskId.toLowerCase()}`).trim();
+  const assumed = testsOnly ? [] : promoteAssumedTasks(projectRoot, range, ordered, idSet, phaseCtx);
+  // ALM: with an item for the task, the branch starts with its key ("oxe-12-t3"; Azure DevOps "ab-123-t3").
+  let branchKey = null;
+  try {
+    const almLib = require('./oxe-alm.cjs');
+    const almCfg = almLib.almConfig(readProjectConfig(projectRoot) || {});
+    const ph = activeProgramPhase(projectRoot, activeSession);
+    const pd = resolveRuntimeArtifactPaths(projectRoot, activeSession).programDir || path.join(projectRoot, '.oxe', 'program');
+    let k = null;
+    if (almCfg) {
+      for (const lid of [taskId, ...taskIds]) {
+        k = almLib.keyFor(pd, almCfg, ph ? ph.id : null, lid);
+        if (k) break;
+      }
+    }
+    branchKey = k ? k.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') : null;
+  } catch { branchKey = null; }
+  const branch = String(options.branch || (branchKey ? `${branchKey}-${taskId.toLowerCase()}` : `oxe/promote-${taskId.toLowerCase()}`)).trim();
+  const stackInfo = promoteStack(projectRoot, activeSession, task, { base, baseSha, remote, options });
+  baseSha = stackInfo.baseSha;
+  const stack = stackInfo.stack;
+  const buildSha = stack ? stack.sha : baseSha;
+  const unpromoDeps = testsOnly
+    ? { dependencies: [], suggested_order: [], warnings: [] }
+    : promoteHelpers.analyzeUnpromotedDependencies(projectRoot, {
+        range,
+        baseSha: buildSha,
+        orderedTaskShas: ordered,
+        planTasks,
+        phase: phaseCtx.phase,
+        stackedTaskIds: stack ? [stack.task] : [],
+      });
+  if (options.strict && unpromoDeps.dependencies.length) {
+    throw new Error(`promote --strict recusado para ${taskId}: ${unpromoDeps.warnings[0]}`);
+  }
+  resolvedBase.warnings = [...(resolvedBase.warnings || []), ...stackInfo.warnings, ...quickSelection.warnings, ...fixtureWarnings, ...plannerWarnings, ...plannerAmends.map((f) => `${f}: emenda do planejador (commit OXE-Plan que congelou os testes de ${taskId}) vai no PR como arquivo [OXB-C31-2]`)];
+  if (assumed.length && !stack) {
+    resolvedBase.warnings.push(`${taskId} vem depois de ${assumed.map((a) => `${a.task} (${a.sha.slice(0, 8)})`).join(', ')} no histórico e mexe nos mesmos arquivos (${[...new Set(assumed.flatMap((a) => a.files))].slice(0, 4).join(', ')}) — o cherry-pick pode conflitar; promova junto: oxe-cc runtime promote --tasks ${[...new Set([...assumed.map((a) => a.task), ...taskIds])].join(',')}`);
+  }
+  for (const w of unpromoDeps.warnings) {
+    if (!resolvedBase.warnings.includes(w)) resolvedBase.warnings.push(w);
+  }
+  const notCarriedWarnings = [];
+  for (const f of notCarried) {
+    const by = (gitLines(projectRoot, ['log', '--format=%h %s', range, '--', f]) || []).slice(0, 3);
+    notCarriedWarnings.push(sharedSkipped.includes(f)
+      ? `${f} está nos files de ${taskId}, mas outra tarefa também o mudou no programa: o PR leva só o que o cherry-pick da tarefa trouxe (não a versão da ponta, com as asserções dela)${by.length ? ` — commits: ${by.join('; ')}` : ''}. Se precisar das duas, promova junto`
+      : `${f} está no verify de ${taskId} e difere de ${base}, mas não é da tarefa (fora dos files e dos testes congelados dela): o PR roda a versão de ${base}${by.length ? ` — mudado por ${by.join('; ')}` : ''}. Se a tarefa foi construída contra a nova, ponha o arquivo nos files dela (ou promova junto com a dona)`);
+  }
+  resolvedBase.warnings.push(...notCarriedWarnings);
+  if (options.dryRun) {
+    const quickShaSet = new Set(quickSelection.quicks.map((q) => q.sha));
+    const pcfgDry = readProjectConfig(projectRoot) || {};
+    const dryTouchedFiles = [...new Set([
+      ...planTasks.flatMap((t) => (t.files || []).map(normRel)),
+      ...ordered.flatMap((sha) => gitLines(projectRoot, ['diff-tree', '--no-commit-id', '--name-only', '-r', sha]) || []),
+    ])].filter((f) => f && !f.includes('*'));
+    const { riskSuites: dryRiskSuites, planDoc: dryPlanDoc } = collectPromoteRiskSuites(projectRoot, {
+      projectRoot,
+      activeSession,
+      planTasks,
+      touchedFiles: dryTouchedFiles,
+      excludeSuites: [...verifyTests, ...withFixtures],
+      config: pcfgDry,
+    });
+    const dryPreviewCmds = options.previewCi && dryRiskSuites.length
+      ? promoteHelpers.buildPreviewCiCommands(projectRoot, dryRiskSuites, pcfgDry, { projectRoot, planTasks, planDoc: dryPlanDoc })
+      : [];
+    return {
+      dry_run: true,
+      ...(testsOnly ? { tests_only: true } : {}),
+      task: taskId,
+      base,
+      base_sha: baseSha,
+      ...(stack ? { stacked_on: { task: stack.task, branch: stack.branch, pr: stack.pr || null, sha: stack.sha } } : {}),
+      base_requested: resolvedBase.requested,
+      warnings: resolvedBase.warnings,
+      branch,
+      commits: ordered,
+      commit_details: ordered.map((sha) => ({
+        sha,
+        subject: (gitLines(projectRoot, ['log', '-1', '--format=%s', sha]) || [''])[0],
+        is_quick: quickShaSet.has(sha),
+      })),
+      ...(quickSelection.quicks.length ? { quick_commits: quickSelection.quicks } : {}),
+      ...(quickSelection.skipped.length ? { skipped_quicks: quickSelection.skipped } : {}),
+      ...(unpromoDeps.dependencies.length ? { unpromoted_dependencies: unpromoDeps.dependencies, suggested_promote_order: unpromoDeps.suggested_order } : {}),
+      ...(notCarried.length ? { not_carried_tests: notCarried } : {}),
+      ...(skippedFixtures.length ? { skipped_fixtures: skippedFixtures } : {}),
+      ...(dryRiskSuites.length ? { ci_risk_suites: dryRiskSuites } : {}),
+      ...(dryPreviewCmds.length ? { preview_ci_commands: dryPreviewCmds } : {}),
+      frozen_tests: withFixtures,
+      conflict: null,
+      pr_ready: null,
+      body_file: null,
+      pr: null,
+      commands: [],
+      worktree: null,
+    };
+  }
   // Never a force-push: a branch already on the remote with commits we do not have is refused before anything changes.
-  const remote = String(options.remote || 'origin');
   // OXB-160: a local branch an earlier (failed) promote left behind — created by the promote, never pushed — is
   // reused: dropped and rebuilt. Any other existing branch is refused, as before.
   let replacedBranch = null;
@@ -5497,6 +9086,9 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     if (!own.ok) throw new Error(`a branch ${branch} já existe em ${remote} (${remoteSha.slice(0, 8)}) — ${own.why}; o promote não sobrescreve; use --branch <outra>`);
     forceLease = remoteSha;
   }
+  // OxeSpace 14/11: the leftover worktree of an earlier failed promote holds the branch ("está em uso numa worktree");
+  // sweep the stale promote worktrees (pid gone) BEFORE checking whether the branch is ours to rebuild.
+  const sweptEarly = sweepStalePromoteWorkspaces(projectRoot);
   if (gitLines(projectRoot, ['rev-parse', '--verify', '-q', `refs/heads/${branch}`])) {
     const own = ownUnpushedPromoteBranch(projectRoot, branch, remote, baseSha, { allowRemote: Boolean(forceLease) });
     if (!own.ok) throw new Error(`a branch ${branch} já existe${own.why ? ` (${own.why})` : ''} — use --branch <outra> ou apague-a`);
@@ -5505,19 +9097,33 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     replacedBranch = own.sha;
   }
   const pushArgs = () => ['push', ...(forceLease ? [`--force-with-lease=${branch}:${forceLease}`] : []), '-u', remote, branch];
-  // OXB-161: a dependency promoted but not merged yet → the branch is built ON TOP of its promote branch (stacked);
-  // the PR still targets the base, carrying the dependency's commits until it merges. --hold-deps waits instead.
-  const stackInfo = promoteStack(projectRoot, activeSession, task, { base, baseSha, remote, options });
-  baseSha = stackInfo.baseSha;
-  const stack = stackInfo.stack;
-  const buildSha = stack ? stack.sha : baseSha;
-  resolvedBase.warnings = [...(resolvedBase.warnings || []), ...stackInfo.warnings];
-  if (assumed.length && !stack) {
-    resolvedBase.warnings.push(`${taskId} vem depois de ${assumed.map((a) => `${a.task} (${a.sha.slice(0, 8)})`).join(', ')} no histórico e mexe nos mesmos arquivos (${[...new Set(assumed.flatMap((a) => a.files))].slice(0, 4).join(', ')}) — o cherry-pick pode conflitar; promova junto: oxe-cc runtime promote --tasks ${[...new Set([...assumed.map((a) => a.task), ...taskIds])].join(',')}`);
-  }
-  const result = { task: taskId, base, base_sha: baseSha, ...(stack ? { stacked_on: { task: stack.task, branch: stack.branch, pr: stack.pr || null, sha: stack.sha } } : {}), base_requested: resolvedBase.requested, warnings: resolvedBase.warnings, branch, commits: ordered, conflict: null, pr_ready: null, body_file: null, pr: null, commands: [], worktree: null, ...(replacedBranch ? { replaced_branch: replacedBranch } : {}), ...(forceLease ? { replaced_remote: forceLease } : {}) };
+  const result = {
+    task: taskId,
+    ...(testsOnly ? { tests_only: true } : {}),
+    base,
+    base_sha: baseSha,
+    ...(stack ? { stacked_on: { task: stack.task, branch: stack.branch, pr: stack.pr || null, sha: stack.sha } } : {}),
+    base_requested: resolvedBase.requested,
+    warnings: resolvedBase.warnings,
+    branch,
+    commits: ordered,
+    ...(quickSelection.quicks.length ? { quick_commits: quickSelection.quicks } : {}),
+    ...(quickSelection.skipped.length ? { skipped_quicks: quickSelection.skipped } : {}),
+    ...(skippedFixtures.length ? { skipped_fixtures: skippedFixtures } : {}),
+    ...(unpromoDeps.dependencies.length ? { unpromoted_dependencies: unpromoDeps.dependencies, suggested_promote_order: unpromoDeps.suggested_order } : {}),
+    conflict: null,
+    pr_ready: null,
+    body_file: null,
+    pr: null,
+    commands: [],
+    worktree: null,
+    ...(replacedBranch ? { replaced_branch: replacedBranch } : {}),
+    ...(forceLease ? { replaced_remote: forceLease } : {}),
+  };
+  if (notCarried.length) result.not_carried_tests = notCarried;
   // Where the branch is built: a temporary worktree (default) or, with --in-place, the program checkout.
   let work = projectRoot;
+  let wtPidFile = null;
   let cleanup = () => {};
   if (inPlace) {
     const back = () => gitRun(projectRoot, ['checkout', '-q', original && original !== 'HEAD' ? original : originalSha]);
@@ -5526,26 +9132,33 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     gitRun(projectRoot, ['config', `branch.${branch}.oxePromote`, 'true']);
     cleanup = back;
   } else {
-    const wt = path.join(projectRoot, '.oxe', 'promote-ws', `${taskId.toLowerCase()}-${Date.now().toString(36)}`);
+    const alloc = allocatePromoteWorktreePath(projectRoot, taskIds, taskId, buildSha);
+    const wt = alloc.wt;
+    wtPidFile = alloc.pidFile;
     fs.mkdirSync(path.dirname(wt), { recursive: true });
+    fs.mkdirSync(path.dirname(wtPidFile), { recursive: true });
     // OXB-162: worktrees of killed promotes (their junction unlinked first), and this one's pid for the next sweep.
-    result.swept = sweepStalePromoteWorkspaces(projectRoot);
-    fs.writeFileSync(`${wt}.pid`, JSON.stringify({ pid: process.pid, task: taskId, at: new Date().toISOString() }));
-    const add = gitRun(projectRoot, ['worktree', 'add', '-q', '-b', branch, wt, buildSha]);
+    result.swept = [...sweptEarly, ...sweepStalePromoteWorkspaces(projectRoot)];
+    fs.writeFileSync(wtPidFile, JSON.stringify({ pid: process.pid, task: taskId, ...(alloc.external ? { dir: wt } : {}), at: new Date().toISOString() }));
+    const addArgs = process.platform === 'win32'
+      ? ['-c', 'core.longpaths=true', 'worktree', 'add', '-q', '-b', branch, wt, buildSha]
+      : ['worktree', 'add', '-q', '-b', branch, wt, buildSha];
+    const add = gitRun(projectRoot, addArgs);
     if (!add.ok) throw new Error(`não foi possível criar a worktree de ${branch}: ${add.stderr.trim()}`);
     gitRun(projectRoot, ['config', `branch.${branch}.oxePromote`, 'true']);
-    work = wt;
+    work = (() => { try { return fs.realpathSync.native ? fs.realpathSync.native(wt) : fs.realpathSync(wt); } catch { return wt; } })();
     // OXB-163: machine-local files (worktree.copy_local) pr:ready needs (gradle's local.properties, .env.local).
-    try { result.local_copied = require('./oxe-local-config.cjs').copyLocalFiles(projectRoot, wt).copied; } catch { /* auxiliar */ }
-    result.worktree = path.relative(projectRoot, wt).replace(/\\/g, '/');
+    try { result.local_copied = require('./oxe-local-config.cjs').copyLocalFiles(projectRoot, work).copied; } catch { /* auxiliar */ }
+    const relWt = path.relative(projectRoot, work).replace(/\\/g, '/');
+    result.worktree = relWt.startsWith('..') ? work.replace(/\\/g, '/') : relWt;
     // pr:ready needs the dependencies: a junction to the program's node_modules (or deps_link_from), never an install.
     let linked = false;
     try {
       const pc = require('./oxe-parallel.cjs').parallelConfig(projectRoot);
       const from = pc.deps && pc.deps.from ? pc.deps.from : projectRoot;
       const src = path.join(from, 'node_modules');
-      if (fs.existsSync(src) && !fs.existsSync(path.join(wt, 'node_modules'))) {
-        fs.symlinkSync(fs.realpathSync(src), path.join(wt, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+      if (fs.existsSync(src) && !fs.existsSync(path.join(work, 'node_modules'))) {
+        fs.symlinkSync(fs.realpathSync(src), path.join(work, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
         linked = true;
       }
     } catch { /* pr:ready reports the missing deps */ }
@@ -5553,153 +9166,135 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
       // Links first (a junction must never be followed by a recursive delete), then the worktree — never --force.
       try {
         const rt = loadRuntimeModule();
-        if (rt && typeof rt.unlinkExternalLinks === 'function') rt.unlinkExternalLinks(wt);
-        else if (linked) fs.unlinkSync(path.join(wt, 'node_modules'));
+        if (rt && typeof rt.unlinkExternalLinks === 'function') rt.unlinkExternalLinks(work);
+        else if (linked) fs.unlinkSync(path.join(work, 'node_modules'));
       } catch { /* */ }
-      const rm = gitRun(projectRoot, ['worktree', 'remove', wt]);
-      if (rm.ok) { try { fs.rmSync(`${wt}.pid`, { force: true }); } catch { /* */ } }
+      let rm = gitRun(projectRoot, ['worktree', 'remove', work]);
+      // OxeSpace 14/11: a failed step (the frozen-tests commit refused) leaves uncommitted files in this promote's OWN
+      // worktree; plain remove refuses and the worktree keeps holding the branch, so the next promote cannot rebuild
+      // it. It is ours (created above): with no link left inside, a forced removal is safe.
+      if (!rm.ok) {
+        let linkLeft = false;
+        try { linkLeft = fs.lstatSync(path.join(work, 'node_modules')).isSymbolicLink(); } catch { linkLeft = false; }
+        if (!linkLeft) rm = gitRun(projectRoot, ['worktree', 'remove', '--force', work]);
+      }
+      if (rm.ok) {
+        try { fs.rmSync(wtPidFile, { force: true }); } catch { /* */ }
+        if (alloc.external) { try { fs.rmSync(`${work}.pid`, { force: true }); } catch { /* */ } }
+      }
       if (!rm.ok) result.cleanup_warning = `worktree ${result.worktree} não removida (${rm.stderr.trim().split(/\r?\n/).pop()}) — remova à mão depois de conferir que não há links dentro`;
       gitRun(projectRoot, ['worktree', 'prune']);
     };
   }
   // OXB-162: Ctrl+C / SIGTERM while the promote runs still unlinks and removes its worktree (a hard kill is swept by
   // the next promote).
-  const onSignal = (sig) => { try { cleanup(); } catch { /* */ } process.exit(sig === 'SIGINT' ? 130 : 143); };
+  let keepWorktree = false;
+  const onSignal = (sig) => { try { if (!keepWorktree) cleanup(); } catch { /* */ } process.exit(sig === 'SIGINT' ? 130 : 143); };
   const signals = ['SIGINT', 'SIGTERM'];
   for (const sig of signals) process.once(sig, onSignal);
   try {
-    for (const sha of ordered) {
+    const resolvedCapFiles = new Set();
+    const resolvedConflicts = [];
+    const pcfgPick = readProjectConfig(projectRoot) || {};
+    for (let idx = 0; idx < ordered.length; idx += 1) {
+      const sha = ordered[idx];
       const pick = gitRun(work, ['cherry-pick', '-x', sha]);
       if (!pick.ok) {
         const files = gitLines(work, ['diff', '--name-only', '--diff-filter=U']) || [];
+        const auto = promoteHelpers.tryResolvePromoteCherryPickConflict(projectRoot, work, sha, pcfgPick, files, { resolve: options.resolve });
+        if (auto.resolved) {
+          for (const rf of auto.resolved_cap_files || []) resolvedCapFiles.add(rf);
+          for (const rf of auto.resolved_files || []) {
+            resolvedConflicts.push({ commit: sha, ...rf });
+            result.warnings.push(`conflito auto-resolvido em ${rf.file} (${rf.strategy})`);
+          }
+          continue;
+        }
+        if (options.keepOnConflict && !inPlace) {
+          keepWorktree = true;
+          try {
+            const pidTarget = wtPidFile || `${work}.pid`;
+            const pausedMeta = JSON.stringify({ pid: process.pid, task: taskId, paused: true, ...(pidTarget !== `${work}.pid` ? { dir: work } : {}), at: new Date().toISOString() });
+            fs.writeFileSync(pidTarget, pausedMeta);
+            if (pidTarget !== `${work}.pid`) fs.writeFileSync(`${work}.pid`, pausedMeta);
+          } catch { /* */ }
+          const pendingState = {
+            task: taskId,
+            taskIds,
+            branch,
+            base,
+            baseSha,
+            buildSha,
+            original,
+            originalSha,
+            remote,
+            inPlace,
+            forceLease,
+            worktree: work,
+            programTip,
+            ordered,
+            conflict_commit: sha,
+            remaining_commits: ordered.slice(idx + 1),
+            resolved_cap_files: [...resolvedCapFiles],
+            resolved_conflicts: resolvedConflicts,
+            withFixtures,
+            preserveMergedFixtures,
+            verifyTests,
+            sharedSkipped,
+            criteria: [...criteria],
+            phaseCtx,
+            taskMeta: { id: task.id, title: task.title || '', files: task.files || [], acceptance: task.acceptance || [] },
+            quickSelection,
+            stack,
+            resultSnapshot: { ...result },
+          };
+          writeTextAtomic(pendingFile, `${JSON.stringify(pendingState, null, 2)}\n`);
+          result.conflict = { commit: sha, files };
+          result.kept_worktree = result.worktree;
+          result.error = `conflito no cherry-pick de ${sha.slice(0, 8)} (${files.join(', ') || 'sem arquivos'}) — worktree mantida em ${result.worktree} (branch ${branch}); resolva os arquivos, rode \`git -C ${work} add ${files.join(' ') || '.'}\` e finalize com \`oxe-cc runtime promote ${taskId} --continue\`${assumed.length ? ` (ou promova junto: --tasks ${[...new Set([...assumed.map((a) => a.task), ...taskIds])].join(',')})` : ''}`;
+          break;
+        }
         gitRun(work, ['cherry-pick', '--abort']);
         result.conflict = { commit: sha, files };
-        result.error = `conflito no cherry-pick de ${sha.slice(0, 8)} (${files.join(', ') || 'sem arquivos'}) — branch ${branch} descartada; ${assumed.length ? `a tarefa depende de commits de ${assumed.map((a) => a.task).join(', ')} feitos antes dela: promova junto (--tasks ${[...new Set([...assumed.map((a) => a.task), ...taskIds])].join(',')}) — ` : ''}ou resolva à mão / rode runtime sync --from ${base} antes`;
+        result.error = `conflito no cherry-pick de ${sha.slice(0, 8)} (${files.join(', ') || 'sem arquivos'}) — branch ${branch} descartada; ${assumed.length ? `a tarefa depende de commits de ${assumed.map((a) => a.task).join(', ')} feitos antes dela: promova junto (--tasks ${[...new Set([...assumed.map((a) => a.task), ...taskIds])].join(',')}) — ` : ''}use --resolve <arquivo>=ours|theirs|union-json-array ou rode com --keep-on-conflict para resolver na worktree e finalizar com \`oxe-cc runtime promote ${taskId} --continue\``;
         break;
       }
     }
-    // OXB-156 (b): the task's frozen tests as files from the program tip; identical-on-base ones are skipped.
-    if (!result.conflict && withFixtures.length) {
-      const added = [];
-      for (const file of withFixtures) {
-        const tip = gitRun(projectRoot, ['show', `${programTip}:${file}`]);
-        if (!tip.ok) continue;
-        const onBase = gitRun(projectRoot, ['show', `${baseSha}:${file}`]);
-        const current = fs.existsSync(path.join(work, file)) ? fs.readFileSync(path.join(work, file), 'utf8') : null;
-        if ((onBase.ok && onBase.stdout === tip.stdout) || current === tip.stdout) continue;
-        const r = spawnSync('git', ['show', `${programTip}:${file}`], { cwd: projectRoot, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
-        fs.mkdirSync(path.dirname(path.join(work, file)), { recursive: true });
-        fs.writeFileSync(path.join(work, file), r.stdout);
-        added.push(file);
-      }
-      if (added.length) {
-        gitRun(work, ['add', '--', ...added]);
-        const c = gitRun(work, ['commit', '-q', '-m', `test(acceptance): frozen tests of ${taskId}`, '-m', `From the program branch at ${String(programTip).slice(0, 10)}: ${added.join(', ')}`]);
-        if (!c.ok) result.error = `commit dos testes congelados falhou: ${c.stderr.trim().split(/\r?\n/).pop()}`;
-      }
-      result.frozen_tests = added;
-    }
-    // OXB-206: never promote a branch carrying Git-tracked parked future-phase suites (`tests/acceptance/parked-*`).
+    if (resolvedConflicts.length) result.resolved_conflicts = resolvedConflicts;
     if (!result.conflict && !result.error) {
-      const icLib = require('./oxe-integration-checks.cjs');
-      const parked = icLib.findTrackedParkedAcceptance(work, { baseRef: baseSha });
-      if (parked.length) {
-        result.parked_acceptance = parked;
-        result.error = `gate de PR bloqueado em ${branch}: ${icLib.formatParkedAcceptanceError(parked)}`;
-      }
-    }
-    // OXB-202: what only breaks when work meets (size baseline summed by two phases, stale notices) — before any push.
-    if (!result.conflict && !result.error && options.integrationChecks !== false) {
-      const ic = require('./oxe-integration-checks.cjs').runIntegrationChecks(work, { configRoot: projectRoot, baseRef: baseSha });
-      if (ic.ran.length) result.integration_checks = ic.ran;
-      if (!ic.ok) result.error = `check de integração vermelho em ${branch}: \`${ic.failed.command}\` (exit ${ic.failed.exit}) — nada foi enviado; corrija (ex.: npm run notices:generate, ou reduza o arquivo acima do teto) e promova de novo`;
-    }
-    // OXB-158: with --open-pr the branch is pushed FIRST — pr:ready posts its GitHub status on the pushed sha (before,
-    // it passed its checks, failed to post "… is not on GitHub yet: push it first", and the PR was never opened).
-    if (!result.conflict && options.openPr && !result.error) {
-      const push = gitRun(work, pushArgs());
-      if (!push.ok) result.error = `push falhou: ${push.stderr.trim().split(/\r?\n/).slice(-2).join(' · ')}`;
-      else result.pushed = true;
-    }
-    // The project's own PR checks, on the promoted branch.
-    if (!result.conflict && !result.error) {
-      let pkg = null;
-      try { pkg = JSON.parse(fs.readFileSync(path.join(work, 'package.json'), 'utf8')); } catch { pkg = null; }
-      if (pkg && pkg.scripts && pkg.scripts['pr:ready'] && options.prReady !== false) {
-        const ready = runProgressCommand(work, 'npm run pr:ready', 1_800_000, { quiet: options.quietProgress === true || process.env.OXE_PROGRESS === '0' });
-        // OXB-158: "the checks failed" is not "only posting the status failed".
-        // Only the status post failed when the output says so AND, without those lines, nothing else reports a failure.
-        const tail = String(ready.tail || '');
-        const STATUS_LINE = /not on GitHub yet|push it first|(post|create|set)\w*\s+(the\s+)?(commit\s+)?status/i;
-        // npm's own wrapper lines ("npm error Lifecycle script … failed", "npm error code 1") say "failed" for ANY
-        // non-zero exit: they are not a check result.
-        const otherLines = tail.split(/\r?\n/).filter((l) => !STATUS_LINE.test(l) && !/^\s*npm (ERR!|error|warn)\b/i.test(l)).join('\n');
-        const statusOnly = !ready.ok && STATUS_LINE.test(tail) && !/\bFAIL\b|\bfailed\b|✗|×|error TS\d+|\d+ (failing|failed)/i.test(otherLines);
-        result.pr_ready = { ok: ready.ok || statusOnly, tail: ready.tail, ...(statusOnly ? { status_post_failed: true } : {}) };
-      }
+      finalizePromotedWorktree({
+        projectRoot,
+        activeSession,
+        work,
+        result,
+        taskId,
+        planTasks,
+        phaseCtx,
+        base,
+        baseSha,
+        buildSha,
+        branch,
+        programTip,
+        withFixtures,
+        preserveMergedFixtures,
+        ordered,
+        verifyTests,
+        resolvedCapFiles,
+        pushArgs,
+        options,
+      });
+      if (fs.existsSync(pendingFile)) { try { fs.rmSync(pendingFile, { force: true }); } catch { /* */ } }
     }
   } finally {
     for (const sig of signals) process.removeListener(sig, onSignal);
-    cleanup();
+    if (!keepWorktree) cleanup();
   }
   if (result.conflict) {
-    gitRun(projectRoot, ['branch', '-D', branch]);
-    appendEvent(projectRoot, activeSession, { type: 'TaskPromoteFailed', work_item_id: taskId, payload: { base, reason: result.error || 'conflict', commit: result.conflict.commit, files: result.conflict.files } });
+    if (!keepWorktree) gitRun(projectRoot, ['branch', '-D', branch]);
+    appendEvent(projectRoot, activeSession, { type: 'TaskPromoteFailed', work_item_id: taskId, payload: { base, reason: result.error || 'conflict', commit: result.conflict.commit, files: result.conflict.files, ...(keepWorktree ? { kept_worktree: result.kept_worktree } : {}) } });
     return result;
   }
-  // PR body: the task, its files and criteria, the CRs on those criteria.
-  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
-  const crs = require('./oxe-change.cjs').listChanges(paths.programDir || path.join(projectRoot, '.oxe', 'program'))
-    .filter((cr) => (cr.criteria || []).some((a) => criteria.has(a)));
-  const body = [
-    `## ${taskId} — ${task.title || ''}`.trim(),
-    '',
-    `Promovida de \`${original}\` por \`oxe-cc runtime promote\` (cherry-pick -x de ${ordered.length} commit(s)).`,
-    '',
-    ...(stack ? [
-      `> **Empilhada sobre ${stack.task}** (${stack.pr ? `PR ${stack.pr}, ` : ''}branch \`${stack.branch}\`), ainda não mergeada em \`${base}\`: este PR traz os commits dela até ela entrar. Mergeie ${stack.task} primeiro; depois disso o diff deste PR encolhe para os commits de ${taskId}.`,
-      '',
-    ] : []),
-    '### Arquivos',
-    ...(task.files || []).map((f) => `- \`${f}\``),
-    '',
-    `### Critérios: ${[...criteria].join(', ') || '—'}`,
-    ...(crs.length ? ['', '### Change requests', ...crs.map((cr) => `- ${cr.id} (${cr.class}, ${cr.status}): ${cr.summary}`)] : []),
-    '',
-    '### Commits da tarefa',
-    ...(ordered.length ? ordered.map((sha) => `- ${sha.slice(0, 10)} ${(gitLines(projectRoot, ['log', '-1', '--format=%s', sha]) || [''])[0]}`) : ['- —']),
-    '',
-    '### Testes congelados (arquivos do tip do programa)',
-    ...((result.frozen_tests || []).length ? result.frozen_tests.map((f) => `- \`${f}\``) : ['- — (já na base, ou nenhum)']),
-    ...(result.pr_ready ? ['', `### pr:ready: ${result.pr_ready.ok ? 'verde' : 'VERMELHO'}`] : []),
-    '',
-  ].join('\n');
-  const bodyFile = path.join(projectRoot, '.oxe', 'promote', `${taskId}.md`);
-  writeTextAtomic(bodyFile, body);
-  result.body_file = path.relative(projectRoot, bodyFile).replace(/\\/g, '/');
-  const title = `${taskId}: ${task.title || 'promote'}`;
-  // OXB-157: the PR targets the branch NAME on the remote (`main`), not the local tracking ref (`origin/main`).
-  const prBase = base.replace(new RegExp(`^${remote}/`), '');
-  result.commands = [
-    `git push -u ${remote} ${branch}`,
-    `gh pr create --base ${prBase} --head ${branch} --title ${JSON.stringify(title)} --body-file ${result.body_file}`,
-  ];
-  if (options.openPr && !result.error) {
-    if (result.pr_ready && !result.pr_ready.ok) {
-      result.error = `pr:ready vermelho em ${branch} — PR não aberto (a branch já está em ${remote}; corrija e rode os comandos abaixo — o PR vai contra ${prBase}${stack ? `, não contra a branch de ${stack.task}` : ''})`;
-    } else {
-      // pushed before pr:ready (OXB-158); --in-place pushes here as before
-      const push = result.pushed ? { ok: true } : gitRun(projectRoot, pushArgs());
-      if (!push.ok) result.error = `push falhou: ${push.stderr.trim().split(/\r?\n/).slice(-2).join(' · ')}`;
-      else {
-        const gh = (options.ghSpawn || spawnSync)('gh', ['pr', 'create', '--base', prBase, '--head', branch, '--title', title, '--body-file', bodyFile], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
-        if (gh.status === 0) result.pr = String(gh.stdout || '').trim().split(/\r?\n/).pop();
-        else result.error = `gh pr create falhou: ${String(gh.stderr || gh.stdout || '').trim().split(/\r?\n/).slice(-2).join(' · ')}`;
-      }
-    }
-  }
-  appendEvent(projectRoot, activeSession, { type: 'TaskPromoted', work_item_id: taskId, payload: { base, branch, commits: ordered, pr_ready: result.pr_ready ? result.pr_ready.ok : null, pr: result.pr, ...(stack ? { stacked_on: result.stacked_on } : {}) } });
-  return result;
+  return finalizePromotePrBodyAndEvents({ projectRoot, activeSession, result, task, taskId, criteria, ordered, branch, original, base, remote, stack, pushArgs, options: { ...options, taskIds } });
 }
 
 /**
@@ -5727,6 +9322,14 @@ function planWithoutCriteria(doc, criteria) {
   if (blockers.length) throw new Error(`não dá para tirar ${criteria.join(', ')} do plano atual: ${blockers.join('; ')} — ajuste o plano (/oxe-plan) antes`);
   next.tasks = (next.tasks || []).filter((t) => !removedTasks.includes(t.id));
   return { doc: next, removedTasks, removedTests: (doc.acceptance_tests || []).filter((t) => t && drop.has(t.criterion)).map((t) => t.id || t.criterion) };
+}
+
+/** An execution attempt of the phase already happened: a run or a task started since the phase started. */
+function phaseAttemptRan(projectRoot, activeSession, phase) {
+  const since = phase.started_at ? Date.parse(phase.started_at) : 0;
+  let events = [];
+  try { events = readEvents(projectRoot, activeSession); } catch { return false; }
+  return events.some((e) => ['RunStarted', 'TaskStarted', 'TaskCompleted', 'ExecutorTurn'].includes(e.type) && (!since || !e.timestamp || Date.parse(e.timestamp) >= since));
 }
 
 /**
@@ -5774,8 +9377,11 @@ function runtimeProgramPhaseEdit(projectRoot, activeSession, options = {}, inter
     throw new Error('nada a editar: use --title, --scope, --add-requirements, --remove-requirements, --add-acceptance ou --remove-acceptance');
   }
   const notStarted = phase.status === 'pending' && !phase.plan_ref && !phase.run_id && !phase.started_at && state.active_phase !== phase.id;
+  // 1.21.2: `program start` puts the phase in planning; until an attempt runs, its scope is still being planned, so
+  // new criteria and requirements go in directly (the CR path is for executing onwards).
+  const stillPlanning = phase.status === 'planning' && !phase.run_id && !phaseAttemptRan(projectRoot, activeSession, phase);
   if (phase.status === 'closed') throw new Error(`${phase.id} está fechada — mude o escopo de uma fase fechada com um CR (runtime feedback), não editando a fase`);
-  if ((addReq.length || addAcc.length) && !notStarted) throw new Error(`${phase.id} já começou (${phase.status}${phase.plan_ref ? ', com plano' : ''}) — critérios e requisitos novos entram numa fase ainda não iniciada (ou via CR)`);
+  if ((addReq.length || addAcc.length) && !notStarted && !stillPlanning) throw new Error(`${phase.id} já começou (${phase.status}${phase.plan_ref ? ', com plano' : ''}${phase.run_id ? ', com run' : ''}) — critérios e requisitos novos entram numa fase ainda não iniciada ou em planning sem tentativa executada (depois disso, via CR)`);
   const standingIds = require('./oxe-criteria-ids.cjs').standingAcceptance(projectRoot);
   for (const a of addAcc) if (standingIds.includes(a)) throw new Error(`${a} é permanente (program.standing_acceptance): vale em todo close de fase, por sign-off com evidência — não se adiciona a uma fase`);
   for (const a of addAcc) {
@@ -5810,6 +9416,7 @@ function runtimeProgramPhaseEdit(projectRoot, activeSession, options = {}, inter
   const knownR = new Set(specEdit.requirementIds(specText));
   for (const a of addAcc) if (knownA.size && !knownA.has(a)) warnings.push(`${a} não está na tabela de critérios da SPEC (oxe-cc spec add criterion ${a} …)`);
   for (const r of addReq) if (knownR.size && !knownR.has(r)) warnings.push(`${r} não está nos requisitos da SPEC (oxe-cc spec add requirement ${r} …)`);
+  if (stillPlanning && phase.plan_ref && addAcc.length) warnings.push(`${phase.id} já tem plano: cubra ${addAcc.join(', ')} no PLAN e rode oxe-cc plan lint antes do execute`);
   const roadmapText = internal.roadmapText != null ? internal.roadmapText : readTextIfExists(paths.roadmap);
   if (!roadmapText) throw new Error(`ROADMAP.md não encontrado (${paths.roadmap})`);
   const roadmap = specEdit.editRoadmapPhase(roadmapText, phase.id, {
@@ -5835,6 +9442,68 @@ function runtimeProgramPhaseEdit(projectRoot, activeSession, options = {}, inter
  * written (remove from --from, with the plan clean-up when it is the active phase; add to --to, which must not have
  * started), then PROGRAM.json, ROADMAP and the plan are written together, with one program_edit record.
  */
+/**
+ * OxeSpace 15/11 (OxeChat F3, chat-sess): a closed phase's regression record kept the pre-CR hash of a re-frozen test,
+ * so every later verify failed `reg-f2-check-accept-a6: acceptance_tampered`. `program regression repin` re-pins the
+ * frozen files of one criterion of a CLOSED phase to the file as committed now — audited (by, reason, from → to) and
+ * only for a file whose working copy equals HEAD (an uncommitted edit is never pinned).
+ */
+function runtimeProgramRegressionRepin(projectRoot, activeSession, options = {}) {
+  const programLib = require('./oxe-program.cjs');
+  const phaseId = String(options.phase || '').trim().toUpperCase();
+  const criteria = [...new Set(String(options.criteria || '').split(',').map((s) => s.trim().toUpperCase()).filter(Boolean))];
+  if (!/^F\d+$/.test(phaseId) || !criteria.length || criteria.some((c) => !/^A\d+$/.test(c))) {
+    throw new Error('use: oxe-cc program regression repin F<n> --criteria A<n>[,A<m>] --by <papel> --reason "<por quê>" [--dry-run]');
+  }
+  const { by, reason } = requireEditReason({ by: options.by, reason: options.reason });
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const state = programLib.readProgram(programDir);
+  const phase = state && Array.isArray(state.phases) ? state.phases.find((p) => p.id === phaseId) : null;
+  if (!phase) throw new Error(`${phaseId}: fase inexistente no programa`);
+  if (phase.status !== 'closed') throw new Error(`${phaseId} não está fechada (status ${phase.status}): o registro de regressão só existe para fase fechada`);
+  const file = path.join(programDir, 'regression', `${phaseId}.json`);
+  const doc = readJsonQuiet(file);
+  if (!doc || !Array.isArray(doc.checks)) throw new Error(`${phaseId}: sem registro de regressão (${path.relative(projectRoot, file)})`);
+  const runtime = loadRuntimeModule();
+  const git = (args) => spawnSync('git', args, { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
+  const changes = [];
+  const problems = [];
+  const seen = new Set(); // one change per check+file, even when two criteria name the same check
+  for (const crit of criteria) {
+    const checks = doc.checks.filter((c) => c && (String(c.acceptance_ref || '').toUpperCase() === crit || c.id === `check-accept-${crit.toLowerCase()}`) && Array.isArray(c.frozen_files) && c.frozen_files.length);
+    if (!checks.length) { problems.push(`${crit}: nenhum teste congelado de ${crit} no registro de regressão de ${phaseId}`); continue; }
+    for (const check of checks) {
+      for (const f of check.frozen_files) {
+        const rel = String(f.path || '').replace(/\\/g, '/');
+        if (seen.has(`${check.id}:${rel}`)) continue;
+        seen.add(`${check.id}:${rel}`);
+        const abs = path.resolve(projectRoot, rel);
+        if (!fs.existsSync(abs)) { problems.push(`${check.id}: ${rel} não existe`); continue; }
+        if (git(['ls-files', '--error-unmatch', '--', rel]).status !== 0) { problems.push(`${check.id}: ${rel} não está versionado — commite o teste antes`); continue; }
+        // fail closed: a git error (index.lock, broken repo) is not "clean"
+        const st = git(['status', '--porcelain', '--', rel]);
+        if (st.status !== 0) { problems.push(`${check.id}: git status falhou para ${rel} (${String(st.stderr || '').trim().split('\n')[0] || `exit ${st.status}`})`); continue; }
+        if ((st.stdout || '').trim()) { problems.push(`${check.id}: ${rel} tem mudança não commitada — o repin fixa só o que está commitado`); continue; }
+        const now = runtime && typeof runtime.sha256File === 'function' ? runtime.sha256File(abs) : null;
+        if (!now) { problems.push(`${check.id}: não consegui calcular o sha256 de ${rel}`); continue; }
+        const matches = runtime && typeof runtime.frozenFileMatches === 'function' ? runtime.frozenFileMatches(abs, f.sha256) : now === f.sha256;
+        if (matches) continue; // already pinned to this content (raw, LF or CRLF form)
+        changes.push({ check: check.id, criterion: crit, path: rel, from: f.sha256 || null, to: now, _f: f });
+      }
+    }
+  }
+  if (problems.length) throw new Error(`repin recusado, nada foi gravado:\n  - ${problems.join('\n  - ')}`);
+  const result = { phase: phaseId, criteria, file: path.relative(projectRoot, file).replace(/\\/g, '/'), changes: changes.map(({ _f, ...c }) => c), dry_run: Boolean(options.dryRun) };
+  if (options.dryRun || !changes.length) return result;
+  const at = new Date().toISOString();
+  for (const c of changes) c._f.sha256 = c.to;
+  doc.repins = [...(Array.isArray(doc.repins) ? doc.repins : []), ...changes.map(({ _f, ...c }) => ({ at, by, reason, ...c }))];
+  writeTextAtomic(file, `${JSON.stringify(doc, null, 2)}\n`);
+  appendEvent(projectRoot, activeSession, { type: 'RegressionRepinned', payload: { phase: phaseId, criteria, by, reason, changes: result.changes } });
+  return result;
+}
+
 function runtimeProgramCriterionMove(projectRoot, activeSession, options = {}) {
   const changeLib = require('./oxe-change.cjs');
   const programLib = require('./oxe-program.cjs');
@@ -5874,6 +9543,153 @@ function runtimeProgramCriterionMove(projectRoot, activeSession, options = {}) {
  * graph; the next `runtime execute` recompiles the same run (done tasks skipped) and runs the batch. The phase closes
  * only when every task of every batch is done (PLAN.json is the source of truth, OXB-059).
  */
+function isFrozenTestPathCandidate(doc, relPath) {
+  const normP = String(relPath || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  const frozen = new Set((doc && Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])
+    .flatMap((a) => (a && a.files) || [])
+    .map((f) => String(typeof f === 'string' ? f : f.path).replace(/\\/g, '/').replace(/^\.\//, '')));
+  return frozen.has(normP) || /(?:^|\/)(?:tests\/acceptance|e2e\/acceptance|tests\/oxe\d+)\//i.test(normP);
+}
+
+function hasTaskExecutionStarted(projectRoot, activeSession, task) {
+  if (!task) return false;
+  const taskId = String(task.id || '').toUpperCase();
+  if (task.done === true || task.done_commit || task.status === 'in_progress' || task.started_at || Number(task.attempts || 0) > 0) {
+    return true;
+  }
+  try {
+    const events = readEvents(projectRoot, activeSession) || [];
+    return events.some((e) => e && String(e.work_item_id || '').toUpperCase() === taskId
+      && ['TaskStarted', 'AttemptStarted', 'TaskAttemptStarted', 'TaskCompleted', 'ExecutorTurn', 'TaskVerified'].includes(e.type));
+  } catch {
+    return false;
+  }
+}
+
+function readTaskVerifyCommands(task) {
+  if (!task || typeof task !== 'object') return [];
+  const raw = [
+    ...(task.verify && Array.isArray(task.verify.commands) ? task.verify.commands : []),
+    ...(task.verify && typeof task.verify.command === 'string' ? [task.verify.command] : []),
+    ...(typeof task.verifyCommand === 'string' ? [task.verifyCommand] : []),
+  ];
+  return [...new Set(raw.map((c) => String(c || '').trim()).filter(Boolean))];
+}
+
+function syncImplementationPackExpectedChecks(paths, jsonPath, taskId, commands) {
+  const packPath = (paths && paths.implementationPack) || path.join(path.dirname(jsonPath), 'IMPLEMENTATION-PACK.json');
+  if (!fs.existsSync(packPath)) return false;
+  let packDoc = null;
+  try { packDoc = JSON.parse(fs.readFileSync(packPath, 'utf8')); } catch { return false; }
+  const ptasks = packDoc && Array.isArray(packDoc.tasks) ? packDoc.tasks : null;
+  if (!ptasks) return false;
+  const entry = ptasks.find((t) => t && String(t.id || t.task_id || '').toUpperCase() === String(taskId).toUpperCase());
+  if (!entry) return false;
+  const prev = Array.isArray(entry.expected_checks) ? entry.expected_checks.map((c) => String(c || '').trim()).filter(Boolean) : [];
+  const next = [...new Set((commands || []).map((c) => String(c || '').trim()).filter(Boolean))];
+  if (prev.length === next.length && prev.every((v, i) => v === next[i])) return false;
+  entry.expected_checks = next;
+  writeTextAtomic(packPath, `${JSON.stringify(packDoc, null, 2)}\n`);
+  return true;
+}
+
+function syncImplementationPackTaskPaths(paths, jsonPath, taskId, { addPaths = [], removePaths = [] } = {}) {
+  const packPath = (paths && paths.implementationPack) || path.join(path.dirname(jsonPath), 'IMPLEMENTATION-PACK.json');
+  if (!fs.existsSync(packPath)) return false;
+  let packDoc = null;
+  try { packDoc = JSON.parse(fs.readFileSync(packPath, 'utf8')); } catch { return false; }
+  const ptasks = packDoc && Array.isArray(packDoc.tasks) ? packDoc.tasks : null;
+  if (!ptasks) return false;
+  const entry = ptasks.find((t) => t && String(t.id || t.task_id || '').toUpperCase() === String(taskId).toUpperCase());
+  if (!entry) return false;
+  const normP = (p) => String(p || '').replace(/\\/g, '/').replace(/^\.\//, '').trim();
+  const prev = Array.isArray(entry.exact_paths) ? entry.exact_paths.map(normP).filter(Boolean) : [];
+  const removeSet = new Set(removePaths.map(normP).filter(Boolean));
+  const nextSet = [];
+  for (const p of prev) {
+    if (!removeSet.has(p) && !nextSet.includes(p)) nextSet.push(p);
+  }
+  for (const p of addPaths.map(normP).filter(Boolean)) {
+    if (!removeSet.has(p) && !nextSet.includes(p)) nextSet.push(p);
+  }
+  if (nextSet.length === prev.length && nextSet.every((v, i) => v === prev[i])) return false;
+  entry.exact_paths = nextSet;
+  if (Array.isArray(entry.contracts) && entry.contracts.some((c) => /^escopo fechado:/i.test(String(c)))) {
+    entry.contracts = entry.contracts.map((c) => (/^escopo fechado:/i.test(String(c)) ? `escopo fechado: ${nextSet.slice(0, 4).join(', ')}` : c));
+  }
+  writeTextAtomic(packPath, `${JSON.stringify(packDoc, null, 2)}\n`);
+  return true;
+}
+
+function buildPackEntryFromAppendTask(projectRoot, doc, task, extraDoc, rawTask) {
+  const planBuild = require('./oxe-plan-build.cjs');
+  const normP = (p) => String(p || '').replace(/\\/g, '/').replace(/^\.\//, '').trim();
+  const uniq = (xs) => [...new Set(xs.filter(Boolean))];
+  const frozenFiles = new Set((doc && Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])
+    .flatMap((a) => (a && a.files) || []).map(normP));
+  const packOverrides = Array.isArray(extraDoc && extraDoc.pack_tasks)
+    ? extraDoc.pack_tasks
+    : Array.isArray(extraDoc && extraDoc.implementation_pack && extraDoc.implementation_pack.tasks)
+      ? extraDoc.implementation_pack.tasks
+      : [];
+  const rawId = rawTask && rawTask.id != null ? String(rawTask.id).toUpperCase() : null;
+  const override = packOverrides.find((p) => {
+    const pid = String((p && (p.id || p.task_id)) || '').toUpperCase();
+    return pid && (pid === String(task.id).toUpperCase() || (rawId && pid === rawId));
+  }) || {};
+
+  const removed = uniq([...(Array.isArray(override.removed_paths) ? override.removed_paths : []), ...(Array.isArray(rawTask && rawTask.removed_paths) ? rawTask.removed_paths : [])].map(normP));
+  const exact = uniq([...(task.files || []).map(normP), ...(Array.isArray(override.exact_paths) ? override.exact_paths : []).map(normP), ...removed])
+    .filter((f) => !frozenFiles.has(f));
+
+  const symKey = (s) => `${s && s.path}#${s && s.name}`;
+  const explicitSyms = [...(Array.isArray(override.symbols) ? override.symbols : []), ...(Array.isArray(rawTask && (rawTask.pack_symbols || rawTask.symbols)) ? (rawTask.pack_symbols || rawTask.symbols) : [])]
+    .filter((s) => s && typeof s === 'object' && s.name && s.path)
+    .map((s) => ({ kind: s.kind || 'export', name: String(s.name), path: normP(s.path) }));
+
+  const taskAcceptSet = new Set((task.acceptance || []).map((a) => String(a).toUpperCase()));
+  const taskFrozenTests = (doc && Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])
+    .filter((a) => a && ((a.task && String(a.task).toUpperCase() === String(task.id).toUpperCase()) || (a.criterion && taskAcceptSet.has(String(a.criterion).toUpperCase()))))
+    .flatMap((a) => (a.files || []).map(normP));
+  const derivedSyms = [];
+  for (const tf of uniq(taskFrozenTests)) {
+    for (const s of planBuild.importedSymbols(projectRoot, tf, exact)) {
+      derivedSyms.push({ kind: 'export', name: s.name, path: normP(s.path) });
+    }
+  }
+  const symbols = [];
+  const seenSyms = new Set();
+  for (const s of [...explicitSyms, ...derivedSyms]) {
+    const k = symKey(s);
+    if (!seenSyms.has(k)) { seenSyms.add(k); symbols.push(s); }
+  }
+
+  const mode = override.mode || (exact.length === 0 && !symbols.length ? 'not_applicable' : 'mutating');
+  const expectedChecks = Array.isArray(override.expected_checks) && override.expected_checks.length
+    ? override.expected_checks
+    : readTaskVerifyCommands(task);
+  const contracts = Array.isArray(override.contracts) && override.contracts.length
+    ? override.contracts
+    : [
+        ...symbols.map((s) => `${s.name} exportado de ${s.path}`),
+        ...removed.map((p) => `${p} não existe mais`),
+        ...(symbols.length || removed.length ? [] : [exact.length ? `escopo fechado: ${exact.slice(0, 4).join(', ')}` : 'tarefa sem mutação de arquivo']),
+      ];
+
+  const phaseVal = override.phase || task.phase || (doc && doc.phase) || null;
+  return {
+    id: task.id,
+    mode,
+    ...(mode === 'mutating' ? { write_set: 'closed' } : {}),
+    exact_paths: exact,
+    ...(removed.length ? { removed_paths: removed } : {}),
+    symbols,
+    contracts,
+    expected_checks: expectedChecks,
+    ...(phaseVal ? { phase: phaseVal } : {}),
+  };
+}
+
 function runtimePlanAppend(projectRoot, activeSession, options = {}) {
   const planJsonLib = require('./oxe-plan-json.cjs');
   const changeLib = require('./oxe-change.cjs');
@@ -5903,6 +9719,7 @@ function runtimePlanAppend(projectRoot, activeSession, options = {}) {
       idMap.set(own, `T${nextId++}`);
     });
     const errors = [];
+    const appendedRaw = [];
     const appended = batchTasks.map((t, i) => {
       const own = t && t.id != null ? String(t.id) : `#${i}`;
       const deps = (Array.isArray(t.depends_on) ? t.depends_on : []).map(String).map((d) => {
@@ -5912,15 +9729,20 @@ function runtimePlanAppend(projectRoot, activeSession, options = {}) {
         return d;
       });
       const wave = lastWave + ((Number.isInteger(t.wave) && t.wave >= 1 ? t.wave : 1) - minBatchWave) + 1;
-      const { id: _drop, done: _d, done_at: _da, done_commit: _dc, ...rest } = t;
-      return { ...rest, id: idMap.get(own), wave, ...(deps.length ? { depends_on: deps } : {}), batch: (doc.batches ? doc.batches.length : 1) + 1, ...(own !== idMap.get(own) && t.id != null ? { batch_ref: own } : {}) };
+      const { id: _drop, done: _d, done_at: _da, done_commit: _dc, pack_symbols: _ps, symbols: _sym, ...rest } = t;
+      const mapped = { ...rest, id: idMap.get(own), wave, ...(deps.length ? { depends_on: deps } : {}), batch: (doc.batches ? doc.batches.length : 1) + 1, ...(own !== idMap.get(own) && t.id != null ? { batch_ref: own } : {}) };
+      appendedRaw.push({ task: mapped, raw: t });
+      return mapped;
     });
     if (errors.length) throw new Error(errors.join('\n'));
+    const remappedTests = Array.isArray(extra.acceptance_tests)
+      ? extra.acceptance_tests.map((a) => (a && a.task && idMap.has(String(a.task)) ? { ...a, task: idMap.get(String(a.task)) } : a))
+      : [];
     const batchNo = (doc.batches ? doc.batches.length : 1) + 1;
     const next = {
       ...doc,
       tasks: [...tasks, ...appended],
-      ...(Array.isArray(extra.acceptance_tests) && extra.acceptance_tests.length ? { acceptance_tests: [...(doc.acceptance_tests || []), ...extra.acceptance_tests] } : {}),
+      ...(remappedTests.length ? { acceptance_tests: [...(doc.acceptance_tests || []), ...remappedTests] } : {}),
       batches: [
         ...(doc.batches || [{ batch: 1, tasks: tasks.map((t) => t.id), at: null, from: 'PLAN.json' }]),
         { batch: batchNo, tasks: appended.map((t) => t.id), from: path.relative(projectRoot, fromFile).replace(/\\/g, '/'), by, reason, at: new Date().toISOString() },
@@ -5928,11 +9750,9 @@ function runtimePlanAppend(projectRoot, activeSession, options = {}) {
     };
     const schemaErrors = planJsonLib.validatePlanJson(next);
     if (schemaErrors.length) throw new Error(`o lote não passa no schema do PLAN.json:\n  ${schemaErrors.join('\n  ')}`);
-    // The same lint as the first batch: an error the batch INTRODUCES rolls the append back (errors the plan already
-    // had — e.g. a missing pack the TL waived — are not the batch's and do not block it; they stay in the warnings).
     const runLint = () => {
       try {
-        return runtimePlanLint(projectRoot, activeSession, { preflight: false, ...(options.lintOptions || {}) });
+        return runtimePlanLint(projectRoot, activeSession, { preflight: false, noPrecheck: true, ...(options.lintOptions || {}) });
       } catch (err) {
         return { ok: false, errors: [err.message], warnings: [] };
       }
@@ -5941,12 +9761,37 @@ function runtimePlanAppend(projectRoot, activeSession, options = {}) {
     const tmp = `${jsonPath}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
     fs.renameSync(tmp, jsonPath);
+
+    // OXB-C5b: when IMPLEMENTATION-PACK.json exists alongside PLAN.json, create entries for each appended task
+    // before running plan lint so append never leaves `PLAN.json` and `IMPLEMENTATION-PACK.json` out of sync.
+    const packPath = paths.implementationPack || path.join(path.dirname(jsonPath), 'IMPLEMENTATION-PACK.json');
+    const packExisted = fs.existsSync(packPath);
+    const originalPackText = packExisted ? fs.readFileSync(packPath, 'utf8') : null;
+    let packUpdated = false;
+    if (packExisted) {
+      let packDoc = null;
+      try { packDoc = JSON.parse(originalPackText); } catch { packDoc = null; }
+      if (packDoc && typeof packDoc === 'object') {
+        const ptasks = Array.isArray(packDoc.tasks) ? [...packDoc.tasks] : [];
+        const existingPackIds = new Set(ptasks.map((p) => String((p && (p.id || p.task_id)) || '').toUpperCase()));
+        for (const item of appendedRaw) {
+          if (existingPackIds.has(String(item.task.id).toUpperCase())) continue;
+          ptasks.push(buildPackEntryFromAppendTask(projectRoot, next, item.task, extra, item.raw));
+          existingPackIds.add(String(item.task.id).toUpperCase());
+        }
+        packDoc.tasks = ptasks;
+        writeTextAtomic(packPath, `${JSON.stringify(packDoc, null, 2)}\n`);
+        packUpdated = true;
+      }
+    }
+
     const after = runLint();
     const introduced = (after.errors || []).filter((e) => !baseline.has(e));
     const lint = { ok: introduced.length === 0, errors: introduced, warnings: [...(after.warnings || []), ...[...baseline].filter((e) => (after.errors || []).includes(e)).map((e) => `já existia antes do lote: ${e}`)] };
     if (!lint.ok) {
       fs.writeFileSync(tmp, originalText, 'utf8');
       fs.renameSync(tmp, jsonPath);
+      if (packUpdated && originalPackText != null) writeTextAtomic(packPath, originalPackText);
       const e = new Error(`plan lint reprovou o lote (nada foi gravado):\n  ${lint.errors.join('\n  ')}`);
       e.lint = lint;
       throw e;
@@ -5955,8 +9800,13 @@ function runtimePlanAppend(projectRoot, activeSession, options = {}) {
     if (fs.existsSync(programDir)) {
       changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'program_edit', action: 'plan_append', batch: batchNo, tasks: appended.map((t) => t.id), from: next.batches[next.batches.length - 1].from, by, reason, at: new Date().toISOString() });
     }
-    appendEvent(projectRoot, activeSession, { type: 'PlanBatchAppended', payload: { batch: batchNo, tasks: appended.map((t) => t.id), by } });
-    return { batch: batchNo, tasks: appended.map((t) => ({ id: t.id, wave: t.wave, title: t.title, ...(t.batch_ref ? { from_id: t.batch_ref } : {}) })), warnings: lint.warnings || [] };
+    appendEvent(projectRoot, activeSession, { type: 'PlanBatchAppended', payload: { batch: batchNo, tasks: appended.map((t) => t.id), by, pack_updated: packUpdated } });
+    return {
+      batch: batchNo,
+      tasks: appended.map((t) => ({ id: t.id, wave: t.wave, title: t.title, ...(t.batch_ref ? { from_id: t.batch_ref } : {}) })),
+      ...(packUpdated ? { pack_updated: true } : {}),
+      warnings: lint.warnings || [],
+    };
   });
 }
 
@@ -6230,9 +10080,10 @@ function runtimePhaseWork(projectRoot, activeSession) {
   // regenerated PLAN.json that dropped the done writeback.
   const runDoneNotInPlan = [];
   try {
+    const excluded = new Set(tasks.filter((t) => t && t.done !== true && t.checkpoint_failed).map((t) => t.id));
     const run = readRunState(projectRoot, activeSession) || {};
     const completed = new Set([...(Array.isArray(run.completed) ? run.completed : []), ...((run.canonical_state && run.canonical_state.completedWorkItems) || [])]);
-    for (const id of pending) if (completed.has(id)) runDoneNotInPlan.push(id);
+    for (const id of pending) if (completed.has(id) && !excluded.has(id)) runDoneNotInPlan.push(id);
   } catch { /* auxiliar */ }
   return { total: tasks.length, done, external_pending: external, pending, waiting, complete, program: Boolean(program), phase, multi_agent: multiAgent, next_steps: nextSteps, run_done_not_in_plan: runDoneNotInPlan };
 }
@@ -6245,7 +10096,9 @@ function isExternallyDelivered(rawTask, parsedTask) {
   // OXB-085: only string entries mean "delivered by another path"; a precondition object is a wait, not a delivery.
   if (require('./oxe-plan-json.cjs').externalRefs(raw).length) return true;
   const pendingLabels = new Set(meta.precondition_pending || []);
-  if (Array.isArray(meta.blocked_by) && meta.blocked_by.some((ref) => !pendingLabels.has(ref))) return true;
+  // cross-review 15/11 (R31): the runtime's own waits (scope_insufficient, waiting_shared_files) are not a delivery
+  const ownWait = (ref) => /^(scope_insufficient|waiting_shared_files):/.test(String(ref));
+  if (Array.isArray(meta.blocked_by) && meta.blocked_by.some((ref) => !pendingLabels.has(ref) && !ownWait(ref))) return true;
   if (Array.isArray(meta.external_resolved) && meta.external_resolved.length) return true;
   const policy = raw.policy || {};
   return Boolean(policy.verify_only || (Array.isArray(policy.external_dependency) && policy.external_dependency.length));
@@ -6312,16 +10165,21 @@ function runtimeChangeSetStatus(projectRoot, activeSession, options = {}) {
   const status = options.status === 'resolved' ? 'resolved' : 'withdrawn';
   const by = String(options.by || '').trim();
   const reason = String(options.reason || '').trim();
-  if (!by) throw new Error('informe quem decide (--by <papel>)');
-  if (reason.length < 8) throw new Error('informe o motivo em uma frase (--reason "…") — fica no registro do CR');
+  // OxeSpace 15/11 (Celular F4): name every required flag at once
+  if (!by || reason.length < 8) throw new Error(`faltam: ${[!by ? '--by <papel>' : null, reason.length < 8 ? '--reason "<o motivo em uma frase>"' : null].filter(Boolean).join(' e ')} — use: oxe-cc runtime feedback ${status === 'resolved' ? 'resolve' : 'withdraw'} ${id} --by <papel> --reason "…"`);
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
   const cr = changeLib.listChanges(programDir).find((c) => c.id === id);
   if (!cr) throw new Error(`${id} não existe`);
-  if (cr.status !== 'open') throw new Error(`${id} já está ${cr.status}`);
-  changeLib.setChangeStatus(programDir, id, status, { resolution: `${status === 'resolved' ? 'resolvido' : 'retirado'} manualmente: ${reason}`, by, manual: true });
-  appendEvent(projectRoot, activeSession, { type: 'ChangeResolved', payload: { id, status, by, manual: true } });
-  return { id, status, by, reason, export: autoExportProgram(projectRoot, activeSession) };
+  // --no-amendment: a spec_gap that ended without amending the criterion (a scope gap; OxeSpace 14/11, Celular F2
+  // CR-01): its criteria do not go to v2 and the frozen tests stay valid. Allowed on an already resolved spec_gap too.
+  const noAmendment = Boolean(options.noAmendment);
+  if (noAmendment && cr.class !== 'spec_gap') throw new Error(`${id} é ${cr.class}: --no-amendment vale só para spec_gap`);
+  if (cr.status !== 'open' && !(noAmendment && cr.status === 'resolved')) throw new Error(`${id} já está ${cr.status}`);
+  const finalStatus = cr.status === 'resolved' ? 'resolved' : status;
+  changeLib.setChangeStatus(programDir, id, finalStatus, { resolution: `${finalStatus === 'resolved' ? 'resolvido' : 'retirado'} manualmente: ${reason}${noAmendment ? ' (sem emenda da SPEC)' : ''}`, by, manual: true, ...(noAmendment ? { no_amendment: true } : {}) });
+  appendEvent(projectRoot, activeSession, { type: 'ChangeResolved', payload: { id, status: finalStatus, by, manual: true, ...(noAmendment ? { no_amendment: true } : {}) } });
+  return { id, status: finalStatus, by, reason, ...(noAmendment ? { no_amendment: true } : {}), export: autoExportProgram(projectRoot, activeSession) };
 }
 
 function runtimeChanges(projectRoot, activeSession) {
@@ -6602,6 +10460,15 @@ function isTaskVerifyFresh(projectRoot, taskId, changedInScope, scopeHash, maxAg
   return false;
 }
 
+/** A frozen test that git calls dirty only for its line endings (CRLF working copy, LF blob) did not change. */
+function frozenContentChanged(projectRoot, rel) {
+  let work = null;
+  try { work = fs.readFileSync(path.join(projectRoot, rel), 'utf8'); } catch { return true; }
+  const head = spawnSync('git', ['show', `HEAD:${rel}`], { cwd: projectRoot, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+  if (head.status !== 0) return true;
+  return work.replace(/\r\n/g, '\n') !== String(head.stdout).replace(/\r\n/g, '\n');
+}
+
 function verifyFrozenAcceptanceUntampered(projectRoot, activeSession, doc, runState) {
   const crypto = require('crypto');
   const expectedByPath = new Map();
@@ -6654,23 +10521,33 @@ function verifyFrozenAcceptanceUntampered(projectRoot, activeSession, doc, runSt
     }
   } catch { /* best-effort program checks */ }
 
+  // line endings are not content (core.autocrlf: the working copy is CRLF, the HEAD blob LF — OxeSpace 14/11, F3
+  // joint commit refused "esperado 650162c67eb4, atual 650162c67eb4"): a hash matches in raw, LF or CRLF form, and
+  // the HEAD comparison is made on LF-normalized bytes. The message names the comparison that failed.
+  const sha = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+  const forms = (buf) => {
+    const lf = Buffer.from(buf.toString('utf8').replace(/\r\n/g, '\n'), 'utf8');
+    return { raw: sha(buf), lf: sha(lf), crlf: sha(Buffer.from(lf.toString('utf8').replace(/\n/g, '\r\n'), 'utf8')) };
+  };
   for (const rel of frozenPaths) {
     const abs = path.join(projectRoot, rel);
-    const actualSha = sha256BufferOrFile(abs);
-    let headSha = null;
+    let buf = null;
+    try { buf = fs.readFileSync(abs); } catch { buf = null; }
+    const actual = buf ? forms(buf) : null;
+    const actualSha = actual ? actual.raw : null;
+    let head = null;
     const headShow = spawnSync('git', ['show', `HEAD:${rel}`], { cwd: projectRoot, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
-    if (headShow.status === 0 && headShow.stdout) {
-      headSha = crypto.createHash('sha256').update(headShow.stdout).digest('hex');
-    }
-    const lockedSha = expectedByPath.get(rel) || headSha;
-    const headMismatch = !amendedPaths.has(rel) && headSha && actualSha !== headSha;
-    if (!actualSha || (lockedSha && actualSha !== lockedSha) || headMismatch) {
-      const expected = lockedSha || headSha || 'frozen';
+    if (headShow.status === 0 && headShow.stdout) head = forms(headShow.stdout);
+    const locked = expectedByPath.get(rel) || null;
+    const lockMismatch = Boolean(actual && locked && ![actual.raw, actual.lf, actual.crlf].includes(locked));
+    const headMismatch = Boolean(actual && !amendedPaths.has(rel) && head && actual.lf !== head.lf);
+    if (!actual || lockMismatch || headMismatch) {
+      const why = !actual ? 'ausente' : lockMismatch ? `difere do hash congelado (esperado ${String(locked).slice(0, 12)}, atual ${actual.raw.slice(0, 12)})` : `difere do HEAD (HEAD ${head.lf.slice(0, 12)}, atual ${actual.lf.slice(0, 12)}, finais de linha normalizados)`;
       appendEvent(projectRoot, activeSession, {
         type: 'ScopeViolation',
-        payload: { reason: 'acceptance_tampered', file: rel, expected, actual: actualSha || 'missing' },
+        payload: { reason: 'acceptance_tampered', file: rel, expected: locked || (head && head.lf) || 'frozen', actual: actualSha || 'missing', why },
       });
-      throw new Error(`acceptance_tampered: teste de aceite congelado foi adulterado (${rel}: esperado ${String(expected).slice(0, 12)}, atual ${String(actualSha || 'ausente').slice(0, 12)})`);
+      throw new Error(`acceptance_tampered: teste de aceite congelado foi adulterado (${rel}: ${why})`);
     }
   }
   frozenPaths._amended = amendedPaths;
@@ -6711,6 +10588,7 @@ function runtimeStartTask(projectRoot, activeSession, options = {}) {
     work_item_id: taskId,
     payload: { task: taskId, executor, base_sha: baseSha },
   });
+  almAutoSync(projectRoot, activeSession);
   return { ok: true, task: taskId, status: 'in_progress', executor, base_sha: baseSha, started_at: at };
 }
 
@@ -6870,6 +10748,34 @@ function runtimePlanAmendTest(projectRoot, activeSession, options = {}) {
     throw new Error(`O arquivo precisa estar dentro do projeto (${rawFile}).`);
   }
 
+  // OXB-C28-7 (ACC-FIX / OXE-58): the frozen test may belong to ANOTHER program (a closed sibling worktree). The file
+  // (as edited here) gives the new hash; the owner's PLAN.json — `--program <nome>`, or the one sibling whose
+  // acceptance_tests list the file — is the one amended. No need to reopen the owner's worktree on a new branch.
+  const fileRoot = projectRoot;
+  let owner = null;
+  {
+    const refine = require('./oxe-alm-refine.cjs');
+    const normRel = (x) => String(typeof x === 'string' ? x : (x && (x.path || x.file)) || '').replace(/\\/g, '/').replace(/^\.\//, '');
+    const lists = (doc) => Boolean(doc && Array.isArray(doc.acceptance_tests) && doc.acceptance_tests.some((a) => a && (a.files || []).map(normRel).includes(relPath)));
+    if (options.program) {
+      const e = refine.resolveProgramSpec(projectRoot, activeSession, String(options.program));
+      if (!e) {
+        const names = refine.discoverProgramCatalog(projectRoot, { activeSession }).filter((x) => !x.ephemeral).map((x) => x.slug);
+        throw new Error(`--program ${options.program}: programa não encontrado (disponíveis: ${names.join(', ') || 'nenhum'})`);
+      }
+      if (path.resolve(e.root) !== path.resolve(projectRoot)) owner = e;
+    } else {
+      let localLists = false;
+      try { localLists = lists(readPlanJsonDoc(projectRoot, activeSession).doc); } catch { localLists = false; }
+      if (!localLists) {
+        const owners = refine.discoverProgramCatalog(projectRoot, { activeSession }).filter((x) => path.resolve(x.root) !== path.resolve(projectRoot) && lists(x.planDoc));
+        if (owners.length > 1) throw new Error(`${relPath} está congelado em ${owners.length} programas (${owners.map((x) => x.slug).join(', ')}) — diga qual: --program <nome>`);
+        if (owners.length === 1) owner = owners[0];
+      }
+    }
+    if (owner) { projectRoot = owner.root; activeSession = null; }
+  }
+
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const planJsonLib = require('./oxe-plan-json.cjs');
   const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
@@ -6879,11 +10785,11 @@ function runtimePlanAmendTest(projectRoot, activeSession, options = {}) {
 
   if (!options.force) {
     const rigor = require('./oxe-test-rigor.cjs');
-    const regexFindings = rigor.suspiciousRegexFindings(projectRoot, [relPath]);
+    const regexFindings = rigor.suspiciousRegexFindings(fileRoot, [relPath]);
     if (regexFindings.length) {
       throw new Error(`plan amend-test recusado por lint de regex suspeita:\n  - ${rigor.suspiciousRegexMessages(regexFindings).join('\n  - ')}`);
     }
-    const socketFindings = rigor.pausedSocketFindings(projectRoot, [relPath]);
+    const socketFindings = rigor.pausedSocketFindings(fileRoot, [relPath]);
     if (socketFindings.length) {
       throw new Error(`plan amend-test recusado por lint de socket pausado:\n  - ${rigor.pausedSocketMessages(socketFindings).join('\n  - ')}`);
     }
@@ -6902,13 +10808,37 @@ function runtimePlanAmendTest(projectRoot, activeSession, options = {}) {
   }
 
   const newSha = sha256BufferOrFile(absFile);
+  // Bench B29: an amendment before any compile (no lock) and a PLAN.json without hashes logged previous_sha256: null.
+  // The committed version of the file is the baseline: HEAD's, or the commit before when HEAD already has the edit.
+  if (!lockPrevSha) {
+    try {
+      const crypto = require('crypto');
+      const gitRoot = typeof fileRoot === 'string' ? fileRoot : projectRoot;
+      const shaAt = (rev) => {
+        const r = spawnSync('git', ['show', `${rev}:${relPath}`], { cwd: gitRoot, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+        return r.status === 0 && r.stdout ? crypto.createHash('sha256').update(r.stdout).digest('hex') : null;
+      };
+      let base = shaAt('HEAD');
+      if (base === newSha) {
+        const revs = String(spawnSync('git', ['log', '-2', '--format=%H', '--', relPath], { cwd: gitRoot, encoding: 'utf8', windowsHide: true }).stdout || '').trim().split(/\s+/);
+        base = revs[1] ? shaAt(revs[1]) : null;
+      }
+      if (base && base !== newSha) lockPrevSha = base;
+    } catch { /* the baseline is auxiliary */ }
+  }
   const by = String(options.by || 'tech-lead').trim();
   const at = new Date().toISOString();
+  let amendReqs = new Map();
+  try {
+    const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+    amendReqs = require('./oxe-change.cjs').amendmentRequirements(programDir);
+  } catch { /* sem programa */ }
   const amended = planJsonLib.amendFrozenTestInPlanJson(paths.plan, relPath, newSha, {
     reason,
     by,
     at,
     previous_sha256: lockPrevSha,
+    amendments: amendReqs,
   });
   if (!amended.ok) {
     throw new Error(amended.error || `Falha ao emendar ${relPath} em PLAN.json`);
@@ -6956,11 +10886,13 @@ function runtimePlanAmendTest(projectRoot, activeSession, options = {}) {
       by,
       criteria: (amended.matched || []).map((m) => m.criterion).filter(Boolean),
       preserved_done_tasks: doneCount,
+      ...(owner ? { owner_program: owner.slug, amended_from: fileRoot } : {}),
     },
   });
 
   return {
     ok: true,
+    ...(owner ? { owner_program: owner.slug, owner_root: owner.root, owner_plan: path.relative(owner.root, jsonPath).replace(/\\/g, '/') } : {}),
     file: relPath,
     previous_sha256: previousSha,
     sha256: newSha,
@@ -6981,6 +10913,149 @@ function runtimePlanAmendTest(projectRoot, activeSession, options = {}) {
  *   4. Commits ONLY `Tn`'s scope changes with trailer `OXE-Task: <Phase>/<Tn>`;
  *   5. Marks `Tn` as `done` in `PLAN.json` and writes `CheckpointCreated` + `TaskCompleted` (+ `WorkItemCompleted` / `GateResolved`) in `OXE-EVENTS.ndjson`.
  */
+/**
+ * `oxe-cc runtime commit-task T11,T12,T13 --together`: ONE commit for tasks done without commits whose changes are
+ * mixed in shared files (OxeSpace 14/11, OxeCode F3: an execute without --checkpoint-commits; tool-handlers.ts held
+ * T12, T14 and T16 hunks). The scope is the union of the tasks' files; anything dirty outside it is refused; every
+ * task's verify runs; the commit carries one OXE-Task per task (+ OXE-Run, OXE-CR), and each task gets that commit as
+ * its done_commit. Attribution is by task list, not by hunk — honest about what it is.
+ */
+function runtimeCommitTasksTogether(projectRoot, activeSession, options = {}) {
+  const ids = [...new Set((options.tasks || []).map((t) => String(t).trim().toUpperCase()).filter(Boolean))];
+  if (ids.length < 2) throw new Error('use: oxe-cc runtime commit-task T11,T12[,…] --together (duas tarefas ou mais)');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const { doc } = readPlanJsonDoc(projectRoot, activeSession);
+  if (!doc) throw new Error('runtime commit-task exige PLAN.json.');
+  const tasks = ids.map((id) => {
+    const t = (doc.tasks || []).find((x) => x && String(x.id).toUpperCase() === id);
+    if (!t) throw new Error(`Tarefa ${id} não encontrada em PLAN.json.`);
+    if (t.done === true && t.done_commit && !options.force) throw new Error(`Tarefa ${id} já está concluída (${String(t.done_commit).slice(0, 8)}): tire-a da lista`);
+    return t;
+  });
+  const runState = readRunState(projectRoot, activeSession);
+  const runId = (runState && runState.run_id) || null;
+  const phaseCtx = taskPhaseContext(projectRoot, activeSession);
+  const phase = options.phase || doc.phase || (phaseCtx && phaseCtx.phase) || null;
+  const actor = String(options.by || 'external_agent').trim();
+  const normPath = (p) => String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  const frozenPaths = verifyFrozenAcceptanceUntampered(projectRoot, activeSession, doc, runState);
+  const scope = [...new Set(tasks.flatMap((t) => [...(t.files || []), ...(t.removed_paths || []), ...taskScopeFiles(runState, t.id)]).map(normPath).filter(Boolean))].filter((p) => !frozenPaths.has(p));
+  // a frozen test dirty only by its line endings is not a change at all (neither tampered nor out of scope)
+  const dirty = [...new Set(changedEntriesUnder(projectRoot, ['.']).map((e) => normPath(e.path)).filter((p) => p && !p.startsWith('.oxe/')))]
+    .filter((p) => !(frozenPaths.has(p) && !frozenContentChanged(projectRoot, p)));
+  const amended = frozenPaths._amended || new Set();
+  const tampered = dirty.filter((p) => frozenPaths.has(p) && !amended.has(p) && frozenContentChanged(projectRoot, p));
+  if (tampered.length) throw new Error(`acceptance_tampered: teste congelado modificado (${tampered.join(', ')})`);
+  const outside = dirty.filter((p) => !isPathInScope(p, scope));
+  if (outside.length) {
+    appendEvent(projectRoot, activeSession, { type: 'ScopeViolation', run_id: runId, work_item_id: ids.join(','), payload: { tasks: ids, paths: outside } });
+    throw new Error(`ScopeViolation: arquivos modificados fora de ${ids.join(', ')} (${outside.join(', ')})`);
+  }
+  // the project's verify_timeout_ms, as the execute reads it (OxeSpace 15/11, OQ T18: killed at 10 min while the
+  // remote run went on); --verify-timeout-ms still wins
+  const verifyTimeoutMs = Number(options.verifyTimeoutMs) > 0 ? Number(options.verifyTimeoutMs) : resolveConfigVerifyTimeoutMs(projectRoot, readProjectConfig(projectRoot));
+  const commands = [...new Set(tasks.flatMap((t) => {
+    const v = t.verify;
+    return (Array.isArray(v) ? v : v && Array.isArray(v.commands) ? v.commands : typeof v === 'string' ? [v] : t.verifyCommand ? [t.verifyCommand] : []).map((c) => String(c || '').trim()).filter(Boolean);
+  }))];
+  if (!options.skipVerify) {
+    const cfgTogether = readProjectConfig(projectRoot) || {};
+    if (options.fileSizeCheck !== false && cfgTogether.verify_file_size !== false) {
+      const fsCheck = require('./oxe-file-size-guard.cjs').verifyTaskFileSize(projectRoot, {
+        config: cfgTogether,
+        scope,
+        dirtyPaths: dirty,
+        task: { id: ids.join(','), files: scope },
+      });
+      if (!fsCheck.ok) throw new Error(`verify conjunto (${ids.join(',')}) reprovado — ${fsCheck.message}`);
+    }
+    const allSegs = options.failFast ? false : (options.allSegments != null ? Boolean(options.allSegments) : (((cfgTogether.verify || {}).all_segments) !== false));
+    runVerifyCommandSegments(projectRoot, options, commands, verifyTimeoutMs, 'verify', { allSegments: allSegs });
+  }
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const crs = (() => { try { return [...new Set(require('./oxe-change.cjs').listChanges(programDir).filter((c) => c.status === 'open' && (c.tasks || []).some((t) => ids.includes(String(t).toUpperCase()))).map((c) => c.id))]; } catch { return []; } })();
+  const ref = (id) => (phase ? `${phase}/${id}` : id);
+  const message = [
+    `${phase ? `${phase}: ` : ''}${ids.join(', ')} — commit conjunto (arquivos compartilhados)`,
+    tasks.map((t) => `- ${t.id}: ${t.title || ''}`).join('\n'),
+    [...ids.map((id) => `OXE-Task: ${ref(id)}`), ...(runId ? [`OXE-Run: ${runId}`] : []), ...crs.map((c) => `OXE-CR: ${c}`)].join('\n'),
+  ].join('\n\n');
+  const cp = commitTaskCheckpoint(projectRoot, runState || { run_id: runId }, ids[0], { task: { id: ids[0], files: scope }, phase, config: readProjectConfig(projectRoot), message });
+  if (!cp.committed || !cp.commit) throw new Error(cp.reason || `falha ao criar o commit conjunto de ${ids.join(', ')}`);
+  for (const id of ids) {
+    planJsonLib.markPlanTaskDone(paths.plan, id, { commit: cp.commit });
+    appendEvent(projectRoot, activeSession, { type: 'CheckpointCreated', run_id: runId, work_item_id: id, payload: { task: id, phase, commit: cp.commit, files: cp.files, by: actor, together: ids } });
+  }
+  touchProgramPhase(projectRoot, activeSession, 'executing');
+  return { ok: true, tasks: ids, commit: cp.commit, files: cp.files, verified: !options.skipVerify, crs };
+}
+
+/**
+ * G36 (OxeSpace 14/11, OxeChat F2 T5/T6, ~US$ 25 each): an attempt rolled back only because its frozen test was wrong
+ * had the right code; after the CR fixed the test, the next attempt rebuilt the same code. `oxe-cc runtime retry T<n>
+ * --reuse-attempt [--run <id>]` re-applies that attempt's saved changes (`.oxe/runs/<run>/attempts/<Tn>-failed/`),
+ * runs the task's verify against the fixed test and, green, commits it as the task's checkpoint (commit-task: frozen
+ * tests checked, OXE-Task/OXE-Run) — no model turns. Red: everything it applied is undone, and the task goes to a
+ * normal attempt.
+ */
+function runtimeReuseAttempt(projectRoot, activeSession, options = {}) {
+  const taskId = String(options.task || '').trim().toUpperCase();
+  if (!/^T\d+$/.test(taskId)) throw new Error('use: oxe-cc runtime retry T<n> --reuse-attempt [--run <id>]');
+  const runsDir = path.join(projectRoot, '.oxe', 'runs');
+  const candidates = (() => {
+    try {
+      return fs.readdirSync(runsDir).filter((r) => !options.run || r === options.run)
+        .map((r) => path.join(runsDir, r, 'attempts', `${taskId}-failed`))
+        .filter((d) => fs.existsSync(d))
+        .map((d) => ({ dir: d, at: fs.statSync(d).mtimeMs }))
+        .sort((a, b) => b.at - a.at);
+    } catch { return []; }
+  })();
+  if (!candidates.length) throw new Error(`nenhuma tentativa revertida de ${taskId} guardada em .oxe/runs/*/attempts/${taskId}-failed${options.run ? ` (run ${options.run})` : ''}`);
+  const dir = candidates[0].dir;
+  const patch = path.join(dir, 'changes.patch');
+  const hasPatch = fs.existsSync(patch) && fs.statSync(patch).size > 0;
+  const newRoot = path.join(dir, 'new');
+  const newFiles = [];
+  const walk = (d) => { let es = []; try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; } for (const e of es) { const full = path.join(d, e.name); if (e.isDirectory()) walk(full); else newFiles.push(path.relative(newRoot, full).replace(/\\/g, '/')); } };
+  walk(newRoot);
+  if (!hasPatch && !newFiles.length) throw new Error(`${path.relative(projectRoot, dir)} está vazio: nada a reaplicar`);
+  const patched = hasPatch ? (gitLines(projectRoot, ['apply', '--numstat', patch]) || []).map((l) => l.split('\t').pop().replace(/\\/g, '/')).filter(Boolean) : [];
+  const touched = [...new Set([...patched, ...newFiles])];
+  const dirty = new Set(workingTreeChanges(projectRoot).map((c) => c.path));
+  const busy = touched.filter((p) => dirty.has(p));
+  if (busy.length) throw new Error(`arquivos da tentativa com mudanças na árvore: ${busy.slice(0, 5).join(', ')} — commite ou descarte antes de reaplicar`);
+  const undo = () => {
+    if (patched.length) gitRun(projectRoot, ['checkout', 'HEAD', '--', ...patched]);
+    for (const f of newFiles) { try { fs.rmSync(path.join(projectRoot, f), { force: true }); } catch { /* */ } }
+  };
+  if (hasPatch) {
+    const ap = gitRun(projectRoot, ['apply', '--3way', '--whitespace=nowarn', patch]);
+    if (!ap.ok) { undo(); throw new Error(`o patch da tentativa não aplica no HEAD atual (${String(ap.stderr || '').trim().split(/\r?\n/).pop()}) — siga com uma tentativa normal (runtime execute)`); }
+  }
+  for (const f of newFiles) { ensureDirForFile(path.join(projectRoot, f)); fs.copyFileSync(path.join(newRoot, f), path.join(projectRoot, f)); }
+  try {
+    const out = runtimeCommitTask(projectRoot, activeSession, { task: taskId, by: options.by || 'reuse-attempt', force: true, ...(Number(options.verifyTimeoutMs) > 0 ? { verifyTimeoutMs: Number(options.verifyTimeoutMs) } : {}) });
+    appendEvent(projectRoot, activeSession, { type: 'AttemptReused', work_item_id: taskId, payload: { task: taskId, from: path.relative(projectRoot, dir).replace(/\\/g, '/'), files: touched, commit: out.commit || out.done_commit || null } });
+    return { task: taskId, reused_from: path.relative(projectRoot, dir).replace(/\\/g, '/'), files: touched, ...out };
+  } catch (err) {
+    undo();
+    appendEvent(projectRoot, activeSession, { type: 'AttemptReuseFailed', work_item_id: taskId, payload: { task: taskId, from: path.relative(projectRoot, dir).replace(/\\/g, '/'), reason: String(err.message || err).slice(0, 400) } });
+    throw new Error(`a tentativa reaproveitada não passou: ${err.message} — nada ficou na árvore; siga com uma tentativa normal (runtime execute)`);
+  }
+}
+
+/** `oxe-cc report failure-cost [--since …]`: the cost of failure from the project's events and CRs (oxe-failure-cost). */
+function runtimeFailureCost(projectRoot, activeSession, options = {}) {
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  let crs = [];
+  try { crs = require('./oxe-change.cjs').listChanges(programDir); } catch { crs = []; }
+  const cfg = (readProjectConfig(projectRoot) || {}).failure_cost || {};
+  return require('./oxe-failure-cost.cjs').report(readEvents(projectRoot, activeSession), crs, { since: options.since, gapMinutes: options.gapMinutes, fixes: cfg.fixes });
+}
+
 function runtimeCommitTask(projectRoot, activeSession, options = {}) {
   const taskId = String(options.task || '').trim().toUpperCase();
   if (!/^T\d+$/.test(taskId)) {
@@ -6997,8 +11072,10 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
   if (!task) {
     throw new Error(`Tarefa ${taskId} não encontrada em PLAN.json.`);
   }
-  if (task.done === true && !options.force) {
-    throw new Error(`Tarefa ${taskId} já está concluída (done) em PLAN.json${task.done_commit ? ` (${String(task.done_commit).slice(0, 8)})` : ''}.`);
+  // done WITH its commit: nothing to do. Done without one (an execute with checkpoint commits off, a CR redo): the
+  // commit is what is missing, and this command makes it (OxeSpace 14/11, Celular F2 CR-02 / T3).
+  if (task.done === true && task.done_commit && !options.force) {
+    throw new Error(`Tarefa ${taskId} já está concluída (done) em PLAN.json (${String(task.done_commit).slice(0, 8)}).`);
   }
 
   const runState = readRunState(projectRoot, activeSession);
@@ -7017,11 +11094,12 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
   const runFiles = taskScopeFiles(runState, taskId);
   let packFiles = [];
   let packRemoved = [];
+  let packTask = null;
   try {
     const packPath = paths.implementationPack || path.join(path.dirname(jsonPath), 'IMPLEMENTATION-PACK.json');
     if (fs.existsSync(packPath)) {
       const packDoc = JSON.parse(fs.readFileSync(packPath, 'utf8'));
-      const packTask = (packDoc && Array.isArray(packDoc.tasks) ? packDoc.tasks : []).find((x) => x && (x.id === taskId || x.task === taskId));
+      packTask = (packDoc && Array.isArray(packDoc.tasks) ? packDoc.tasks : []).find((x) => x && (x.id === taskId || x.task === taskId)) || null;
       if (packTask) {
         packFiles = (packTask.exact_paths || []).map(normPath);
         packRemoved = (packTask.removed_paths || []).map(normPath);
@@ -7043,11 +11121,12 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
   const allEntries = changedEntriesUnder(projectRoot, ['.'])
     .map((e) => ({ path: normPath(e.path), code: e.code }))
     .filter((e) => e.path && !e.path.startsWith('.oxe/'));
-  const allDirtyPaths = [...new Set(allEntries.map((e) => e.path))];
+  // a frozen test dirty only by its line endings (autocrlf) is no change: neither tampered nor out of scope
+  const allDirtyPaths = [...new Set(allEntries.map((e) => e.path))].filter((p) => !(frozenPaths.has(p) && !frozenContentChanged(projectRoot, p)));
 
   const amendedFrozen = frozenPaths._amended || new Set();
   for (const p of allDirtyPaths) {
-    if (frozenPaths.has(p) && !amendedFrozen.has(p)) {
+    if (frozenPaths.has(p) && !amendedFrozen.has(p) && frozenContentChanged(projectRoot, p)) {
       appendEvent(projectRoot, activeSession, { type: 'ScopeViolation', run_id: runId, work_item_id: taskId, payload: { reason: 'acceptance_tampered', file: p } });
       throw new Error(`acceptance_tampered: teste congelado modificado (${p})`);
     }
@@ -7086,6 +11165,36 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
     }
   }
 
+  // OXB-C1 Adendo 2: run checkpoint file-size rule before spending time on Tn.verify.commands
+  if (options.fileSizeCheck !== false) {
+    const cfgFs = readProjectConfig(projectRoot) || {};
+    if (cfgFs.verify_file_size !== false) {
+      const fsCheck = require('./oxe-file-size-guard.cjs').verifyTaskFileSize(projectRoot, {
+        config: cfgFs,
+        scope: allowedScope,
+        dirtyPaths: inScopeDirty,
+        task,
+        packTask,
+      });
+      if (!fsCheck.ok) {
+        throw new Error(`verify de ${taskId} reprovado — ${fsCheck.message}`);
+      }
+    }
+  }
+
+  // OXB-C1 Adendo 2 (G14, OQ T13 / OXE-223): check orphan CSS classes removed from .css/.scss before slow verify commands
+  if (options.cssGuard !== false) {
+    const cfgCss = readProjectConfig(projectRoot) || {};
+    const domOpt = cfgCss.checkpoint_dom_hooks;
+    if (domOpt !== false && !(domOpt && typeof domOpt === 'object' && domOpt.mode === false) && !(domOpt && typeof domOpt === 'object' && domOpt.mode === 'off')) {
+      const dh = require('./oxe-dom-hooks.cjs');
+      const orphanCss = dh.orphanCssClassesInWorkingTree(projectRoot, inScopeDirty);
+      if (orphanCss.length) {
+        throw new Error(`verify de ${taskId} reprovado — guarda de classes CSS: ${dh.message(orphanCss)} (migre os consumidores ou mantenha a regra CSS)`);
+      }
+    }
+  }
+
   // 4. Run (or validate fresh log of) Tn.verify.commands
   const rawVerify = task.verify;
   const commands = (Array.isArray(rawVerify)
@@ -7096,35 +11205,68 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
     .map((c) => String(c || '').trim())
     .filter(Boolean);
 
-  const scopeHash = computeScopeFingerprint(projectRoot, inScopeDirty);
-  const verifyTimeoutMs = Number(options.verifyTimeoutMs) > 0 ? Number(options.verifyTimeoutMs) : 10 * 60_000;
+  // Lower declared ratchets before running Tn.verify.commands so suites checking `cap <= count` pass on commit-task too (R54)
+  const projectConfigForCommit = readProjectConfig(projectRoot) || {};
+  const ratchetBackups = new Map();
+  let preRatchetsLowered = [];
+  try {
+    const ratchetsLib = require('./oxe-ratchets.cjs');
+    for (const r of ratchetsLib.ratchetsOf(projectConfigForCommit)) {
+      if (isPathInScope(r.file, allowedScope) && !ratchetBackups.has(r.file)) {
+        try { ratchetBackups.set(r.file, fs.readFileSync(path.join(projectRoot, r.file), 'utf8')); } catch { /* */ }
+      }
+    }
+    preRatchetsLowered = ratchetsLib.lowerRatchets(projectRoot, projectConfigForCommit, allowedScope);
+  } catch { preRatchetsLowered = []; }
+  const restorePreRatchets = () => {
+    if (!preRatchetsLowered.length) return;
+    for (const [rel, content] of ratchetBackups) {
+      try { fs.writeFileSync(path.join(projectRoot, rel), content, 'utf8'); } catch { /* */ }
+    }
+  };
+  const effectiveDirty = preRatchetsLowered.length
+    ? [...new Set([...inScopeDirty, ...preRatchetsLowered.map((r) => r.file)])]
+    : inScopeDirty;
+
+  const scopeHash = computeScopeFingerprint(projectRoot, effectiveDirty);
+  // the project's verify_timeout_ms, as the execute reads it (OxeSpace 15/11, OQ T18: killed at 10 min while the
+  // remote run went on); --verify-timeout-ms still wins
+  const verifyTimeoutMs = Number(options.verifyTimeoutMs) > 0 ? Number(options.verifyTimeoutMs) : resolveConfigVerifyTimeoutMs(projectRoot, projectConfigForCommit);
   let verifySkipped = false;
 
-  if (commands.length > 0) {
-    if (options.skipVerifyIfFresh && isTaskVerifyFresh(projectRoot, taskId, inScopeDirty, scopeHash, options.freshMaxAgeMs)) {
-      verifySkipped = true;
-    } else {
-      for (const cmd of commands) {
-        const res = runChildCommandFull(projectRoot, cmd, verifyTimeoutMs);
-        if (!res.ok) {
-          throw new Error(`verify de ${taskId} falhou (\`${cmd}\`): ${String(res.tail || res.output || '').trim().slice(-500)}`);
-        }
+  try {
+    if (commands.length > 0) {
+      // lean 1.1: `phase close` has just run the whole phase verify green on these very files
+      if (options.verifiedByPhase || (options.skipVerifyIfFresh && isTaskVerifyFresh(projectRoot, taskId, effectiveDirty, scopeHash, options.freshMaxAgeMs))) {
+        verifySkipped = true;
+      } else {
+        const allSegs = options.failFast ? false : (options.allSegments != null ? Boolean(options.allSegments) : (((projectConfigForCommit.verify || {}).all_segments) !== false));
+        runVerifyCommandSegments(projectRoot, options, commands, verifyTimeoutMs, `verify de ${taskId}`, { allSegments: allSegs });
+        writeTaskVerifyFresh(projectRoot, taskId, { scopeHash, commands, ok: true });
       }
-      writeTaskVerifyFresh(projectRoot, taskId, { scopeHash, commands, ok: true });
     }
-  }
 
-  // Re-verify frozen acceptance tests were not touched by a verify command
-  verifyFrozenAcceptanceUntampered(projectRoot, activeSession, doc, runState);
+    // Re-verify frozen acceptance tests were not touched by a verify command
+    verifyFrozenAcceptanceUntampered(projectRoot, activeSession, doc, runState);
+  } catch (err) {
+    restorePreRatchets();
+    throw err;
+  }
 
   // 5. Create isolated commit with only Tn.files and trailer `OXE-Task: <Phase>/<Tn>`
   const cp = commitTaskCheckpoint(projectRoot, runState || { run_id: runId }, taskId, {
     task: { ...task, files: allowedScope },
     phase,
-    config: readProjectConfig(projectRoot),
+    config: projectConfigForCommit,
+    ratchets: false,
+    activeSession,
   });
   if (!cp.committed || !cp.commit) {
+    restorePreRatchets();
     throw new Error(cp.reason || `Falha ao criar checkpoint de ${taskId}.`);
+  }
+  if (preRatchetsLowered.length) {
+    appendEvent(projectRoot, activeSession, { type: 'RatchetLowered', run_id: runId, work_item_id: taskId, payload: { task: taskId, ratchets: preRatchetsLowered } });
   }
 
   const leakedOutOfScope = (cp.files || []).filter((f) => !isPathInScope(f, allowedScope));
@@ -7134,6 +11276,7 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
 
   // 6. Mark Tn as done in PLAN.json and record CheckpointCreated + TaskCompleted (+ WorkItemCompleted / GateResolved) in OXE-EVENTS.ndjson
   planJsonLib.markPlanTaskDone(paths.plan, taskId, { commit: cp.commit });
+  touchProgramPhase(projectRoot, activeSession, 'executing'); // bench B27: the manual path moves the phase too
   try {
     require('./oxe-deferred.cjs').closeTask(paths.programDir || path.join(projectRoot, '.oxe', 'program'), taskId, phase, 'resolved');
   } catch { /* auxiliary */ }
@@ -7142,7 +11285,7 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
     type: 'GateResolved',
     run_id: runId,
     work_item_id: taskId,
-    payload: { gate: 'checkpoint', commit: cp.commit, files: cp.files, leftover: cp.leftover || [], actor },
+    payload: { gate: 'checkpoint', commit: cp.commit, files: cp.files, leftover: cp.leftover || [], actor, ...(cp.check ? { check: cp.check } : {}) },
   });
   appendEvent(projectRoot, activeSession, {
     type: 'CheckpointCreated',
@@ -7172,6 +11315,7 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
     ignored_out_of_scope: outOfScopeDirty,
     verify_skipped: verifySkipped,
     by: actor,
+    ...(cp.check ? { check: cp.check } : {}),
   };
 }
 
@@ -7183,11 +11327,34 @@ function runtimePlanDone(projectRoot, activeSession, options = {}) {
   const planJsonLib = require('./oxe-plan-json.cjs');
   const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
   if (!jsonPath || !fs.existsSync(jsonPath)) throw new Error('plan done exige PLAN.json (o PLAN.md não guarda done por tarefa).');
-  const commit = options.commit || findTaskCheckpoint(projectRoot, taskId);
+  // Bench B16/B35: `plan done` marked a task done with nothing implemented. It now needs evidence — a real commit
+  // (the task's OXE-Task checkpoint, or --commit <sha> that exists) — or an audited --force --reason.
+  const isCommit = (sha) => {
+    const r = spawnSync('git', ['cat-file', '-e', `${sha}^{commit}`], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
+    return r.status === 0;
+  };
+  const forced = Boolean(options.force);
+  const reason = String(options.reason || '').trim();
+  if (forced && reason.length < 8) throw new Error('plan done --force exige --reason "<por que não há commit da tarefa>" (8+ caracteres).');
+  let commit = options.commit || findTaskCheckpoint(projectRoot, taskId);
+  if (commit && !isCommit(commit) && !forced) {
+    throw new Error(`--commit ${commit}: não é um commit deste repositório.`);
+  }
+  if (!commit && !forced) {
+    throw new Error(`${taskId} sem commit com "OXE-Task: ${taskId}" — rode oxe-cc runtime commit-task ${taskId} (roda o verify da tarefa e commita com o trailer), ou --commit <sha>, ou --force --reason "…".`);
+  }
+  if (commit && !isCommit(commit)) commit = null;
   const changed = planJsonLib.markPlanTaskDone(paths.plan, taskId, { commit });
   // the scorecard counts it as a manual intervention on the flow
-  if (changed) appendEvent(projectRoot, activeSession, { type: 'PlanTaskMarkedDone', work_item_id: taskId, payload: { task: taskId, commit: commit || null, manual: true } });
-  return { task: taskId, commit: commit || null, changed };
+  if (changed) {
+    appendEvent(projectRoot, activeSession, {
+      type: 'PlanTaskMarkedDone',
+      work_item_id: taskId,
+      payload: { task: taskId, commit: commit || null, manual: true, ...(forced ? { forced: true, reason, by: options.by || 'agente' } : {}) },
+    });
+    touchProgramPhase(projectRoot, activeSession, 'executing');
+  }
+  return { task: taskId, commit: commit || null, changed, forced };
 }
 
 /**
@@ -7205,8 +11372,11 @@ function classifyBlockedResult(result, graph) {
   for (const id of result.blocked) {
     const node = nodeOf(id);
     const policy = node && node.policy ? node.policy : {};
+    const realExtDeps = Array.isArray(policy.external_dependency)
+      ? policy.external_dependency.filter((d) => !/^(?:scope_insufficient|waiting_shared_files):/.test(String(d)))
+      : [];
     if (selected.size && !selected.has(id)) outOfScope.push(id);
-    else if (policy.verify_only || (Array.isArray(policy.external_dependency) && policy.external_dependency.length)) external.push(id);
+    else if (policy.verify_only || realExtDeps.length) external.push(id);
     else real.push(id);
   }
   result.blocked = real;
@@ -7217,13 +11387,1003 @@ function classifyBlockedResult(result, graph) {
 }
 
 /** `oxe-cc plan reopen Tn`: reopens a done task so the next execute redoes it (rework without a CR). */
+/**
+ * `oxe-cc plan scope add T<n> <paths…> --cr CR-n --by <papel> --reason "…"`: widens a task's `files` during a
+ * phase, the only sanctioned way (a hand edit of PLAN.json is a frozen-plan edit). Needs an OPEN CR naming the task
+ * (the CR is why the scope grows), never a frozen test, never a done task; recorded in the task (scope_added), in the
+ * CR log (kind "scope") and as an event. No new test version is asked: the criterion text did not change.
+ */
+function runtimePlanScopeAdd(projectRoot, activeSession, options = {}) {
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const taskId = String(options.task || '').toUpperCase();
+  if (!/^T\d+$/.test(taskId)) throw new Error('use: oxe-cc plan scope add T<n> <arquivo…> --cr CR-n --by <papel> --reason "…"');
+  const add = [...new Set((options.paths || []).map((p) => String(p).replace(/\\/g, '/').replace(/^\.\//, '').trim()).filter(Boolean))];
+  if (!add.length) throw new Error('informe ao menos um arquivo');
+  if (add.some((p) => p.startsWith('/') || /^[A-Za-z]:/.test(p) || p.split('/').includes('..'))) throw new Error('caminho relativo ao repositório, sem ".." nem absoluto');
+  const by = String(options.by || '').trim();
+  const reason = String(options.reason || '').trim();
+  if (!by) throw new Error('informe quem decide (--by <papel>)');
+  if (reason.length < 8) throw new Error('informe o motivo em uma frase (--reason "…")');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const crId = String(options.cr || '').toUpperCase();
+  const cr = changeLib.listChanges(programDir).find((c) => c.id === crId);
+  if (!cr) throw new Error(`--cr ${options.cr || '(ausente)'}: o escopo de uma fase em andamento só cresce por um CR aberto (oxe-cc runtime feedback …)`);
+  if (cr.status !== 'open') throw new Error(`${crId} está ${cr.status}: use um CR aberto`);
+  if (!(cr.tasks || []).map((t) => String(t).toUpperCase()).includes(taskId)) throw new Error(`${crId} não reabre ${taskId} (tasks: ${(cr.tasks || []).join(', ') || '—'})`);
+  const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
+  if (!jsonPath || !fs.existsSync(jsonPath)) throw new Error('plan scope add exige PLAN.json');
+  const result = planJsonLib.withPlanLock(jsonPath, () => {
+    const doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    const task = (doc.tasks || []).find((t) => t && String(t.id).toUpperCase() === taskId);
+    if (!task) throw new Error(`Tarefa ${taskId} não encontrada em PLAN.json`);
+    if (task.done === true) throw new Error(`${taskId} está done: reabra antes (oxe-cc plan reopen ${taskId})`);
+    const bad = add.filter((p) => isFrozenTestPathCandidate(doc, p));
+    if (bad.length) {
+      throw new Error(
+        `${bad.join(', ')}: teste congelado NUNCA entra em files de tarefa (o plan lint reprova). Para liberar/atualizar teste congelado por CR, edite-o num quick e rode: oxe-cc plan amend-test ${bad[0]} --reason ${crId || 'CR-<n>'} --by ${by || '<papel>'} (ou oxe-cc spec freeze --from <sha|#PR> --cr ${crId || 'CR-<n>'})`,
+      );
+    }
+    const have = new Set((task.files || []).map((f) => String(f).replace(/\\/g, '/')));
+    const added = add.filter((p) => !have.has(p));
+    let packUpdated = false;
+    let clearedScopeFailure = false;
+    if (added.length) {
+      task.files = [...(task.files || []), ...added];
+      task.scope_added = [...(Array.isArray(task.scope_added) ? task.scope_added : []), { paths: added, cr: crId, by, reason, at: new Date().toISOString() }];
+      if (task.checkpoint_failed && task.checkpoint_failed.kind === 'scope_insufficient') {
+        const normF = (p) => String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
+        const under = (a, b) => a === b || b.startsWith(`${a.replace(/\/+$/, '')}/`);
+        const reds = Array.isArray(task.checkpoint_failed.related_red) ? task.checkpoint_failed.related_red.map(normF).filter(Boolean) : [];
+        const mine = task.files.map(normF).filter(Boolean);
+        if (reds.length && reds.every((red) => mine.some((m) => under(m, red)))) {
+          delete task.checkpoint_failed;
+          clearedScopeFailure = true;
+        }
+      }
+      const tmp = `${jsonPath}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+      fs.renameSync(tmp, jsonPath);
+      packUpdated = syncImplementationPackTaskPaths(paths, jsonPath, taskId, { addPaths: added });
+    }
+    return { added, existed: add.filter((p) => have.has(p)), ...(packUpdated ? { pack_updated: true } : {}), ...(clearedScopeFailure ? { cleared_checkpoint_failed: true } : {}) };
+  });
+  if (result.added.length) {
+    if (result.cleared_checkpoint_failed) {
+      clearTaskResidualRunState(projectRoot, activeSession, [taskId], { clearFailedAndBlocked: true });
+    }
+    changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'scope', id: crId, task: taskId, paths: result.added, by, reason, at: new Date().toISOString(), ...(result.pack_updated ? { pack_updated: true } : {}) });
+    appendEvent(projectRoot, activeSession, { type: 'PlanScopeAmended', work_item_id: taskId, payload: { task: taskId, paths: result.added, cr: crId, by, reason, ...(result.pack_updated ? { pack_updated: true } : {}), ...(result.cleared_checkpoint_failed ? { cleared_checkpoint_failed: true } : {}) } });
+  }
+  return { task: taskId, cr: crId, by, ...result };
+}
+
+/**
+ * `oxe-cc plan task edit T<n> [--wave <n>] [--depends-on T1,T2 | --depends-on none] [--add-paths a,b] [--remove-paths a,b] [--notes "…"]
+ * --by <papel> --reason "…" [--cr CR-n]` (OxeSpace 14/11, Celular F3): edits a non-done task in PLAN.json and keeps
+ * `IMPLEMENTATION-PACK.json` `exact_paths` in sync. `--add-paths` works directly when the task never started (or with an open CR).
+ */
+function runtimePlanTaskEdit(projectRoot, activeSession, options = {}) {
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const taskId = String(options.task || '').toUpperCase();
+  if (!/^T\d+$/.test(taskId)) throw new Error('use: oxe-cc plan task edit T<n> [--wave n] [--depends-on T1,T2|none] [--add-paths a,b] [--remove-paths a,b] [--notes "…"] --by <papel> --reason "…"');
+  const by = String(options.by || '').trim();
+  const reason = String(options.reason || '').trim();
+  if (!by) throw new Error('informe quem decide (--by <papel>)');
+  if (reason.length < 8) throw new Error('informe o motivo em uma frase (--reason "…")');
+  const wave = options.wave != null && options.wave !== '' ? Number(options.wave) : null;
+  if (wave != null && !(Number.isInteger(wave) && wave > 0)) throw new Error('--wave: um número inteiro ≥ 1');
+  const list = (v) => (Array.isArray(v) ? v : String(v || '').split(',')).map((x) => String(x).trim()).filter(Boolean);
+  const deps = options.dependsOn == null ? null : String(options.dependsOn).trim().toLowerCase() === 'none' ? [] : list(options.dependsOn).map((d) => d.toUpperCase());
+  const add = [...new Set(list(options.addPaths).map((p) => p.replace(/\\/g, '/').replace(/^\.\//, '').trim()).filter(Boolean))];
+  const remove = list(options.removePaths).map((p) => p.replace(/\\/g, '/').replace(/^\.\//, ''));
+  if (add.some((p) => p.startsWith('/') || /^[A-Za-z]:/.test(p) || p.split('/').includes('..'))) throw new Error('--add-paths: caminho relativo ao repositório, sem ".." nem absoluto');
+  const notes = options.notes != null ? String(options.notes) : null;
+  const addVerify = (Array.isArray(options.addVerify) ? options.addVerify : options.addVerify ? [options.addVerify] : [])
+    .map((c) => String(c || '').trim())
+    .filter(Boolean);
+  // OXB-C24-1: plan task edit Tn --budget-usd N (per-task budget, recorded in PLAN.json)
+  const budgetUsd = options.budgetUsd != null && options.budgetUsd !== '' ? Number(options.budgetUsd) : null;
+  if (budgetUsd != null && !(Number.isFinite(budgetUsd) && budgetUsd > 0)) throw new Error('--budget-usd: um valor em US$ maior que 0');
+  if (wave == null && deps == null && !add.length && !remove.length && notes == null && !addVerify.length && budgetUsd == null) {
+    throw new Error('nada a editar: --wave, --depends-on, --add-paths, --remove-paths, --add-verify, --budget-usd ou --notes');
+  }
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
+  if (!jsonPath || !fs.existsSync(jsonPath)) throw new Error('plan task edit exige PLAN.json');
+  const out = planJsonLib.withPlanLock(jsonPath, () => {
+    const doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    const tasks = (doc.tasks || []).filter(Boolean);
+    const task = tasks.find((t) => String(t.id).toUpperCase() === taskId);
+    if (!task) throw new Error(`Tarefa ${taskId} não encontrada em PLAN.json`);
+    if (task.done === true) throw new Error(`${taskId} está done: reabra antes (oxe-cc plan reopen ${taskId})`);
+    const before = { wave: task.wave ?? null, depends_on: [...(task.depends_on || [])], files: [...(task.files || [])], notes: task.notes ?? null };
+    if (deps) {
+      const ids = new Set(tasks.map((t) => String(t.id).toUpperCase()));
+      const unknown = deps.filter((d) => !ids.has(d));
+      if (unknown.length) throw new Error(`--depends-on: ${unknown.join(', ')} não existe(m) no plano`);
+      if (deps.includes(taskId)) throw new Error(`--depends-on: ${taskId} não depende de si mesma`);
+      const depsOf = (id) => (id === taskId ? deps : ((tasks.find((t) => String(t.id).toUpperCase() === id) || {}).depends_on || []).map((d) => String(d).toUpperCase()));
+      const seen = new Set();
+      const stack = [...deps];
+      while (stack.length) {
+        const id = stack.pop();
+        if (id === taskId) throw new Error(`--depends-on: forma um ciclo de dependência com ${taskId}`);
+        if (seen.has(id)) continue;
+        seen.add(id);
+        stack.push(...depsOf(id));
+      }
+      task.depends_on = deps;
+    }
+    if (wave != null) task.wave = wave;
+    let addedPaths = [];
+    if (add.length) {
+      const started = hasTaskExecutionStarted(projectRoot, activeSession, task);
+      if (started) {
+        const crId = String(options.cr || '').toUpperCase();
+        const cr = crId ? changeLib.listChanges(programDir).find((c) => c.id === crId) : null;
+        if (!cr || cr.status !== 'open' || !(cr.tasks || []).map((t) => String(t).toUpperCase()).includes(taskId)) {
+          throw new Error(`${taskId} já iniciou execução — para ampliar escopo de tarefa iniciada, use \`oxe-cc plan scope add ${taskId} ${add.join(' ')} --cr CR-n --by ${by} --reason "…"\``);
+        }
+      }
+      const badFrozen = add.filter((p) => isFrozenTestPathCandidate(doc, p));
+      if (badFrozen.length) {
+        throw new Error(`${badFrozen.join(', ')}: teste congelado NUNCA entra em files de tarefa (use plan amend-test / spec freeze)`);
+      }
+      const have = new Set((task.files || []).map((f) => String(f).replace(/\\/g, '/')));
+      addedPaths = add.filter((p) => !have.has(p));
+      if (addedPaths.length) task.files = [...(task.files || []), ...addedPaths];
+    }
+    if (remove.length) {
+      const frozen = new Set((doc.acceptance_tests || []).flatMap((a) => (a && a.files) || []).map((f) => String(typeof f === 'string' ? f : f.path).replace(/\\/g, '/')));
+      const taskFilesNorm = new Set((task.files || []).map((f) => String(f).replace(/\\/g, '/')));
+      const bad = remove.filter((p) => frozen.has(p) && !taskFilesNorm.has(p));
+      if (bad.length) throw new Error(`${bad.join(', ')}: teste congelado não sai por aqui (um CR e spec freeze)`);
+      const missing = remove.filter((p) => !taskFilesNorm.has(p));
+      if (missing.length) throw new Error(`${missing.join(', ')} não está(ão) em files de ${taskId}`);
+      task.files = (task.files || []).filter((f) => !remove.includes(String(f).replace(/\\/g, '/')));
+    }
+    if (notes != null) task.notes = notes;
+    if (budgetUsd != null) task.budget_usd = budgetUsd;
+    let addedVerify = [];
+    if (addVerify.length) {
+      const beforeCmds = readTaskVerifyCommands(task);
+      const beforeSet = new Set(beforeCmds);
+      addedVerify = [...new Set(addVerify)].filter((c) => !beforeSet.has(c));
+      if (addedVerify.length) {
+        const nextCmds = [...beforeCmds, ...addedVerify];
+        task.verify = { ...(task.verify && typeof task.verify === 'object' && !Array.isArray(task.verify) ? task.verify : {}), commands: nextCmds };
+        if (task.verify.command) delete task.verify.command;
+        if (task.verifyCommand) delete task.verifyCommand;
+      }
+    }
+    const after = {
+      wave: task.wave ?? null,
+      depends_on: [...(task.depends_on || [])],
+      files: [...(task.files || [])],
+      notes: task.notes ?? null,
+      ...(addedVerify.length ? { verify_commands: readTaskVerifyCommands(task) } : {}),
+    };
+    task.edits = [...(Array.isArray(task.edits) ? task.edits : []), { by, reason, cr: options.cr ? String(options.cr).toUpperCase() : null, at: new Date().toISOString(), ...(wave != null ? { wave } : {}), ...(deps ? { depends_on: deps } : {}), ...(addedPaths.length ? { added_paths: addedPaths } : {}), ...(remove.length ? { removed_paths: remove } : {}), ...(addedVerify.length ? { added_verify: addedVerify } : {}), ...(notes != null ? { notes: true } : {}) }];
+    const tmp = `${jsonPath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+    fs.renameSync(tmp, jsonPath);
+    const packPathsUpdated = (addedPaths.length || remove.length)
+      ? syncImplementationPackTaskPaths(paths, jsonPath, taskId, { addPaths: addedPaths, removePaths: remove })
+      : false;
+    const packVerifyUpdated = addedVerify.length
+      ? syncImplementationPackExpectedChecks(paths, jsonPath, taskId, readTaskVerifyCommands(task))
+      : false;
+    const packUpdated = packPathsUpdated || packVerifyUpdated;
+    return { before, after, ...(addedPaths.length ? { added_paths: addedPaths } : {}), ...(addedVerify.length ? { added_verify: addedVerify } : {}), ...(packUpdated ? { pack_updated: true } : {}) };
+  });
+  changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'task_edit', task: taskId, ...out, cr: options.cr ? String(options.cr).toUpperCase() : null, by, reason, at: new Date().toISOString() });
+  appendEvent(projectRoot, activeSession, { type: 'PlanTaskEdited', work_item_id: taskId, payload: { task: taskId, by, reason, before: out.before, after: out.after, ...(out.added_paths ? { added_paths: out.added_paths } : {}), ...(out.pack_updated ? { pack_updated: true } : {}) } });
+  return { task: taskId, by, ...out };
+}
+
+/**
+ * A verify command without some test arguments (`drop`), or with some anchored (`anchor`, vitest `arg$`), per
+ * SUBCOMMAND (R31): `a.test.ts && npm run typecheck` keeps the typecheck; a subcommand whose test arguments all went
+ * goes away with its separator — never a bare `vitest run` (the whole suite). R32: the command is never rewritten as a
+ * whole (a `-t "v1\.5"` keeps its backslash); a path matches with either separator; the replacement is a function.
+ */
+function pruneVerifyCommand(c, drop, anchor) {
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const TEST_ARG = /[^\s"'`]+\.(test|spec)\.[cm]?[jt]sx?/g;
+  const pat = (s) => esc(String(s).replace(/\\/g, '/')).replace(/\//g, '[\\\\/]');
+  const parts = String(c).split(/(\s*(?:&&|\|\||;)\s*)/);
+  const keep = [];
+  for (let i = 0; i < parts.length; i += 2) {
+    let n = parts[i];
+    for (const arg of drop || []) n = n.replace(new RegExp(`(^|\\s)(["'\`]?)${pat(arg)}\\$?\\2(?=\\s|$)`, 'g'), (_m, p1) => p1);
+    for (const arg of anchor || []) n = n.replace(new RegExp(`(^|\\s)(["'\`]?)(${pat(arg)})\\2(?=\\s|$)`, 'g'), (_m, p1, q, a) => `${p1}${q}${a}$${q}`);
+    if (n !== parts[i]) n = n.replace(/\s{2,}/g, ' ').trim();
+    const had = (parts[i].match(TEST_ARG) || []).length;
+    const has = (n.match(TEST_ARG) || []).length;
+    if (had && !has) continue;
+    if (n) keep.push({ sep: i ? parts[i - 1] : null, text: n });
+  }
+  return keep.map((k, j) => (j ? (k.sep || ' && ') : '') + k.text).join('');
+}
+
+/** pruneVerifyCommand over a task's verify.commands, verify.command and verifyCommand; null when nothing changes. */
+function pruneTaskVerify(t, drop, anchor, { apply = true } = {}) {
+  const before = { commands: t.verify && Array.isArray(t.verify.commands) ? [...t.verify.commands] : null, command: t.verify && t.verify.command ? t.verify.command : null, verifyCommand: t.verifyCommand || null };
+  const after = {
+    commands: before.commands ? before.commands.map((c) => pruneVerifyCommand(c, drop, anchor)).filter(Boolean) : null,
+    command: before.command ? pruneVerifyCommand(before.command, drop, anchor) || null : null,
+    verifyCommand: before.verifyCommand ? pruneVerifyCommand(before.verifyCommand, drop, anchor) || null : null,
+  };
+  const flat = (x) => [...(x.commands || []), ...(x.command ? [x.command] : []), ...(x.verifyCommand ? [x.verifyCommand] : [])];
+  if (JSON.stringify(flat(after)) === JSON.stringify(flat(before))) return null;
+  if (apply) {
+    if (before.commands) t.verify.commands = after.commands;
+    if (before.command) { if (after.command) t.verify.command = after.command; else delete t.verify.command; }
+    if (before.verifyCommand) { if (after.verifyCommand) t.verifyCommand = after.verifyCommand; else delete t.verifyCommand; }
+  }
+  return { before: flat(before), after: flat(after) };
+}
+
+/**
+ * OxeSpace 15/11 (OxeChat F4: T10/T11 superseded by AG-10/AG-11, user decision): `oxe-cc plan task supersede
+ * T10,T11 --by-phase "…" --by <papel> --reason "…" [--cr CR-n] [--dry-run]`. For a plan with or without a program:
+ * the tasks become done with `superseded` (never scheduled, never reopened), their criteria leave them, the frozen
+ * entries of criteria only they held move to `superseded_tests` (kept, not run, nothing released), and those test
+ * files leave the pending tasks' verify (per subcommand). Refused for a task with a checkpoint or with pending dependents.
+ */
+function runtimePlanTaskSupersede(projectRoot, activeSession, options = {}) {
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const ids = String(options.tasks || '').split(/[\s,]+/).map((s) => s.trim().toUpperCase()).filter(Boolean);
+  if (!ids.length || ids.some((id) => !/^T\d+$/.test(id))) throw new Error('use: oxe-cc plan task supersede T<n>[,T<m>] --by-phase "…" --by <papel> --reason "…" [--cr CR-n] [--dry-run]');
+  const byPhase = String(options.byPhase || '').trim();
+  if (!byPhase) throw new Error('informe o que as substitui (--by-phase "AG-10/AG-11")');
+  const { by, reason } = requireEditReason({ by: options.by, reason: options.reason });
+  const cr = options.cr ? String(options.cr).toUpperCase() : null;
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
+  if (!jsonPath || !fs.existsSync(jsonPath)) throw new Error('plan task supersede exige PLAN.json');
+  const at = new Date().toISOString();
+  const norm = (p) => String(typeof p === 'string' ? p : (p && p.path) || '').replace(/\\/g, '/');
+  const out = planJsonLib.withPlanLock(jsonPath, () => {
+    const doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    const tasks = (doc.tasks || []).filter(Boolean);
+    const set = new Set(ids);
+    const problems = [];
+    for (const id of ids) {
+      const t = tasks.find((x) => String(x.id).toUpperCase() === id);
+      if (!t) { problems.push(`${id} não existe no plano`); continue; }
+      if (t.done === true || t.status === 'done') problems.push(`${id} já está done`);
+      if (t.done_commit) problems.push(`${id} tem checkpoint (${String(t.done_commit).slice(0, 8)})`);
+      const dependents = tasks.filter((x) => !set.has(String(x.id).toUpperCase()) && x.done !== true && (x.depends_on || x.dependsOn || []).map((d) => String(d).toUpperCase()).includes(id));
+      if (dependents.length) problems.push(`${dependents.map((x) => x.id).join(', ')} depende(m) de ${id} (oxe-cc plan task edit … --depends-on)`);
+    }
+    if (problems.length) throw new Error(`plan task supersede recusado: ${problems.join('; ')}`);
+    const sup = tasks.filter((t) => set.has(String(t.id).toUpperCase()));
+    const criteria = [...new Set(sup.flatMap((t) => [...(t.acceptance || []), ...(t.aceite || [])]))];
+    // a criterion another pending task still holds stays (only its entries owned by a superseded task go)
+    const heldElsewhere = new Set(tasks.filter((t) => !set.has(String(t.id).toUpperCase()) && t.done !== true).flatMap((t) => [...(t.acceptance || []), ...(t.aceite || [])]));
+    const goes = (a) => a && ((a.task && set.has(String(a.task).toUpperCase())) || (!a.task && criteria.includes(a.criterion) && !heldElsewhere.has(a.criterion)));
+    const moved = (doc.acceptance_tests || []).filter(goes);
+    const files = [...new Set(moved.flatMap((a) => (a.files || []).map(norm)).filter(Boolean))];
+    const verifyChanges = [];
+    for (const t of tasks) {
+      if (set.has(String(t.id).toUpperCase()) || t.done === true) continue;
+      const c = pruneTaskVerify(t, files, [], { apply: !options.dryRun });
+      if (!c) continue;
+      verifyChanges.push({ task: t.id, before: c.before, after: c.after });
+      if (!options.dryRun) t.edits = [...(Array.isArray(t.edits) ? t.edits : []), { by, reason, at, verify_pruned: files, superseded: ids }];
+    }
+    if (!options.dryRun) {
+      for (const t of sup) Object.assign(t, { done: true, status: 'done', superseded: { by_phase: byPhase, cr, by, reason, at, acceptance: [...new Set([...(t.acceptance || []), ...(t.aceite || [])])] }, acceptance: [], ...(t.aceite ? { aceite: [] } : {}) });
+      doc.acceptance_tests = (doc.acceptance_tests || []).filter((a) => !goes(a));
+      doc.superseded_tests = [...(Array.isArray(doc.superseded_tests) ? doc.superseded_tests : []), ...moved.map((a) => ({ ...a, superseded: { by_phase: byPhase, tasks: ids, at } }))];
+      const tmp = `${jsonPath}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+      fs.renameSync(tmp, jsonPath);
+    }
+    return { tasks: ids, criteria, tests_kept: moved.map((a) => a.criterion), files, verify_changes: verifyChanges };
+  });
+  // their open deferred entries close as superseded — never an open deferral at the close (R34, like the fold)
+  const closedDeferred = [];
+  try {
+    const dlib = require('./oxe-deferred.cjs');
+    for (const e of dlib.open(programDir)) {
+      if (!ids.includes(String(e.task).toUpperCase())) continue;
+      if (!options.dryRun) dlib.close(programDir, e.id, `superseded_by:${byPhase}`);
+      closedDeferred.push(e.id);
+    }
+  } catch { /* no ledger */ }
+  if (!options.dryRun) {
+    changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'task_supersede', tasks: ids, by_phase: byPhase, cr, criteria: out.criteria, tests_kept: out.tests_kept, verify_pruned: out.verify_changes.map((c) => c.task), closed_deferred: closedDeferred, by, reason, at });
+    appendEvent(projectRoot, activeSession, { type: 'PlanTasksSuperseded', payload: { tasks: ids, by_phase: byPhase, cr, by, reason, closed_deferred: closedDeferred } });
+  }
+  return { dry_run: Boolean(options.dryRun), by_phase: byPhase, ...out, closed_deferred: closedDeferred };
+}
+
+/**
+ * OxeSpace 15/11 (OxeChat F4 install): `oxe-cc plan verify prune --later-owned --by <papel> --reason "…" [--dry-run]`.
+ * The G38 findings applied: from each pending task's verify, the test arguments that select a frozen test only a LATER
+ * task turns green are removed (the exact path, or the argument that matched it as a vitest substring). A command left
+ * with no test argument and nothing else is dropped. Recorded per task (edits[], changes.ndjson, PlanVerifyPruned).
+ */
+function runtimePlanVerifyPrune(projectRoot, activeSession, options = {}) {
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const si = require('./oxe-suite-impact.cjs');
+  if (!options.laterOwned) throw new Error('use: oxe-cc plan verify prune --later-owned --by <papel> --reason "…" [--dry-run]');
+  const { by, reason } = requireEditReason({ by: options.by, reason: options.reason });
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
+  if (!jsonPath || !fs.existsSync(jsonPath)) throw new Error('plan verify prune exige PLAN.json');
+  const at = new Date().toISOString();
+  const out = planJsonLib.withPlanLock(jsonPath, () => {
+    const doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    const findings = si.laterOwnedTests(doc);
+    // cross-review 15/11 (R31 P0): an argument that selects a later test only as a vitest SUBSTRING (T44's
+    // `pu03-app-version.test.ts` pulling T59's `.test.tsx`) is the task's own test — it is ANCHORED (`arg$`), never
+    // removed; only an argument that names a later-owned test itself is removed
+    const byTask = new Map();
+    for (const f of findings) {
+      if (!byTask.has(f.task)) byTask.set(f.task, { drop: new Set(), anchor: new Set() });
+      const e = byTask.get(f.task);
+      if (!f.via) e.drop.add(f.test);
+      else e.anchor.add(f.via);
+    }
+    for (const e of byTask.values()) for (const a of e.anchor) if (e.drop.has(a)) e.anchor.delete(a);
+    const changes = [];
+    for (const t of (doc.tasks || []).filter(Boolean)) {
+      const e = byTask.get(t.id);
+      if (!e) continue;
+      const c = pruneTaskVerify(t, e.drop, e.anchor, { apply: !options.dryRun });
+      if (!c) continue;
+      changes.push({ task: t.id, removed: [...e.drop], anchored: [...e.anchor], before: c.before, after: c.after });
+      if (!options.dryRun) t.edits = [...(Array.isArray(t.edits) ? t.edits : []), { by, reason, at, verify_pruned: [...e.drop], ...(e.anchor.size ? { verify_anchored: [...e.anchor] } : {}) }];
+    }
+    if (!options.dryRun && changes.length) {
+      const tmp = `${jsonPath}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+      fs.renameSync(tmp, jsonPath);
+    }
+    return { changes, remaining: options.dryRun ? findings.length : si.laterOwnedTests(doc).length };
+  });
+  if (!options.dryRun && out.changes.length) {
+    changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'verify_prune', by, reason, at, changes: out.changes.map((c) => ({ task: c.task, removed: c.removed, anchored: c.anchored })) });
+    appendEvent(projectRoot, activeSession, { type: 'PlanVerifyPruned', payload: { by, reason, tasks: out.changes.map((c) => c.task) } });
+  }
+  return { dry_run: Boolean(options.dryRun), ...out };
+}
+
+function extractAndRemoveVerifySegment(task, rawTarget, { apply = true } = {}) {
+  const target = String(rawTarget || '').trim();
+  if (!target) return null;
+  const normTarget = target.replace(/\\/g, '/').replace(/^\.\//, '');
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pat = esc(normTarget).replace(/\//g, '[\\\\/]');
+  const argRe = new RegExp(`(^|\\s)(["'\`]?)(${pat}(?:\\.(?:test|spec)\\.[cm]?[jt]sx?)?)\\$?\\2(?=\\s|$)`, 'g');
+  const TEST_ARG = /[^\s"'`]+\.(?:test|spec)\.[cm]?[jt]sx?/g;
+
+  const extracted = [];
+  const rewriteCommand = (cmdStr) => {
+    const parts = String(cmdStr).split(/(\s*(?:&&|\|\||;)\s*)/);
+    const keep = [];
+    for (let i = 0; i < parts.length; i += 2) {
+      const sub = parts[i].trim();
+      if (!sub) continue;
+      // 1. Exact full subcommand match (or multi-word command substring match)
+      if (sub === target || (/\s/.test(target) && sub.includes(target))) {
+        extracted.push(sub);
+        continue;
+      }
+      // 2. Test-argument / path match inside the subcommand
+      const matchedArgs = [];
+      const stripped = sub.replace(argRe, (_m, p1, q, argVal) => {
+        matchedArgs.push(`${q}${argVal}${q}`);
+        return p1;
+      });
+      if (!matchedArgs.length) {
+        keep.push({ sep: i ? parts[i - 1] : null, text: parts[i] });
+        continue;
+      }
+      const cleaned = stripped.replace(/\s{2,}/g, ' ').trim();
+      const hadTests = (sub.match(TEST_ARG) || []).length;
+      const hasTests = (cleaned.match(TEST_ARG) || []).length;
+      if (hadTests && !hasTests) {
+        // Every test argument in this subcommand was moved/dropped: whole subcommand leaves
+        extracted.push(sub);
+        continue;
+      }
+      // Reconstruct runnable subcommand for `--to T<m>` with the same runner prefix + only the moved arg(s)
+      const runnerOnly = sub.replace(TEST_ARG, '').replace(/\s{2,}/g, ' ').trim();
+      extracted.push(runnerOnly ? `${runnerOnly} ${matchedArgs.join(' ')}`.replace(/\s{2,}/g, ' ').trim() : matchedArgs.join(' '));
+      if (cleaned) keep.push({ sep: i ? parts[i - 1] : null, text: cleaned });
+    }
+    return keep.map((k, j) => (j ? (k.sep || ' && ') : '') + k.text).join('');
+  };
+
+  const before = {
+    commands: task.verify && Array.isArray(task.verify.commands) ? [...task.verify.commands] : null,
+    command: task.verify && task.verify.command ? task.verify.command : null,
+    verifyCommand: task.verifyCommand || null,
+  };
+  const after = {
+    commands: before.commands ? before.commands.map(rewriteCommand).filter(Boolean) : null,
+    command: before.command ? rewriteCommand(before.command) || null : null,
+    verifyCommand: before.verifyCommand ? rewriteCommand(before.verifyCommand) || null : null,
+  };
+  const flat = (x) => [...(x.commands || []), ...(x.command ? [x.command] : []), ...(x.verifyCommand ? [x.verifyCommand] : [])];
+  if (JSON.stringify(flat(after)) === JSON.stringify(flat(before))) return null;
+  if (apply) {
+    if (before.commands) task.verify.commands = after.commands;
+    if (before.command) { if (after.command) task.verify.command = after.command; else delete task.verify.command; }
+    if (before.verifyCommand) { if (after.verifyCommand) task.verifyCommand = after.verifyCommand; else delete task.verifyCommand; }
+  }
+  return { before: flat(before), after: flat(after), extracted: [...new Set(extracted)] };
+}
+
+/**
+ * OXB-C1 (#8): `oxe-cc plan verify move T<n> "<segmento|arquivo>" --to <T<m>|KEY> --cr CR-n --by <papel> [--reason "…"] [--dry-run]`
+ * and `oxe-cc plan verify drop T<n> "<segmento|arquivo>" --by <papel> --reason "…" [--cr CR-n] [--dry-run]`.
+ */
+function runtimePlanVerifyEdit(projectRoot, activeSession, options = {}) {
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const criteriaIds = require('./oxe-criteria-ids.cjs');
+  const action = options.action === 'move' ? 'move' : 'drop';
+  const taskId = String(options.task || '').trim().toUpperCase();
+  const segment = String(options.segment || '').trim();
+  if (!/^T\d+$/.test(taskId) || !segment) {
+    throw new Error(
+      action === 'move'
+        ? 'use: oxe-cc plan verify move T<n> "<segmento|arquivo>" --to <T<m>|KEY> --cr CR-n --by <papel> [--reason "…"] [--dry-run]'
+        : 'use: oxe-cc plan verify drop T<n> "<segmento|arquivo>" --by <papel> --reason "…" [--cr CR-n] [--dry-run]'
+    );
+  }
+  const cr = options.cr ? String(options.cr).trim().toUpperCase() : null;
+  if (action === 'move') {
+    if (!cr || !criteriaIds.CR_ID_RE.test(cr)) {
+      throw new Error('plan verify move exige um CR válido (--cr CR-<n>)');
+    }
+  } else if (cr && !criteriaIds.CR_ID_RE.test(cr)) {
+    throw new Error(`CR inválido: ${cr}`);
+  }
+  const toRaw = action === 'move' ? String(options.to || '').trim().toUpperCase() : null;
+  const toIsTask = Boolean(toRaw && /^T\d+$/.test(toRaw));
+  const toIsCard = Boolean(toRaw && !toIsTask && (/^[A-Z][A-Z0-9]*-\d+$/.test(toRaw) || /^\d+$/.test(toRaw)));
+  if (action === 'move' && !toIsTask && !toIsCard) {
+    throw new Error('informe o destino (--to T<m> ou --to <CARD-KEY>, ex.: OXE-292)');
+  }
+  if (toIsTask && toRaw === taskId) {
+    throw new Error(`--to: ${taskId} já é a tarefa de origem`);
+  }
+  const fallbackReason = action === 'move' && !options.reason ? `movido de ${taskId} para ${toRaw} (${cr})` : options.reason;
+  const { by, reason } = requireEditReason({ by: options.by, reason: fallbackReason });
+
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
+  if (!jsonPath || !fs.existsSync(jsonPath)) throw new Error(`plan verify ${action} exige PLAN.json`);
+  const at = new Date().toISOString();
+
+  const out = planJsonLib.withPlanLock(jsonPath, () => {
+    const doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    const tasks = (doc.tasks || []).filter(Boolean);
+    const srcTask = tasks.find((t) => String(t.id).toUpperCase() === taskId);
+    if (!srcTask) throw new Error(`Tarefa ${taskId} não encontrada em PLAN.json`);
+    if (srcTask.done === true) throw new Error(`${taskId} está done: reabra antes (oxe-cc plan reopen ${taskId})`);
+
+    let dstTask = null;
+    if (toIsTask) {
+      dstTask = tasks.find((t) => String(t.id).toUpperCase() === toRaw);
+      if (!dstTask) throw new Error(`Tarefa destino ${toRaw} não encontrada em PLAN.json`);
+      if (dstTask.done === true) throw new Error(`Tarefa destino ${toRaw} já está done`);
+    }
+
+    const removed = extractAndRemoveVerifySegment(srcTask, segment, { apply: !options.dryRun });
+    if (!removed) {
+      throw new Error(`segmento/arquivo "${segment}" não encontrado no verify de ${taskId}`);
+    }
+
+    let dstBefore = null;
+    let dstAfter = null;
+    if (dstTask) {
+      const curCmds = dstTask.verify && Array.isArray(dstTask.verify.commands)
+        ? [...dstTask.verify.commands]
+        : (dstTask.verify && dstTask.verify.command ? [dstTask.verify.command] : (dstTask.verifyCommand ? [dstTask.verifyCommand] : []));
+      dstBefore = [...curCmds];
+      const nextCmds = [...new Set([...curCmds, ...removed.extracted])];
+      dstAfter = nextCmds;
+      if (!options.dryRun) {
+        dstTask.verify = { ...(dstTask.verify && typeof dstTask.verify === 'object' && !Array.isArray(dstTask.verify) ? dstTask.verify : {}), commands: nextCmds };
+        if (dstTask.verify.command) delete dstTask.verify.command;
+        if (dstTask.verifyCommand) delete dstTask.verifyCommand;
+        dstTask.edits = [...(Array.isArray(dstTask.edits) ? dstTask.edits : []), { by, reason, cr, at, verify_received_from: taskId, added: removed.extracted }];
+      }
+    }
+
+    if (!options.dryRun) {
+      srcTask.edits = [
+        ...(Array.isArray(srcTask.edits) ? srcTask.edits : []),
+        action === 'move'
+          ? { by, reason, cr, at, verify_moved: segment, to: toRaw, extracted: removed.extracted }
+          : { by, reason, cr, at, verify_dropped: segment, extracted: removed.extracted },
+      ];
+      const tmp = `${jsonPath}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+      fs.renameSync(tmp, jsonPath);
+    }
+
+    return {
+      action,
+      task: taskId,
+      segment,
+      extracted: removed.extracted,
+      before: removed.before,
+      after: removed.after,
+      ...(action === 'move' ? { to: toRaw, to_kind: toIsTask ? 'task' : 'card', ...(dstTask ? { target_before: dstBefore, target_after: dstAfter } : {}) } : {}),
+      cr,
+      by,
+      reason,
+    };
+  });
+
+  if (!options.dryRun) {
+    changeLib.appendNdjson(changeLib.changesFile(programDir), {
+      kind: action === 'move' ? 'verify_move' : 'verify_drop',
+      ...out,
+      at,
+    });
+    appendEvent(projectRoot, activeSession, {
+      type: action === 'move' ? 'PlanVerifyMoved' : 'PlanVerifyDropped',
+      work_item_id: taskId,
+      payload: { ...out },
+    });
+  }
+
+  return { dry_run: Boolean(options.dryRun), ...out };
+}
+
+function buildSuiteVerifyCommand(projectRoot, suites) {
+  const rels = suites.map((p) => String(p || '').replace(/\\/g, '/').replace(/^\.\//, '').trim()).filter(Boolean);
+  if (rels.some((p) => p.startsWith('/') || /^[A-Za-z]:/.test(p) || p.split('/').includes('..'))) {
+    throw new Error('--suite: caminho deve ser relativo ao repositório, sem ".." nem absoluto');
+  }
+  const cfg = readProjectConfig(projectRoot) || {};
+  const customTpl = typeof cfg.task_suite_command === 'string' && cfg.task_suite_command.includes('{files}')
+    ? cfg.task_suite_command
+    : cfg.checkpoint_related_tests && typeof cfg.checkpoint_related_tests === 'object'
+      && typeof cfg.checkpoint_related_tests.run_command === 'string' && cfg.checkpoint_related_tests.run_command.includes('{files}')
+      ? cfg.checkpoint_related_tests.run_command
+      : null;
+  if (customTpl) return customTpl.replace('{files}', rels.join(' '));
+  const combinedText = rels.map((r) => readTextIfExists(path.join(projectRoot, r)) || '').join('\n');
+  if (rels.some((r) => /(^|\/)(e2e|playwright)\//i.test(r) || /\.e2e\./i.test(r)) || /@playwright\/test/.test(combinedText)) {
+    return `npx playwright test ${rels.join(' ')}`;
+  }
+  if (/node:test/.test(combinedText) || rels.every((r) => /\.test\.c?js$/i.test(r))) {
+    return `node --test ${rels.join(' ')}`;
+  }
+  return `npx vitest run ${rels.join(' ')}`;
+}
+
+/**
+ * OXB-C7 #2: `oxe-cc plan verify add T<n> (--command "…" | --suite <arquivo…>) [--by <papel> --reason "…"] [--dry-run]`
+ * Appends command(s) or test suite runner invocations to a task's `verify.commands` and keeps `IMPLEMENTATION-PACK.json`
+ * `expected_checks` synchronized.
+ */
+function runtimePlanVerifyAdd(projectRoot, activeSession, options = {}) {
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const criteriaIds = require('./oxe-criteria-ids.cjs');
+  const taskId = String(options.task || '').trim().toUpperCase();
+  if (!/^T\d+$/.test(taskId)) {
+    throw new Error('use: oxe-cc plan verify add T<n> (--command "…" | --suite <arquivo…>) [--cr CR-n] [--by <papel> --reason "…"] [--dry-run]');
+  }
+  const rawCommands = (Array.isArray(options.commands) ? options.commands : options.command ? [options.command] : [])
+    .map((c) => String(c || '').trim())
+    .filter(Boolean);
+  const rawSuites = (Array.isArray(options.suites) ? options.suites : options.suite ? [options.suite] : [])
+    .flatMap((s) => String(s || '').split(','))
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!rawCommands.length && !rawSuites.length) {
+    throw new Error('informe --command "…" ou --suite <arquivo…> para adicionar ao verify');
+  }
+  const candidates = [...rawCommands];
+  if (rawSuites.length) candidates.push(buildSuiteVerifyCommand(projectRoot, rawSuites));
+
+  const cr = options.cr ? String(options.cr).trim().toUpperCase() : null;
+  if (cr && !criteriaIds.CR_ID_RE.test(cr)) throw new Error(`CR inválido: ${cr}`);
+  const by = String(options.by || '').trim() || 'planner';
+  if (options.reason != null && String(options.reason).trim().length < 8) {
+    throw new Error('informe o motivo em uma frase (--reason "…", mínimo 8 caracteres)');
+  }
+  const reason = options.reason ? String(options.reason).trim() : 'adicionado check/suíte ao verify da tarefa';
+
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
+  if (!jsonPath || !fs.existsSync(jsonPath)) throw new Error('plan verify add exige PLAN.json');
+  const at = new Date().toISOString();
+
+  const out = planJsonLib.withPlanLock(jsonPath, () => {
+    const doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    const task = (doc.tasks || []).find((t) => t && String(t.id).toUpperCase() === taskId);
+    if (!task) throw new Error(`Tarefa ${taskId} não encontrada em PLAN.json`);
+    if (task.done === true) throw new Error(`${taskId} está done: reabra antes (oxe-cc plan reopen ${taskId})`);
+    const before = readTaskVerifyCommands(task);
+    const beforeSet = new Set(before);
+    const added = [...new Set(candidates)].filter((c) => !beforeSet.has(c));
+    const after = [...before, ...added];
+    let packUpdated = false;
+    if (!options.dryRun && added.length) {
+      task.verify = { ...(task.verify && typeof task.verify === 'object' && !Array.isArray(task.verify) ? task.verify : {}), commands: after };
+      if (task.verify.command) delete task.verify.command;
+      if (task.verifyCommand) delete task.verifyCommand;
+      task.edits = [...(Array.isArray(task.edits) ? task.edits : []), { by, reason, ...(cr ? { cr } : {}), at, verify_added: added }];
+      const tmp = `${jsonPath}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+      fs.renameSync(tmp, jsonPath);
+      packUpdated = syncImplementationPackExpectedChecks(paths, jsonPath, taskId, after);
+    }
+    return { task: taskId, added, before, after, pack_updated: packUpdated, ...(cr ? { cr } : {}), by, reason };
+  });
+
+  if (!options.dryRun && out.added.length) {
+    changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'verify_add', ...out, at });
+    appendEvent(projectRoot, activeSession, { type: 'PlanVerifyAdded', work_item_id: taskId, payload: { ...out } });
+  }
+
+  return { dry_run: Boolean(options.dryRun), ...out };
+}
+
+/**
+ * OXB-C7 #1: `oxe-cc plan pack sync|rebuild T<n> [--by <papel> --reason "…"] [--dry-run]`
+ * Regenerates an existing task's `IMPLEMENTATION-PACK.json` entry from `PLAN.json` using the canonical C5b builder
+ * (`buildPackEntryFromAppendTask`). Refuses if the task has already started execution or is done.
+ */
+function runtimePlanPackSync(projectRoot, activeSession, options = {}) {
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const taskId = String(options.task || '').trim().toUpperCase();
+  if (!/^T\d+$/.test(taskId)) {
+    throw new Error('use: oxe-cc plan pack sync T<n> [--by <papel> --reason "…"] [--dry-run]');
+  }
+  const by = String(options.by || '').trim() || 'planner';
+  if (options.reason != null && String(options.reason).trim().length < 8) {
+    throw new Error('informe o motivo em uma frase (--reason "…", mínimo 8 caracteres)');
+  }
+  const reason = options.reason ? String(options.reason).trim() : 'entrada reconstruída a partir do PLAN.json';
+
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
+  if (!jsonPath || !fs.existsSync(jsonPath)) throw new Error('plan pack sync exige PLAN.json');
+  const packPath = paths.implementationPack || path.join(path.dirname(jsonPath), 'IMPLEMENTATION-PACK.json');
+  if (!fs.existsSync(packPath)) {
+    throw new Error(`IMPLEMENTATION-PACK.json ausente (${path.relative(projectRoot, packPath)}) — rode \`oxe-cc plan build\``);
+  }
+  const at = new Date().toISOString();
+
+  const out = planJsonLib.withPlanLock(jsonPath, () => {
+    const doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    const task = (doc.tasks || []).find((t) => t && String(t.id).toUpperCase() === taskId);
+    if (!task) throw new Error(`Tarefa ${taskId} não encontrada em PLAN.json`);
+    if (hasTaskExecutionStarted(projectRoot, activeSession, task)) {
+      throw new Error(`${taskId} já iniciou execução — ` + '`plan pack sync` recusa regenerar tarefa já iniciada ou concluída');
+    }
+    let packDoc;
+    try { packDoc = JSON.parse(fs.readFileSync(packPath, 'utf8')); } catch { throw new Error(`IMPLEMENTATION-PACK.json inválido (${path.relative(projectRoot, packPath)})`); }
+    packDoc.tasks = Array.isArray(packDoc.tasks) ? packDoc.tasks : [];
+    const idx = packDoc.tasks.findIndex((p) => p && String(p.id || p.task_id || '').toUpperCase() === taskId);
+    const before = idx >= 0 ? JSON.parse(JSON.stringify(packDoc.tasks[idx])) : null;
+    const after = buildPackEntryFromAppendTask(projectRoot, doc, task, null, task);
+    const action = idx >= 0 ? 'rebuilt' : 'added';
+    if (!options.dryRun) {
+      if (idx >= 0) packDoc.tasks[idx] = after;
+      else packDoc.tasks.push(after);
+      writeTextAtomic(packPath, `${JSON.stringify(packDoc, null, 2)}\n`);
+    }
+    return { task: taskId, action, pack: path.relative(projectRoot, packPath).replace(/\\/g, '/'), before, after, by, reason };
+  });
+
+  if (!options.dryRun) {
+    changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'pack_sync', task: taskId, action: out.action, by, reason, at });
+    appendEvent(projectRoot, activeSession, { type: 'PlanPackSynced', work_item_id: taskId, payload: { task: taskId, action: out.action, by, reason } });
+  }
+
+  return { dry_run: Boolean(options.dryRun), ...out };
+}
+
+/**
+ * OxeSpace 15/11 (OxeCode F6, CR-F6-14): `oxe-cc plan task fold T<a> --into T<b> --cr CR-n --by <papel> --reason "…"`.
+ * Folds a task into another: its files, criteria, verify commands and pack contract go to the target; the tasks that
+ * depended on it depend on the target; its frozen entries name the target; it becomes `merged_into` (done, never
+ * scheduled) and its open deferred entries close as merged — so the close does not count it as an open deferral.
+ */
+function runtimePlanTaskFold(projectRoot, activeSession, options = {}) {
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const from = String(options.task || '').toUpperCase();
+  const into = String(options.into || '').toUpperCase();
+  if (!/^T\d+$/.test(from) || !/^T\d+$/.test(into)) throw new Error('use: oxe-cc plan task fold T<n> --into T<m> --cr CR-<n> --by <papel> --reason "…"');
+  if (from === into) throw new Error('--into: uma tarefa não se funde em si mesma');
+  const cr = options.cr ? String(options.cr).toUpperCase() : null;
+  if (!cr) throw new Error('informe o CR que decide a fusão (--cr CR-<n>)');
+  const { by, reason } = requireEditReason({ by: options.by, reason: options.reason });
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
+  if (!jsonPath || !fs.existsSync(jsonPath)) throw new Error('plan task fold exige PLAN.json');
+  const at = new Date().toISOString();
+  const norm = (p) => String(p).replace(/\\/g, '/');
+  const out = planJsonLib.withPlanLock(jsonPath, () => {
+    const doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    const tasks = (doc.tasks || []).filter(Boolean);
+    const S = tasks.find((t) => String(t.id).toUpperCase() === from);
+    const T = tasks.find((t) => String(t.id).toUpperCase() === into);
+    if (!S) throw new Error(`${from} não existe no plano`);
+    if (!T) throw new Error(`${into} não existe no plano`);
+    if (S.done === true) throw new Error(`${from} já está done: nada a fundir`);
+    if (T.done === true) throw new Error(`${into} está done: reabra antes (oxe-cc plan reopen ${into})`);
+    const uniq = (arr) => [...new Set(arr)];
+    const moved = { files: [], acceptance: [], verify: [] };
+    const tFiles = (T.files || []).map(norm);
+    for (const f of (S.files || []).map(norm)) if (!tFiles.includes(f)) { tFiles.push(f); moved.files.push(f); }
+    T.files = tFiles;
+    const tAcc = [...(T.acceptance || [])];
+    for (const c of S.acceptance || []) if (!tAcc.includes(c)) { tAcc.push(c); moved.acceptance.push(c); }
+    T.acceptance = tAcc;
+    const sCmds = [...((S.verify && S.verify.commands) || []), ...(S.verify && S.verify.command ? [S.verify.command] : [])];
+    if (sCmds.length) {
+      T.verify = T.verify && typeof T.verify === 'object' ? T.verify : {};
+      const tCmds = [...(T.verify.commands || []), ...(T.verify.command ? [T.verify.command] : [])];
+      for (const c of sCmds) if (!tCmds.includes(c)) { tCmds.push(c); moved.verify.push(c); }
+      T.verify.commands = tCmds;
+      delete T.verify.command;
+    }
+    if (S.verifyCommand && !moved.verify.includes(S.verifyCommand)) {
+      T.verify = T.verify && typeof T.verify === 'object' ? T.verify : {};
+      T.verify.commands = uniq([...(T.verify.commands || []), S.verifyCommand]);
+      moved.verify.push(S.verifyCommand);
+    }
+    if (Array.isArray(S.pack_symbols)) T.pack_symbols = uniq([...(Array.isArray(T.pack_symbols) ? T.pack_symbols : []), ...S.pack_symbols].map((x) => (typeof x === 'string' ? x : JSON.stringify(x)))).map((x) => { try { return JSON.parse(x); } catch { return x; } });
+    // the role paths (edited/added/removed) go with the files (cross-review 15/11)
+    for (const k of ['edited_paths', 'added_paths', 'removed_paths']) if (Array.isArray(S[k]) && S[k].length) T[k] = uniq([...(Array.isArray(T[k]) ? T[k] : []), ...S[k]]);
+    const depsOf = (t) => [...(t.depends_on || t.dependsOn || [])].map((d) => String(d).toUpperCase());
+    // the target inherits the source's dependencies (never itself, never the source)
+    T.depends_on = uniq([...depsOf(T), ...depsOf(S)]).filter((d) => d !== into && d !== from);
+    // the dependents of the source depend on the target
+    const rewired = [];
+    for (const t of tasks) {
+      if (t === S || t === T || !depsOf(t).includes(from)) continue;
+      t.depends_on = uniq(depsOf(t).map((d) => (d === from ? into : d)));
+      delete t.dependsOn;
+      rewired.push(t.id);
+    }
+    // cross-review 15/11: a path S → X → T becomes the cycle X ↔ T — refused (nothing written), naming it
+    const byIdF = new Map(tasks.map((t) => [String(t.id).toUpperCase(), t]));
+    const live = (id) => id !== from;
+    const cycleFrom = (start) => {
+      const stack = [[start, [start]]];
+      const seen = new Set();
+      while (stack.length) {
+        const [id, trail] = stack.pop();
+        for (const d of depsOf(byIdF.get(id) || {}).filter(live)) {
+          if (d === start) return [...trail, d];
+          if (!seen.has(d)) { seen.add(d); stack.push([d, [...trail, d]]); }
+        }
+      }
+      return null;
+    };
+    const cyc = cycleFrom(into);
+    if (cyc) throw new Error(`fold recusado, nada foi gravado: ${from} → ${into} forma o ciclo ${cyc.join(' → ')} (uma tarefa entre as duas depende de ${from} e é dependência de ${into}); desfaça essa dependência antes`);
+    // waves stay monotonic: a pending task never runs before a dependency (bumped wave = dependency wave + 1)
+    const bumped = [];
+    for (let pass = 0; pass < tasks.length; pass += 1) {
+      let changed = false;
+      for (const t of tasks) {
+        if (t === S || t.done === true || !Number.isFinite(Number(t.wave))) continue;
+        for (const d of depsOf(t)) {
+          const dep = byIdF.get(d);
+          if (dep && dep !== S && Number.isFinite(Number(dep.wave)) && Number(dep.wave) >= Number(t.wave)) { t.wave = Number(dep.wave) + 1; changed = true; if (!bumped.includes(t.id)) bumped.push(t.id); }
+        }
+      }
+      if (!changed) break;
+    }
+    const entries = [];
+    for (const a of doc.acceptance_tests || []) if (a && String(a.task || '').toUpperCase() === from) { a.task = into; entries.push(a.id || a.criterion); }
+    T.notes = `${T.notes ? `${T.notes}\n` : ''}${from} fundida aqui por ${cr}: ${reason}`;
+    T.edits = [...(Array.isArray(T.edits) ? T.edits : []), { by, reason, cr, at, folded_from: from }];
+    // its criteria now belong to the target only (kept in `folded` for the record). status stays in the schema's enum
+    // (done): merged_into is what says it was folded (cross-review 15/11: "merged" failed validatePlanJson)
+    Object.assign(S, { done: true, status: 'done', merged_into: into, folded: { into, cr, by, reason, at, acceptance: [...(S.acceptance || [])] }, acceptance: [] });
+    delete S.checkpoint_failed;
+    const tmp = `${jsonPath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+    fs.renameSync(tmp, jsonPath);
+    return { moved, rewired, entries, waves_bumped: bumped };
+  });
+  // the pack contract (exact_paths, symbols) goes with the files
+  try {
+    const pack = readJsonQuiet(paths.implementationPack);
+    const ptasks = pack && Array.isArray(pack.tasks) ? pack.tasks : null;
+    const idOf = (t) => String((t && (t.id || t.task_id)) || '').toUpperCase();
+    const ps = ptasks ? ptasks.find((t) => idOf(t) === from) : null;
+    if (ps) {
+      let pt = ptasks.find((t) => idOf(t) === into);
+      // a new entry inherits the source's contract shape (mode, write_set…) so it passes validatePackTask
+      if (!pt) { pt = { ...JSON.parse(JSON.stringify(ps)), id: into, exact_paths: [], symbols: [] }; delete pt.task_id; delete pt.merged_into; ptasks.push(pt); }
+      pt.exact_paths = [...new Set([...(pt.exact_paths || []), ...(ps.exact_paths || [])])];
+      const symKey = (s) => `${s && (s.path || s.file)}#${s && s.name}`;
+      const have = new Set((pt.symbols || []).map(symKey));
+      pt.symbols = [...(pt.symbols || []), ...(ps.symbols || []).filter((s) => !have.has(symKey(s)))];
+      // the removals and checks go too (cross-review 15/11): a removed file's contract is not lost in the merge
+      const jkey = (x) => (typeof x === 'string' ? x : JSON.stringify(x));
+      for (const k of ['removed_paths', 'swept_paths', 'symbols_removed', 'contracts', 'expected_checks', 'edited_paths', 'added_paths']) {
+        if (!Array.isArray(ps[k]) || !ps[k].length) continue;
+        const seenK = new Set((Array.isArray(pt[k]) ? pt[k] : []).map(jkey));
+        pt[k] = [...(Array.isArray(pt[k]) ? pt[k] : []), ...ps[k].filter((x) => !seenK.has(jkey(x)))];
+      }
+      ps.merged_into = into;
+      fs.writeFileSync(paths.implementationPack, `${JSON.stringify(pack, null, 2)}\n`, 'utf8');
+      out.pack = true;
+    }
+  } catch { /* auxiliar: the plan carries the fold */ }
+  // its open deferred entries close as merged (not an open deferral at the close)
+  const closedDeferred = [];
+  try {
+    const dlib = require('./oxe-deferred.cjs');
+    for (const e of dlib.open(programDir)) if (String(e.task).toUpperCase() === from) { dlib.close(programDir, e.id, `merged_into:${into}`); closedDeferred.push(e.id); }
+  } catch { /* no ledger */ }
+  changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'task_fold', task: from, into, cr, by, reason, at, ...out, closed_deferred: closedDeferred });
+  appendEvent(projectRoot, activeSession, { type: 'PlanTaskFolded', work_item_id: from, payload: { task: from, into, cr, by, reason, moved: out.moved, rewired: out.rewired, closed_deferred: closedDeferred } });
+  return { task: from, into, cr, by, ...out, closed_deferred: closedDeferred };
+}
+
+/**
+ * `oxe-cc plan pack fix T<n> --symbol <path>#<name> (--internal | --member-of <Class> | --remove) --by <papel>
+ * --reason "…" [--cr CR-n]`: corrects a planner's pack symbol during a phase without reopening the task (OxeSpace
+ * 14/11, Celular F2: a module-private class and a class method named as exports failed check-pack). The symbol stays
+ * recorded (exported:false, member_of) or is removed; every change is kept in the entry's `fixes` and as an event.
+ */
+function runtimePlanPackFix(projectRoot, activeSession, options = {}) {
+  const taskId = String(options.task || '').toUpperCase();
+  if (!/^T\d+$/.test(taskId)) throw new Error('use: oxe-cc plan pack fix T<n> --symbol <arquivo>#<nome> (--add | --internal | --member-of <Classe> | --signature "…" | --remove) --by <papel> --reason "…"');
+  const m = /^(.+)#([A-Za-z_$][\w$]*)$/.exec(String(options.symbol || '').trim());
+  if (!m) throw new Error('informe o símbolo: --symbol <arquivo>#<nome>');
+  const [, file, name] = m;
+  // OXB-C24-2: --signature "<assinatura>" gives a symbol the signature plan skeleton needs (no hand edit of the pack)
+  // OXB-C28-5: --add puts a symbol the frozen tests do not import (a hook, a type the task must export) in the pack
+  const mode = options.add ? 'add' : options.remove ? 'remove' : options.signature ? 'signature' : options.memberOf ? 'member' : options.internal ? 'internal' : null;
+  if (!mode) throw new Error('diga a correção: --add (símbolo novo; com --signature/--internal/--member-of opcionais), --internal (não é export), --member-of <Classe> (é membro), --signature "…" ou --remove');
+  if (options.add && options.remove) throw new Error('--add e --remove juntos: escolha um');
+  if (mode === 'signature' && String(options.signature).trim().length < 3) throw new Error('--signature: a assinatura do símbolo, ex.: "(id: string) => Promise<void>"');
+  if (mode === 'member' && !/^[A-Za-z_$][\w$]*$/.test(String(options.memberOf))) throw new Error('--member-of: o nome da classe');
+  const by = String(options.by || '').trim();
+  const reason = String(options.reason || '').trim();
+  if (!by) throw new Error('informe quem decide (--by <papel>)');
+  if (reason.length < 8) throw new Error('informe o motivo em uma frase (--reason "…")');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const packFile = paths.implementationPack || path.join(projectRoot, '.oxe', 'IMPLEMENTATION-PACK.json');
+  let pack;
+  try { pack = JSON.parse(fs.readFileSync(packFile, 'utf8')); } catch { throw new Error(`IMPLEMENTATION-PACK.json ausente ou inválido (${path.relative(projectRoot, packFile)})`); }
+  const entry = (pack.tasks || []).find((t) => t && String(t.id || t.task_id || '').toUpperCase() === taskId);
+  if (!entry) throw new Error(`${taskId} não está no IMPLEMENTATION-PACK.json`);
+  const norm = (p) => String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  const syms = Array.isArray(entry.symbols) ? entry.symbols : [];
+  let idx = syms.findIndex((s) => s && typeof s === 'object' && String(s.name) === name && norm(s.path || s.file) === norm(file));
+  if (mode === 'add') {
+    if (idx >= 0) throw new Error(`${file}#${name} já está nos symbols de ${taskId} — use --signature/--internal/--member-of para corrigi-lo`);
+    const scope = [...(entry.exact_paths || []), ...(entry.write_set || []), ...(entry.files || [])].map((p) => norm(typeof p === 'string' ? p : p && (p.path || p.file)));
+    if (scope.length && !scope.includes(norm(file))) throw new Error(`${file} não está no escopo de ${taskId} no pack (${scope.slice(0, 6).join(', ')}${scope.length > 6 ? ', …' : ''}) — o símbolo tem de ser de um arquivo que a tarefa escreve (oxe-cc plan scope add ${taskId} ${file}, depois plan pack sync ${taskId})`);
+    const sym = {
+      name,
+      path: norm(file),
+      ...(options.internal || options.memberOf ? { exported: false } : {}),
+      ...(options.memberOf ? { member_of: String(options.memberOf) } : {}),
+      ...(options.signature ? { signature: String(options.signature).trim() } : {}),
+      added_by_fix: true,
+    };
+    syms.push(sym);
+    idx = syms.length - 1;
+    if (sym.exported !== false) {
+      entry.contracts = Array.isArray(entry.contracts) ? entry.contracts : [];
+      const c = `${name} exportado de ${sym.path}`;
+      if (!entry.contracts.includes(c)) entry.contracts.push(c);
+    }
+  }
+  if (idx < 0) throw new Error(`${file}#${name} não está nos symbols de ${taskId} (para acrescentar: --add)`);
+  const before = mode === 'add' ? null : { ...syms[idx] };
+  if (mode === 'add') { /* built above */ } else if (mode === 'remove') syms.splice(idx, 1);
+  else if (mode === 'signature') syms[idx].signature = String(options.signature).trim();
+  else Object.assign(syms[idx], { exported: false, ...(mode === 'member' ? { member_of: String(options.memberOf) } : {}) });
+  entry.symbols = syms;
+  entry.fixes = [...(Array.isArray(entry.fixes) ? entry.fixes : []), { symbol: `${file}#${name}`, change: mode === 'member' ? `membro de ${options.memberOf}` : mode, ...(mode === 'signature' ? { signature: syms[idx].signature } : {}), before, by, reason, ...(options.cr ? { cr: String(options.cr).toUpperCase() } : {}), at: new Date().toISOString() }];
+  const tmp = `${packFile}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(pack, null, 2)}\n`, 'utf8');
+  fs.renameSync(tmp, packFile);
+  appendEvent(projectRoot, activeSession, { type: 'PackSymbolFixed', work_item_id: taskId, payload: { task: taskId, symbol: `${file}#${name}`, change: mode, member_of: options.memberOf || null, by, reason, cr: options.cr || null } });
+  return { task: taskId, symbol: `${file}#${name}`, change: mode, member_of: options.memberOf || null, signature: mode === 'signature' ? String(options.signature).trim() : null, by };
+}
+
+/**
+ * OXB-C25: `oxe-cc plan pack ready --by <papel> [--reason "…"] [--dry-run]` marks IMPLEMENTATION-PACK.json
+ * `ready: true` only when the pack has no other critical gap (the same check the preflight runs). A pack written
+ * before plan build set the flag no longer needs a hand edit.
+ */
+function runtimePlanPackReady(projectRoot, activeSession, options = {}) {
+  const by = String(options.by || '').trim();
+  if (!by) throw new Error('informe quem marca o pack (--by <papel>)');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const packFile = paths.implementationPack || path.join(projectRoot, '.oxe', 'IMPLEMENTATION-PACK.json');
+  let pack;
+  try { pack = JSON.parse(fs.readFileSync(packFile, 'utf8')); } catch { throw new Error(`IMPLEMENTATION-PACK.json ausente ou inválido (${path.relative(projectRoot, packFile)})`); }
+  let planTasks = [];
+  try { planTasks = ((readPlanJsonDoc(projectRoot, activeSession).doc || {}).tasks || []).filter((t) => t && t.id).map((t) => ({ id: String(t.id) })); } catch { planTasks = []; }
+  const rationality = require('./oxe-rationality.cjs');
+  const summary = rationality.summarizeImplementationPack(packFile, planTasks);
+  const gaps = (summary.criticalGaps || []).filter((g) => !/ready missing|ready=false|IMPLEMENTATION-PACK\.json: /.test(g));
+  const ownGaps = Array.isArray(pack.critical_gaps) ? pack.critical_gaps.map(String) : [];
+  if (gaps.length || ownGaps.length) {
+    const all = [...gaps, ...ownGaps.map((g) => `critical_gaps: ${g}`)];
+    throw new Error(`o pack ainda tem ${all.length} lacuna(s) crítica(s); corrija antes de marcar ready:\n  - ${all.join('\n  - ')}`);
+  }
+  const already = pack.ready === true;
+  if (!options.dryRun && !already) {
+    pack.ready = true;
+    pack.critical_gaps = [];
+    pack.ready_marked = { by, reason: options.reason ? String(options.reason) : null, at: new Date().toISOString() };
+    const tmp = `${packFile}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, `${JSON.stringify(pack, null, 2)}\n`, 'utf8');
+    fs.renameSync(tmp, packFile);
+    appendEvent(projectRoot, activeSession, { type: 'PackMarkedReady', payload: { by, reason: options.reason || null, tasks: (pack.tasks || []).length } });
+  }
+  return { pack: path.relative(projectRoot, packFile).replace(/\\/g, '/'), ready: true, changed: !already && !options.dryRun, dry_run: Boolean(options.dryRun), tasks: (pack.tasks || []).length, by };
+}
+
 function runtimePlanReopen(projectRoot, activeSession, options = {}) {
-  const taskId = String(options.task || '').trim();
+  const taskId = String(options.task || '').trim().toUpperCase();
   if (!/^T\d+$/.test(taskId)) throw new Error('Informe a tarefa: oxe-cc plan reopen T<n>');
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
-  const changed = require('./oxe-plan-json.cjs').markPlanTaskOpen(paths.plan, taskId, { by: options.by || 'plan reopen' });
-  if (changed) appendEvent(projectRoot, activeSession, { type: 'PlanTaskReopened', work_item_id: taskId, payload: { task: taskId, by: options.by || null, manual: true } });
-  return { task: taskId, changed };
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
+  if (!jsonPath || !fs.existsSync(jsonPath)) throw new Error(`plan reopen exige PLAN.json em ${projectRoot}`);
+  const planChanged = planJsonLib.markPlanTaskOpen(paths.plan, taskId, { by: options.by || 'plan reopen' });
+  const clearedRunState = clearTaskResidualRunState(projectRoot, activeSession, [taskId], { clearFailedAndBlocked: true });
+  let closedDeferred = [];
+  try {
+    const phase = (taskPhaseContext(projectRoot, activeSession) || {}).phase || null;
+    closedDeferred = require('./oxe-deferred.cjs').closeTask(paths.programDir || path.join(projectRoot, '.oxe', 'program'), taskId, phase, 'reopened');
+  } catch { closedDeferred = []; }
+  const changed = Boolean(planChanged || clearedRunState || closedDeferred.length);
+  if (changed) {
+    appendEvent(projectRoot, activeSession, {
+      type: 'PlanTaskReopened',
+      work_item_id: taskId,
+      payload: {
+        task: taskId,
+        by: options.by || null,
+        manual: true,
+        plan_changed: planChanged,
+        cleared_run_state: clearedRunState,
+        ...(closedDeferred.length ? { closed_deferred: closedDeferred } : {}),
+      },
+    });
+  }
+  return {
+    task: taskId,
+    changed,
+    plan_changed: planChanged,
+    cleared_run_state: clearedRunState,
+    closed_deferred: closedDeferred,
+  };
 }
 
 /**
@@ -7358,7 +12518,7 @@ function ownLeftoversByTask(projectRoot, activeSession, interrupted = []) {
     const unseparable = {};
     for (const p of dirty) {
       const holder = claimed.get(p);
-      const others = [...scopes].filter(([id, sc]) => id !== t.id && inScope(sc, p)).map(([id]) => id);
+      const others = [...scopes].filter(([id, sc]) => id !== t.id && lastStart.get(id) != null && inScope(sc, p)).map(([id]) => id);
       const shared = (holder && holder !== t.id) || others.length > 0;
       if (!shared) { own.push(p); continue; }
       // OXB-177: shared with another pending/interrupted task — never the whole file.
@@ -7387,7 +12547,8 @@ function retryFailedCheckpoints(projectRoot, activeSession, options = {}) {
   let doc = null;
   try { doc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { doc = null; }
   // OXB-172: a related-tests red is work for the task (or a scope gap), not a commit to retry.
-  const pending = doc && Array.isArray(doc.tasks) ? doc.tasks.filter((t) => t && t.done !== true && t.checkpoint_failed && !t.checkpoint_failed.related_red) : [];
+  // cross-review 15/11: a dom_hooks red is work too — re-committing the same snapshot fails the same way
+  const pending = doc && Array.isArray(doc.tasks) ? doc.tasks.filter((t) => t && t.done !== true && t.checkpoint_failed && !t.checkpoint_failed.related_red && !['dom_hooks', 'generated_file', 'integration'].includes(t.checkpoint_failed.kind)) : [];
   // OXB-170: an interrupted task's leftovers are attributed first (event), whatever is retried.
   const interrupted = interruptedTaskWork(projectRoot, activeSession).filter((w) => !pending.some((t) => t.id === w.task));
   if (interrupted.length) appendEvent(projectRoot, activeSession, { type: 'InterruptedWorkFound', payload: { tasks: interrupted } });
@@ -7412,7 +12573,7 @@ function retryFailedCheckpoints(projectRoot, activeSession, options = {}) {
     try {
       if (snapshot) {
         // the task's OWN content, saved when its checkpoint failed — whatever the tree holds now
-        cp = commitExactContent(projectRoot, snapshot, checkpointMessageFor(projectRoot, { run_id: task.checkpoint_failed.run_id || null }, task.id, task, ctx.phase), {});
+        cp = commitExactContent(projectRoot, snapshot, checkpointMessageFor(projectRoot, { run_id: task.checkpoint_failed.run_id || null }, task.id, task, ctx.phase), { task, scope: task.files || [], activeSession });
       } else {
         // legacy record (rc ≤ 29, no snapshot): refuse paths another task may own (interrupted, or in its scope)
         const scope = (task.files || []).map((p) => String(p).replace(/\\/g, '/')).filter((p) => p && !p.includes('*'));
@@ -7422,7 +12583,7 @@ function retryFailedCheckpoints(projectRoot, activeSession, options = {}) {
         if (shared.length) {
           cp = { committed: false, failed: true, reason: `retry recusado: ${shared.slice(0, 6).map((p) => `${p} (${foreign.get(p) || others.get(p) || 'outra tarefa'})`).join(', ')} também ${shared.length > 1 ? 'são' : 'é'} de outra tarefa pendente/interrompida — o commit misturaria o trabalho dela (OXB-170); revise e rode oxe-cc plan done ${task.id} --commit <sha> depois de commitar à mão` };
         } else {
-          cp = commitTaskCheckpoint(projectRoot, { run_id: task.checkpoint_failed.run_id || null }, task.id, { task, phase: ctx.phase });
+          cp = commitTaskCheckpoint(projectRoot, { run_id: task.checkpoint_failed.run_id || null }, task.id, { task, phase: ctx.phase, activeSession });
         }
       }
     } catch (err) { cp = { committed: false, failed: true, reason: String(err && err.message || err) }; }
@@ -7522,13 +12683,24 @@ function modeFor(projectRoot, rel) {
 function checkpointMessageFor(projectRoot, runState, taskId, planTask, phase, config = null) {
   const node = (runState && runState.compiled_graph && runState.compiled_graph.nodes && runState.compiled_graph.nodes[taskId]) || {};
   const t = planTask || {};
+  const cfg0 = config || readProjectConfig(projectRoot);
+  // ALM: the item key goes in the commit subject ("… (OXE-12)") so the provider links commit ↔ item.
+  let almKey = null;
+  try {
+    const almLib = require('./oxe-alm.cjs');
+    const almCfg = almLib.almConfig(cfg0 || {});
+    if (almCfg) almKey = almLib.keyFor(resolveRuntimeArtifactPaths(projectRoot, null).programDir || path.join(projectRoot, '.oxe', 'program'), almCfg, phase || null, taskId);
+  } catch { almKey = null; }
   return require('./oxe-commit-convention.cjs').checkpointMessage({
     id: taskId,
     title: t.title || node.title || taskId,
     commit: t.meta && t.meta.commit ? t.meta.commit : t.commit,
     phase: phase || null,
     run_id: (runState && runState.run_id) || null,
-  }, config || readProjectConfig(projectRoot));
+    alm_key: almKey,
+    // a redo of a task reopened by open CRs names them (OXE-CR trailer): the commit says why the task came back
+    crs: (() => { try { return require('./oxe-change.cjs').listChanges(resolveRuntimeArtifactPaths(projectRoot, null).programDir || path.join(projectRoot, '.oxe', 'program')).filter((c) => c.status === 'open' && (c.tasks || []).includes(taskId)).map((c) => c.id); } catch { return []; } })(),
+  }, cfg0);
 }
 
 /**
@@ -7564,38 +12736,198 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
     return { committed: false, failed: true, reason: `git commit falhou: ${String(commit.stderr || commit.stdout).trim().split(/\r?\n/).slice(-8).join(' · ')}`, snapshot: entries };
   }
   const head = gitOut(projectRoot, ['rev-parse', 'HEAD']).stdout.trim();
-  let check = checkpointCheck(projectRoot, head, { ...options, changedFiles: paths.filter((p) => entries[p] !== 'deleted') });
-  // OXB-175: a related red is the task's only when (1) the test is not a frozen acceptance test of a pending task,
-  // another phase or a parked folder, and (2) it was green on the parent commit. T9 (CR37) of F2 had e98c9d54 undone
-  // by three tests red by design (a parked F3 test, a CR repro, a later F2 task's frozen test).
+  const changedCodeOrAssets = paths.filter((p) => entries[p] !== 'deleted');
+  let check = checkpointCheck(projectRoot, head, { ...options, changedFiles: changedCodeOrAssets });
+  // OXB-175 + OXB-C3: a related red is the task's only when (1) G38 does not prune it as a frozen/acceptance test of a
+  // pending later task, another phase, superseded_tests or parked folder, and (2) it was green on the parent commit.
   if (check && !check.ok && check.kind === 'related' && Array.isArray(check.failing_tests) && check.failing_tests.length) {
     const flakyReds = [];
-    const own = relatedRedsOfTask(projectRoot, oldHead, check.failing_tests, { ...options, commitSha: head, flakyReds });
-    if (!own.length) check = { ...check, ok: true, ignored_reds: check.failing_tests.map((t) => t.file), ...(flakyReds.length ? { flaky_reds: flakyReds } : {}) };
-    else check = { ...check, failing_tests: own, ignored_reds: check.failing_tests.filter((t) => !own.some((o) => o.file === t.file)).map((t) => t.file), ...(flakyReds.length ? { flaky_reds: flakyReds } : {}) };
+    const laterOwnedReds = [];
+    const preexistingReds = [];
+    const otherIgnoredReds = [];
+    const own = relatedRedsOfTask(projectRoot, oldHead, check.failing_tests, {
+      ...options,
+      changedFiles: changedCodeOrAssets,
+      commitSha: head,
+      relatedOutput: check.output || check.tail || '',
+      flakyReds,
+      laterOwnedReds,
+      preexistingReds,
+      otherIgnoredReds,
+    });
+    const compactLater = laterOwnedReds.map(({ file, owner, owner_wave, criterion }) => ({
+      file,
+      owner,
+      ...(owner_wave != null ? { owner_wave } : {}),
+      ...(criterion ? { criterion } : {}),
+    }));
+    if (!own.length) {
+      check = {
+        ...check,
+        ok: true,
+        ignored_reds: check.failing_tests.map((t) => t.file),
+        ...(compactLater.length ? { later_owned_reds: compactLater } : {}),
+        ...(preexistingReds.length ? { preexisting_reds: preexistingReds } : {}),
+        ...(flakyReds.length ? { flaky_reds: flakyReds } : {}),
+      };
+    } else {
+      check = {
+        ...check,
+        failing_tests: own,
+        real_regressions: own.map((t) => t.file),
+        ignored_reds: check.failing_tests.filter((t) => !own.some((o) => o.file === t.file)).map((t) => t.file),
+        ...(compactLater.length ? { later_owned_reds: compactLater } : {}),
+        ...(preexistingReds.length ? { preexisting_reds: preexistingReds } : {}),
+        ...(flakyReds.length ? { flaky_reds: flakyReds } : {}),
+      };
+    }
+  }
+  // OxeSpace 15/11 (OxeCode F6 T30 → #852): a DOM hook the commit removes from markup (data-* / cmdk-*) that is gone
+  // from the product but still read by e2e/tests — static, no e2e run. config checkpoint_dom_hooks: false | "warn".
+  let domHooks = null;
+  // OxeSpace 15/11 (Celular F3 #856): a GENERATED file edited without its source (config generated_files)
+  if (!check || check.ok) {
+    try {
+      const pcfg = readProjectConfig(projectRoot) || {};
+      if (Array.isArray(pcfg.generated_files) && pcfg.generated_files.length) {
+        const dh = require('./oxe-dom-hooks.cjs');
+        // what the commit REALLY changed (a snapshot entry can equal the parent)
+        const realChanged = (gitOut(projectRoot, ['diff', '--name-only', oldHead, head]).stdout || '').split(/\r?\n/).filter(Boolean);
+        const asList = (v) => (Array.isArray(v) ? v : [v]);
+        const lastSha = (globs) => (gitOut(projectRoot, ['log', '-1', '--format=%H', oldHead, '--', ...asList(globs).map((g) => `:(glob)${g}`)]).stdout || '').trim() || null;
+        // regeneration after an earlier task changed the source: the source's last commit comes AFTER the generated
+        // file's (by ancestry, not by clock — two commits in the same second tie on %ct; cross-review 15/11)
+        const regenerated = (r) => {
+          const src = lastSha(r.source);
+          if (!src) return false;
+          const gen = lastSha(r.file);
+          if (!gen) return true;
+          return src !== gen && gitOut(projectRoot, ['merge-base', '--is-ancestor', gen, src]).status === 0;
+        };
+        const gen = dh.generatedEdits(realChanged, pcfg.generated_files, { scope: options.scope || null, regenerated });
+        if (gen.length) check = { ok: false, kind: gen.some((g) => g.source_outside_scope) ? 'scope_insufficient' : 'generated_file', command: 'generated_files (estático)', tail: dh.generatedMessage(gen), generated: gen };
+      }
+    } catch { /* auxiliar */ }
+  }
+  if (!check || check.ok) {
+    try {
+      const raw = (readProjectConfig(projectRoot) || {}).checkpoint_dom_hooks;
+      // false | "warn" | { mode, locale } (locale: the JSON whose texts the aria-label i18n keys resolve to)
+      const opt = raw && typeof raw === 'object' ? raw : { mode: raw };
+      if (opt.mode !== false && opt.mode !== 'off') {
+        const dh = require('./oxe-dom-hooks.cjs');
+        const foundHooks = dh.hooksStillRead(projectRoot, oldHead, head, { locale: opt.locale || null });
+        const foundCss = dh.orphanCssClasses(projectRoot, oldHead, head);
+        const found = [...foundHooks, ...foundCss];
+        if (found.length) {
+          domHooks = { mode: opt.mode === 'warn' ? 'warn' : 'error', findings: found, message: dh.message(found) };
+          if (domHooks.mode === 'error') check = { ok: false, kind: 'dom_hooks', command: foundCss.length && !foundHooks.length ? 'guarda de classes CSS (estático)' : 'dom hooks (estático)', tail: domHooks.message, dom_hooks: found };
+        }
+      }
+    } catch { /* auxiliar */ }
+  }
+  if (check && !check.ok && check.generated) {
+    gitOut(projectRoot, ['update-ref', '-m', 'oxe: checkpoint generated file', 'HEAD', oldHead, head]);
+    restore();
+    const outside = check.kind === 'scope_insufficient';
+    return {
+      committed: false,
+      failed: true,
+      kind: check.kind,
+      generated: check.generated,
+      // the sources named in blocked_by ("scope_insufficient: shared/locales/*/mobile.json")
+      ...(outside ? { related_red: [...new Set(check.generated.flatMap((g) => g.source))] } : {}),
+      reason: outside
+        ? `scope_insufficient: a tarefa editou arquivo gerado, e a fonte dele está fora dos files dela — ${check.tail}. Inclua a fonte nos files (ou abra um CR/tarefa), depois rode oxe-cc plan reopen`
+        : `a tarefa editou arquivo gerado: ${check.tail}`,
+      snapshot: entries,
+    };
+  }
+  if (check && !check.ok && check.kind === 'dom_hooks') {
+    gitOut(projectRoot, ['update-ref', '-m', 'oxe: checkpoint dom hooks', 'HEAD', oldHead, head]);
+    restore();
+    const isCssFinding = (f) => Boolean(f && (f.className || (typeof f.hook === 'string' && f.hook.startsWith('.'))));
+    const hasCss = (check.dom_hooks || []).some(isCssFinding);
+    const hasHooks = (check.dom_hooks || []).some((f) => !isCssFinding(f));
+    const reason = hasCss && !hasHooks
+      ? `a mudança remove classe(s) CSS ainda em uso: ${check.tail}. Mantenha a regra CSS ou migre os consumidores/testes no escopo da tarefa`
+      : hasCss && hasHooks
+        ? `a mudança remove marcação e classe(s) CSS ainda em uso: ${check.tail}. Mantenha os atributos/classes ou ajuste os consumidores e testes no escopo da tarefa`
+        : `a mudança remove marcação que testes ainda leem: ${check.tail}. Mantenha esses atributos (data-*/cmdk-*) na nova marcação, ou ajuste os testes/helpers no escopo da tarefa`;
+    return {
+      committed: false,
+      failed: true,
+      kind: 'dom_hooks',
+      dom_hooks: check.dom_hooks,
+      reason,
+      snapshot: entries,
+    };
   }
   if (check && !check.ok) {
     gitOut(projectRoot, ['update-ref', '-m', 'oxe: checkpoint_check vermelho', 'HEAD', oldHead, head]);
     restore();
     if (check.kind === 'related') {
-      // OXB-172: tests that import the task's changed files went red. In the task's scope → its work (the next execute
-      // runs them in its verify); outside it → scope_insufficient, naming the test (OXB-171).
+      // OXB-172 + OXB-C3: tests that import the task's changed files went red. Later-owned frozen tests were already
+      // pruned by G38 into check.later_owned_reds; report real regressions separately from later-owned frozen tests.
       const scope = (options.scope || []).map((p) => String(p).replace(/\\/g, '/'));
       const failing = check.failing_tests || [];
       const outside = failing.filter((t) => !isPathInScope(t.file, scope));
       const named = failing.map((t) => `${t.file}${t.names.length ? ` (${t.names.slice(0, 2).join('; ')})` : ''}`).join(', ') || check.tail;
+      const laterOwnedList = Array.isArray(check.later_owned_reds) ? check.later_owned_reds : [];
+      const preexistingList = Array.isArray(check.preexisting_reds) ? check.preexisting_reds : [];
+      const sepParts = [];
+      if (laterOwnedList.length) {
+        sepParts.push(`congelado de tarefa posterior (ignorado por G38): ${laterOwnedList.map((x) => `${x.file} → ${x.owner}${x.owner_wave != null ? ` (onda ${x.owner_wave})` : ''}`).join(', ')}`);
+      }
+      if (preexistingList.length) {
+        sepParts.push(`pré-existente/ambiente (ignorado): ${preexistingList.join(', ')}`);
+      }
+      const sepSuffix = sepParts.length ? ` · ${sepParts.join(' · ')}` : '';
+      const frozenSet = (() => {
+        try {
+          const { doc: pjDoc } = readPlanJsonDoc(projectRoot, options.activeSession || null);
+          return new Set(((pjDoc && pjDoc.acceptance_tests) || []).flatMap((a) => (a && a.files) || []).map((f) => String(typeof f === 'string' ? f : f.path).replace(/\\/g, '/')));
+        } catch { return new Set(); }
+      })();
+      const isFrozenPath = (p) => frozenSet.has(String(p).replace(/\\/g, '/')) || /(?:^|\/)(?:tests\/acceptance|e2e\/acceptance|tests\/oxe\d+)\//i.test(String(p).replace(/\\/g, '/'));
+      const frozenOutside = outside.filter((t) => isFrozenPath(t.file));
+      const mutableOutside = outside.filter((t) => !isFrozenPath(t.file));
+      const outsideGuidance = frozenOutside.length && !mutableOutside.length
+        ? `teste(s) congelado(s) (${frozenOutside.map((t) => t.file).join(', ')}) NUNCA entram em files da tarefa — libere/atualize por CR de constraint (oxe-cc plan amend-test ${frozenOutside[0].file} --reason CR-<n> --by <papel>, ou oxe-cc spec freeze --from <sha|#PR> --cr CR-<n>), depois rode oxe-cc plan reopen`
+        : frozenOutside.length
+          ? `inclua os mutáveis (${mutableOutside.map((t) => t.file).join(', ')}) nos files e libere os testes congelados (${frozenOutside.map((t) => t.file).join(', ')}) por CR (plan amend-test / spec freeze --cr, nunca plan scope add), depois rode oxe-cc plan reopen`
+          : `Inclua ${outside.map((t) => t.file).join(', ')} nos files (ou abra um CR/tarefa), depois rode oxe-cc plan reopen`;
+      const reasonText = outside.length
+        ? `scope_insufficient: regressão real em testes que importam os arquivos da tarefa fora do escopo dela — ${named}. ${outsideGuidance}${sepSuffix}`
+        : check.timedOut
+          ? `timeout em testes relacionados (\`${check.command.slice(0, 120)}\`): ${check.tail}${sepSuffix}`
+          : !failing.length
+            ? `falha no runner de testes relacionados sem suíte identificada (\`${check.command.slice(0, 120)}\`): ${check.tail}${sepSuffix}`
+            : `testes relacionados vermelhos — regressão real (\`${check.command.slice(0, 120)}\`${check.related_set_size != null ? `, ${check.related_set_size} arquivo(s) no conjunto` : ''}): ${named} — vermelhos também sozinhos (--maxWorkers=1) no commit e na árvore do projeto — entram no verify da tarefa no próximo execute${sepSuffix}`;
       return {
         committed: false,
         failed: true,
         kind: outside.length ? 'scope_insufficient' : 'related_tests',
         related_red: failing.map((t) => t.file),
+        real_regressions: failing.map((t) => t.file),
+        ...(laterOwnedList.length ? { later_owned_reds: laterOwnedList } : {}),
+        ...(preexistingList.length ? { preexisting_reds: preexistingList } : {}),
         ...(check.related_set_size != null ? { related_set_size: check.related_set_size } : {}),
         ...(check.flaky_reds && check.flaky_reds.length ? { flaky_reds: check.flaky_reds } : {}),
-        reason: outside.length
-          ? `scope_insufficient: testes que importam os arquivos da tarefa ficaram vermelhos fora do escopo dela — ${named}. Inclua ${outside.map((t) => t.file).join(', ')} nos files (ou abra um CR/tarefa), depois rode oxe-cc plan reopen`
-          : `testes relacionados vermelhos (\`${check.command.slice(0, 120)}\`${check.related_set_size != null ? `, ${check.related_set_size} arquivo(s) no conjunto` : ''}): ${named} — vermelhos também sozinhos (--maxWorkers=1) no commit e na árvore do projeto — entram no verify da tarefa no próximo execute`,
+        reason: reasonText,
         snapshot: entries,
       };
+    }
+    if (check.kind === 'integration') {
+      if (check.timedOut) {
+        const secs = Math.round((Number(check.timeoutMs) || 900_000) / 1000);
+        return { committed: false, failed: true, kind: 'integration', timed_out: true, reason: `check de integração timeout: passou de ${secs}s (\`${check.command}\`) — aumente checkpoint_check_timeout_ms em .oxe/config.json${check.tail ? `: ${check.tail}` : ''}`, snapshot: entries };
+      }
+      return { committed: false, failed: true, kind: 'integration', reason: `check de integração vermelho na árvore do commit (\`${check.command}\`) — o promote recusaria esta tarefa: ${check.tail}`, snapshot: entries };
+    }
+    if (check.timedOut) {
+      const secs = Math.round((Number(check.timeoutMs) || 900_000) / 1000);
+      return { committed: false, failed: true, timed_out: true, reason: `checkpoint_check timeout: passou de ${secs}s (\`${check.command}\`) — aumente checkpoint_check_timeout_ms em .oxe/config.json${check.tail ? `: ${check.tail}` : ''}`, snapshot: entries };
     }
     return { committed: false, failed: true, reason: `checkpoint_check vermelho na árvore do commit (\`${check.command}\`): ${check.tail}`, snapshot: entries };
   }
@@ -7606,7 +12938,67 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
     return entries[p] === 'deleted' ? Boolean(inCommit) : inCommit !== entries[p];
   });
   const committedFiles = (gitOut(projectRoot, ['show', '--name-only', '--format=', 'HEAD']).stdout || '').split(/\r?\n/).filter(Boolean);
-  return { committed: true, commit: head, files: committedFiles, leftover, ...(check ? { check: { command: check.command, ok: true, ...(check.ignored_reds && check.ignored_reds.length ? { ignored_reds: check.ignored_reds } : {}), ...(check.flaky_reds && check.flaky_reds.length ? { flaky_reds: check.flaky_reds } : {}), ...(check.related_set_size != null ? { related_set_size: check.related_set_size } : {}) } } : {}) };
+  return { committed: true, commit: head, files: committedFiles, leftover, ...(domHooks ? { dom_hooks_warning: domHooks.message } : {}), ...(check ? { check: { command: check.command, ok: true, ...(check.integration_preexisting ? { integration_preexisting: check.integration_preexisting } : {}), ...(check.ignored_reds && check.ignored_reds.length ? { ignored_reds: check.ignored_reds } : {}), ...(check.later_owned_reds && check.later_owned_reds.length ? { later_owned_reds: check.later_owned_reds } : {}), ...(check.preexisting_reds && check.preexisting_reds.length ? { preexisting_reds: check.preexisting_reds } : {}), ...(check.flaky_reds && check.flaky_reds.length ? { flaky_reds: check.flaky_reds } : {}), ...(check.related_set_size != null ? { related_set_size: check.related_set_size } : {}) } } : {}) };
+}
+
+/**
+ * OxeSpace 14/11: a check killed mid-run (a restart, a kill for memory) never reaches its `finally`, and the
+ * workspace keeps its node_modules junction inside .oxe/checkpoint-ws — a plain `cp -r .oxe` then followed it into
+ * ~118k files. At the start of each check, leftovers older than 2 h lose the link first, then the worktree goes.
+ */
+function sweepCheckpointWorkspaces(projectRoot, { maxAgeMs = 2 * 3600_000, now = Date.now() } = {}) {
+  const root = path.join(projectRoot, '.oxe', 'checkpoint-ws');
+  let names = [];
+  try { names = fs.readdirSync(root); } catch { return { swept: [] }; }
+  const swept = [];
+  for (const name of names) {
+    const wt = path.join(root, name);
+    let st;
+    try { st = fs.lstatSync(wt); } catch { continue; }
+    if (!st.isDirectory() || now - st.mtimeMs < maxAgeMs) continue;
+    const nm = path.join(wt, 'node_modules');
+    try { if (fs.lstatSync(nm).isSymbolicLink()) fs.unlinkSync(nm); } catch { /* no link */ }
+    let linkLeft = false;
+    try { linkLeft = fs.lstatSync(nm).isSymbolicLink(); } catch { linkLeft = false; }
+    if (linkLeft) continue; // never remove with the link in place: it would delete the real node_modules
+    gitOut(projectRoot, ['worktree', 'remove', '--force', wt]);
+    try { fs.rmSync(wt, { recursive: true, force: true }); } catch { /* */ }
+    swept.push(name);
+  }
+  if (swept.length) gitOut(projectRoot, ['worktree', 'prune']);
+  return { swept };
+}
+
+/**
+ * Cross-review 15/11 (R29): an integration check red on the commit is the task's only when the task brought it — red
+ * on the parent commit too, with no changed file named in the output (and, for an npm script, no package.json /
+ * lockfile changed), it was already red. The workspace goes to the parent and back to the commit.
+ */
+function integrationRedIsPreexisting(projectRoot, wt, sha, check, result, changedFiles) {
+  const norm = (p) => String(p).replace(/\\/g, '/');
+  const output = norm(`${result.output || ''}\n${result.tail || ''}`);
+  const changed = (changedFiles || []).map(norm).filter(Boolean);
+  if (changed.some((f) => output.includes(f) || output.includes(path.posix.basename(f)))) return false;
+  // the task changed the check itself (its script, or the package.json / lockfile behind it) — R32
+  const command = norm(check.command);
+  if (changed.some((f) => command.includes(f))) return false;
+  if (changed.some((f) => /(^|\/)(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/.test(f))) return false;
+  const parent = gitOut(projectRoot, ['rev-parse', '-q', '--verify', `${sha}^`]).stdout.trim();
+  if (!parent) return false;
+  if (gitOut(wt, ['checkout', '-q', '--detach', '-f', parent]).status !== 0) return false;
+  let parentRed = false;
+  let back = false;
+  try {
+    // the check must exist on the parent: a script the commit brought fails there with MODULE_NOT_FOUND, not "red" (R32)
+    let existed = false;
+    try { existed = require('./oxe-integration-checks.cjs').integrationCommands(wt, readProjectConfig(projectRoot) || {}).includes(check.command); } catch { existed = false; }
+    if (existed) parentRed = !runChildCommandFull(wt, check.command, check.timeout).ok;
+  } finally {
+    back = gitOut(wt, ['checkout', '-q', '--detach', '-f', sha]).status === 0;
+  }
+  // never go on with the workspace on the parent: the next checks would judge the wrong tree
+  if (!back) throw new Error(`checkpoint: o workspace não voltou ao commit ${String(sha).slice(0, 8)} depois de conferir o pai`);
+  return parentRed;
 }
 
 /**
@@ -7614,25 +13006,53 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
  * worktree with a junction to node_modules (unlinked before removal, never a forced removal with it in place).
  */
 function checkpointCheck(projectRoot, sha, options = {}) {
+  try { sweepCheckpointWorkspaces(projectRoot); } catch { /* auxiliar */ }
   const cfg = readProjectConfig(projectRoot) || {};
   const typecheck = options.checkpointCheck != null ? options.checkpointCheck : cfg.checkpoint_check;
-  // OXB-172: the tests that import the task's OWN changed files (vitest related), not only the task's verify.
-  const related = relatedTestsCommand(cfg, options.changedFiles || [], projectRoot);
-  const commands = [...(typecheck && typeof typecheck === 'string' ? [{ kind: 'check', command: typecheck, timeout: Number(cfg.checkpoint_check_timeout_ms) > 0 ? Number(cfg.checkpoint_check_timeout_ms) : 900_000 }] : []), ...(related ? [related] : [])];
-  if (!commands.length) return null;
-  const command = commands.map((c) => c.command).join(' ; ');
+  // OXB-172 + OXB-C3: the tests that import the task's OWN changed files (vitest related), with G38 later-owned excluded.
+  const related = relatedTestsCommand(cfg, options.changedFiles || [], projectRoot, options);
+  // OxeSpace 15/11 (OxeQuery polish T2): the integration checks promote runs (check-file-size, notices:check) run at
+  // the checkpoint too — a task never passes its checkpoint to fail promote. Off with checkpoint_integration_checks: false.
+  const integrationOn = cfg.checkpoint_integration_checks !== false && options.integrationChecks !== false;
+  const integrationOf = (root) => {
+    if (!integrationOn) return [];
+    try { return require('./oxe-integration-checks.cjs').integrationCommands(root, cfg).map((command) => ({ kind: 'integration', command, timeout: 15 * 60_000 })); } catch { return []; }
+  };
+  const typecheckCmd = typecheck && typeof typecheck === 'string' ? [{ kind: 'check', command: typecheck, timeout: Number(cfg.checkpoint_check_timeout_ms) > 0 ? Number(cfg.checkpoint_check_timeout_ms) : 900_000 }] : [];
+  // the live tree only decides whether a workspace is needed; the commands come from the commit's own tree (R29)
+  let commands = [...typecheckCmd, ...integrationOf(projectRoot), ...(related ? [related] : [])];
+  if (!commands.length && !integrationOn) return null;
+  if (!commands.length) {
+    // the commit may bring the check script the live tree does not have yet
+    const inCommit = (p) => gitOut(projectRoot, ['cat-file', '-e', `${sha}:${p}`]).status === 0;
+    const pkgHasNotices = /"notices:check"\s*:/.test(gitOut(projectRoot, ['show', `${sha}:package.json`]).stdout || '');
+    if (!inCommit('scripts/check-file-size.mjs') && !pkgHasNotices) return null;
+  }
   const wt = path.join(projectRoot, '.oxe', 'checkpoint-ws', `${String(sha).slice(0, 10)}-${Date.now().toString(36)}`);
   fs.mkdirSync(path.dirname(wt), { recursive: true });
   const add = gitOut(projectRoot, ['worktree', 'add', '-q', '--detach', wt, sha]);
-  if (add.status !== 0) return { ok: false, command, tail: `worktree add falhou: ${add.stderr.trim()}` };
+  if (add.status !== 0) return { ok: false, command: commands.map((c) => c.command).join(' ; '), tail: `worktree add falhou: ${add.stderr.trim()}` };
+  commands = [...typecheckCmd, ...integrationOf(wt), ...(related ? [related] : [])];
+  const command = commands.map((c) => c.command).join(' ; ');
   let res = null;
+  const preexisting = [];
   try {
+    if (!commands.length) return null;
     const nm = path.join(projectRoot, 'node_modules');
     if (fs.existsSync(nm)) fs.symlinkSync(fs.realpathSync(nm), path.join(wt, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
     try { require('./oxe-local-config.cjs').copyLocalFiles(projectRoot, wt); } catch { /* */ }
     for (const c of commands) {
+      // OxeSpace 14/11: minutes of silence after WorkItemCompleted looked like a hang — say what runs, and for how long
+      try { process.stderr.write(`\n  [checkpoint ${String(sha).slice(0, 8)}] ${c.kind === 'related' ? 'testes relacionados' : c.kind === 'integration' ? 'check de integração' : 'checkpoint_check'}: ${String(c.command).slice(0, 160)} (até ${Math.round((c.timeout || 0) / 60000)} min)\n`); } catch { /* */ }
       const r = runChildCommandFull(wt, c.command, c.timeout);
-      res = { ok: r.ok, tail: r.tail, kind: c.kind, command: c.command, output: r.output, skipped: c.skipped || [] };
+      res = { ok: r.ok, timedOut: Boolean(r.timedOut), timeoutMs: c.timeout, tail: r.tail, kind: c.kind, command: c.command, output: r.output, skipped: c.skipped || [], excluded_later_owned: c.excluded_later_owned || [] };
+      if (!r.ok && c.kind === 'integration' && integrationRedIsPreexisting(projectRoot, wt, sha, c, r, options.changedFiles || [])) {
+        // cross-review 15/11 (R29): red on the parent too, and nothing the task changed is named — not this task's to
+        // fix (it could not, without a scope violation); recorded, the checkpoint goes on
+        preexisting.push({ command: c.command, tail: String(r.tail || '').split(/\r?\n/).slice(-4).join(' · ') });
+        res = { ok: true, kind: c.kind, command: c.command, output: r.output, skipped: [] };
+        continue;
+      }
       if (!r.ok) break;
     }
   } finally {
@@ -7646,10 +13066,20 @@ function checkpointCheck(projectRoot, sha, options = {}) {
     if (!linkLeft) gitOut(projectRoot, ['worktree', 'remove', '--force', wt]);
     gitOut(projectRoot, ['worktree', 'prune']);
   }
-  const out = { ok: Boolean(res && res.ok), command: (res && res.command) || command, kind: res && res.kind, tail: String((res && res.tail) || '').split(/\r?\n/).slice(-6).join(' · ') };
-  if (res && !res.ok && res.kind === 'related') out.failing_tests = failingTestFiles(res.output || res.tail || '');
+  const rawOut = String((res && (res.output || res.tail)) || '');
+  const out = {
+    ok: Boolean(res && res.ok),
+    ...(res && res.timedOut ? { timedOut: true } : {}),
+    command: (res && res.command) || command,
+    kind: res && res.kind,
+    tail: String((res && res.tail) || '').split(/\r?\n/).slice(-6).join(' · '),
+    ...(res && !res.ok && res.kind === 'related' ? { output: rawOut } : {}),
+    ...(res && Array.isArray(res.excluded_later_owned) && res.excluded_later_owned.length ? { excluded_later_owned: res.excluded_later_owned } : {}),
+    ...(preexisting.length ? { integration_preexisting: preexisting } : {}),
+  };
+  if (res && !res.ok && res.kind === 'related') out.failing_tests = failingTestFiles(rawOut, { projectRoot });
   // OXB-189: the size of the related set vitest ran (Test Files … (N)), so an oversized related run is visible.
-  if (res && res.kind === 'related') { const m = /Test Files\s+[^\n(]*\((\d+)\)/.exec(String(res.output || res.tail || '')); if (m) out.related_set_size = Number(m[1]); }
+  if (res && res.kind === 'related') { const m = /Test Files\s+[^\n(]*\((\d+)\)/.exec(stripRunnerNoise(rawOut)); if (m) out.related_set_size = Number(m[1]); }
   if (res && res.skipped && res.skipped.length) out.related_skipped = res.skipped;
   return out;
 }
@@ -7658,7 +13088,7 @@ function checkpointCheck(projectRoot, sha, options = {}) {
  * OXB-172: config `checkpoint_related_tests`: true | { command, max_files, timeout_ms }. The command gets the task's own
  * changed code files ({files}); default `npx vitest related --run {files}`; at most max_files (40) files.
  */
-function relatedTestsCommand(cfg, changedFiles, root) {
+function relatedTestsCommand(cfg, changedFiles, root, options = {}) {
   const opt = cfg && cfg.checkpoint_related_tests;
   if (!opt) return null;
   const o = typeof opt === 'object' ? opt : {};
@@ -7672,80 +13102,159 @@ function relatedTestsCommand(cfg, changedFiles, root) {
   const files = code.slice(0, max);
   const template = typeof o.command === 'string' && o.command.includes('{files}') ? o.command : 'npx vitest related --run {files}';
   const quote = (f) => (/[\s"']/.test(f) ? JSON.stringify(f) : f);
-  return { kind: 'related', command: template.replace('{files}', files.map(quote).join(' ')), timeout: Number(o.timeout_ms) > 0 ? Number(o.timeout_ms) : 600_000, skipped: code.slice(max) };
+  let cmd = template.replace('{files}', files.map(quote).join(' '));
+  let excludedLaterOwned = [];
+  if (o.prune_later_owned !== false && /\bvitest\b/.test(template) && (options.planDoc || (root && options.task && options.task.id))) {
+    try {
+      const planDoc = options.planDoc || readPlanJsonDoc(root, options.activeSession || null).doc;
+      const taskId = options.task && options.task.id ? options.task.id : null;
+      const excludes = require('./oxe-suite-impact.cjs').laterOwnedExcludesForTask(planDoc, taskId).slice(0, 80);
+      if (excludes.length) {
+        excludedLaterOwned = excludes;
+        cmd = `${cmd} ${excludes.map((f) => `--exclude ${quote(f)}`).join(' ')}`;
+      }
+    } catch { /* best-effort proactive prune */ }
+  }
+  const defaultTimeout = /(?:^|[\s/\\"'])remote-verify(?:\.[cm]?js|\b)/i.test(cmd) ? 30 * 60_000 : 600_000;
+  return {
+    kind: 'related',
+    command: cmd,
+    timeout: Number(o.timeout_ms) > 0 ? Number(o.timeout_ms) : defaultTimeout,
+    skipped: code.slice(max),
+    ...(excludedLaterOwned.length ? { excluded_later_owned: excludedLaterOwned } : {}),
+  };
 }
 
 /**
- * OXB-175: of the related tests that failed on the task's commit, the ones that are the task's: not a frozen acceptance
- * test owned by a PENDING task (or with no owner in this plan — another phase), not under a parked folder, and green on
- * the parent commit (run_command on the parent's tree). A test red before and after is not this task's red.
+ * OXB-175 + OXB-C3: of the related tests that failed on the task's commit, the ones that are the task's real
+ * regressions: G38 prunes frozen/acceptance tests owned by pending later tasks, superseded_tests, other phases and
+ * parked folders first; native Node ABI mismatches on .native. suites and tests already red on the parent commit go
+ * to preexistingReds; one-off parallel flakes go to flakyReds.
  */
 function relatedRedsOfTask(projectRoot, parentSha, failing, options = {}) {
   let doc = null;
-  try { doc = readPlanJsonDoc(projectRoot, null).doc; } catch { doc = null; }
+  try { doc = readPlanJsonDoc(projectRoot, options.activeSession || null).doc; } catch { doc = null; }
   const taskId = options.task && options.task.id;
-  const tasks = (doc && Array.isArray(doc.tasks) ? doc.tasks : []).filter(Boolean);
-  const doneIds = new Set(tasks.filter((t) => t.done === true).map((t) => t.id));
-  const owners = new Map(); // acceptance file → owning task ids
-  for (const a of (doc && Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])) {
-    if (!a) continue;
-    const ids = a.task ? [a.task] : tasks.filter((t) => (t.acceptance || []).includes(a.criterion)).map((t) => t.id);
-    for (const f of a.files || []) {
-      const p = String(typeof f === 'string' ? f : f.path).replace(/\\/g, '/');
-      owners.set(p, [...(owners.get(p) || []), ...ids]);
-    }
+  const classified = require('./oxe-suite-impact.cjs').classifyRelatedTestFiles(doc, taskId, failing, { projectRoot });
+  if (Array.isArray(options.laterOwnedReds)) options.laterOwnedReds.push(...classified.later_owned);
+  if (Array.isArray(options.otherIgnoredReds)) options.otherIgnoredReds.push(...classified.other_ignored);
+  if (classified.later_owned.length) {
+    try {
+      process.stderr.write(`\n  [checkpoint] congelado(s) de tarefa posterior ignorado(s) (G38): ${classified.later_owned.map((x) => `${x.file} → ${x.owner}${x.owner_wave != null ? ` (onda ${x.owner_wave})` : ''}`).join(', ')}\n`);
+    } catch { /* */ }
   }
-  const isAcceptanceDir = (p) => /(^|\/)acceptance\//.test(p);
-  const parked = (p) => /(^|\/)parked[^/]*\//i.test(p);
-  let candidates = failing.filter((t) => {
-    if (parked(t.file)) return false;
-    const own = owners.get(t.file);
-    if (own) return own.includes(taskId) || own.every((id) => doneIds.has(id)); // pending owner → red by design
-    return !isAcceptanceDir(t.file); // a frozen test of another phase / a CR repro not in this plan
-  });
-  if (!candidates.length) return candidates;
+  let candidates = classified.candidates;
+  if (!candidates.length) return [];
+
+  // Native addon ABI mismatch (e.g. `db-replay.native.test.ts` or `policy-tool-use-enforcement.test.ts` importing
+  // Electron's `better-sqlite3` under plain Node `vitest related`) when the task touched no package/lockfile/build script
+  const changedNorm = (options.changedFiles || []).map((f) => String(f || '').replace(/\\/g, '/'));
+  const touchedNativeDeps = changedNorm.some((f) => /(^|\/)(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|\.npmrc)|\.node$|(^|\/)scripts\//i.test(f));
+  const NATIVE_ABI_RE = /NODE_MODULE_VERSION|ERR_DLOPEN_FAILED|was compiled against a different Node\.js version/i;
+  if (!touchedNativeDeps && options.relatedOutput && NATIVE_ABI_RE.test(String(options.relatedOutput))) {
+    const cleanLines = stripRunnerNoise(options.relatedOutput).split(/\r?\n/);
+    const suiteFailedByNativeAbi = (filePath) => {
+      const base = path.posix.basename(filePath);
+      if (/\.native\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(filePath) && cleanLines.some((l) => l.includes(base))) return true;
+      for (let i = 0; i < cleanLines.length; i += 1) {
+        if (!cleanLines[i].includes(filePath) && !cleanLines[i].includes(base)) continue;
+        const window = [];
+        for (let j = i + 1; j < Math.min(cleanLines.length, i + 25); j += 1) {
+          if (/^\s*(?:FAIL|⎯⎯⎯⎯)\b/.test(cleanLines[j]) && !cleanLines[j].includes(base)) break;
+          window.push(cleanLines[j]);
+        }
+        if (NATIVE_ABI_RE.test(window.join('\n'))) return true;
+      }
+      return false;
+    };
+    const keptAfterNative = [];
+    for (const t of candidates) {
+      if (suiteFailedByNativeAbi(t.file)) {
+        if (Array.isArray(options.preexistingReds) && !options.preexistingReds.includes(t.file)) options.preexistingReds.push(t.file);
+        continue;
+      }
+      keptAfterNative.push(t);
+    }
+    candidates = keptAfterNative;
+    if (!candidates.length) return [];
+  }
+
   const cfg = readProjectConfig(projectRoot) || {};
   const rt0 = cfg.checkpoint_related_tests;
-  const runTpl = rt0 && typeof rt0 === 'object' && typeof rt0.run_command === 'string' && rt0.run_command.includes('{files}') ? rt0.run_command : 'npx vitest run {files}';
+  const runTpl = rt0 && typeof rt0 === 'object' && typeof rt0.run_command === 'string' && rt0.run_command.includes('{files}') ? rt0.run_command : 'npx vitest run {files} --maxWorkers=1';
   const timeoutMs = Number(rt0 && rt0.timeout_ms) > 0 ? Number(rt0.timeout_ms) : 600_000;
+  const quoteArg = (f) => (/[\s"']/.test(f) ? JSON.stringify(f) : f);
   // OXB-178: a one-off red (memory pressure on a busy machine, a timing test) never undoes a good commit — each failing
   // file reruns ONCE, alone, on the commit's tree; it counts only if red again. Both results go in check.flaky_reds.
   if (options.commitSha) {
     const confirmed = [];
     for (const t of candidates) {
-      const again = runInCommitWorktree(projectRoot, options.commitSha, runTpl.replace('{files}', t.file), timeoutMs);
+      const again = runInCommitWorktree(projectRoot, options.commitSha, runTpl.replace('{files}', quoteArg(t.file)), timeoutMs);
       if (again && again.ok) { if (Array.isArray(options.flakyReds)) options.flakyReds.push({ file: t.file, first: 'red', rerun: 'green', where: 'commit_worktree' }); continue; }
       // OXB-189: still red in the temporary worktree → run it alone in the project's own tree (where the task's verify
       // ran green). Green there = the red is the environment of the check, not the task: flaky, the commit stays.
-      const inTree = runChildCommandFull(projectRoot, runTpl.replace('{files}', t.file), timeoutMs);
+      try { process.stderr.write(`\n  [checkpoint] reconfere ${t.file} na árvore do projeto (até ${Math.round(timeoutMs / 60000)} min)\n`); } catch { /* */ }
+      const inTree = runChildCommandFull(projectRoot, runTpl.replace('{files}', quoteArg(t.file)), timeoutMs);
       if (inTree && inTree.ok) { if (Array.isArray(options.flakyReds)) options.flakyReds.push({ file: t.file, first: 'red', rerun: 'red', project_tree: 'green', where: 'project_tree' }); continue; }
       confirmed.push(t);
     }
     candidates = confirmed;
-    if (!candidates.length) return candidates;
+    if (!candidates.length) return [];
   }
   if (!parentSha) return candidates;
-  // red on the parent too → not this task's
-  const cmd = runTpl.replace('{files}', candidates.map((t) => t.file).join(' '));
-  const before = runInCommitWorktree(projectRoot, parentSha, cmd, timeoutMs);
-  if (!before) return candidates;
-  if (before.ok) return candidates; // all green before: every red is this task's
-  const redBefore = new Set(failingTestFiles(before.output || '').map((t) => t.file));
-  return candidates.filter((t) => !redBefore.has(t.file));
+  // red on the parent too → not this task's (run inside a single shared parent worktree; if a combined run crashes early
+  // on one native/broken suite, verify remaining candidates individually in the same worktree so none is masked).
+  const CRASHED_RUNNER_RE = /NODE_MODULE_VERSION|ERR_DLOPEN_FAILED|was compiled against a different Node\.js version|Worker exited unexpectedly|Segmentation fault|Failed Suites|Test Files\s+\d+\s+failed/i;
+  const parentCheck = withCommitWorktree(projectRoot, parentSha, (wt) => {
+    const cmd = runTpl.replace('{files}', candidates.map((t) => quoteArg(t.file)).join(' '));
+    try { process.stderr.write(`\n  [checkpoint] reconfere vermelho em ${String(parentSha).slice(0, 8)}: ${String(cmd).slice(0, 160)} (até ${Math.round((timeoutMs || 0) / 60000)} min)\n`); } catch { /* */ }
+    const before = runChildCommandFull(wt, cmd, timeoutMs);
+    if (!before || before.ok) return { allGreen: Boolean(before && before.ok), redBefore: new Set() };
+    const combinedOut = `${before.output || ''}\n${before.tail || ''}`;
+    const redSet = new Set(failingTestFiles(combinedOut, { projectRoot }).map((t) => t.file));
+    const matchesRed = (file) => redSet.has(file) || [...redSet].some((rb) => file.endsWith(`/${rb}`) || rb.endsWith(`/${file}`));
+    if (candidates.length === 1 && !before.timedOut && !matchesRed(candidates[0].file) && CRASHED_RUNNER_RE.test(stripRunnerNoise(combinedOut))) {
+      redSet.add(candidates[0].file);
+    } else if (candidates.length > 1) {
+      for (const c of candidates) {
+        if (matchesRed(c.file)) continue;
+        const single = runChildCommandFull(wt, runTpl.replace('{files}', quoteArg(c.file)), timeoutMs);
+        if (single && !single.ok && !single.timedOut) {
+          const singleOut = `${single.output || ''}\n${single.tail || ''}`;
+          const sf = failingTestFiles(singleOut, { projectRoot });
+          if (sf.length > 0 || CRASHED_RUNNER_RE.test(stripRunnerNoise(singleOut))) {
+            redSet.add(c.file);
+          }
+        }
+      }
+    }
+    return { allGreen: false, redBefore: redSet };
+  });
+  if (!parentCheck || parentCheck.allGreen) return candidates;
+  const redBefore = parentCheck.redBefore;
+  const isRedOnParent = (file) => redBefore.has(file) || [...redBefore].some((rb) => file.endsWith(`/${rb}`) || rb.endsWith(`/${file}`));
+  const regressions = [];
+  for (const t of candidates) {
+    if (isRedOnParent(t.file)) {
+      if (Array.isArray(options.preexistingReds) && !options.preexistingReds.includes(t.file)) options.preexistingReds.push(t.file);
+    } else {
+      regressions.push(t);
+    }
+  }
+  return regressions;
 }
 
-/** OXB-175: runs a command on a commit's own tree (temporary detached worktree; junction unlinked before removal). */
-function runInCommitWorktree(projectRoot, sha, command, timeoutMs) {
+function withCommitWorktree(projectRoot, sha, fn) {
+  try { sweepCheckpointWorkspaces(projectRoot); } catch { /* auxiliar */ }
   const wt = path.join(projectRoot, '.oxe', 'checkpoint-ws', `p-${String(sha).slice(0, 10)}-${Date.now().toString(36)}`);
   fs.mkdirSync(path.dirname(wt), { recursive: true });
   const add = gitOut(projectRoot, ['worktree', 'add', '-q', '--detach', wt, sha]);
   if (add.status !== 0) return null;
-  let r = null;
   try {
     const nm = path.join(projectRoot, 'node_modules');
     if (fs.existsSync(nm)) fs.symlinkSync(fs.realpathSync(nm), path.join(wt, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
     try { require('./oxe-local-config.cjs').copyLocalFiles(projectRoot, wt); } catch { /* */ }
-    r = runChildCommandFull(wt, command, timeoutMs);
+    return fn(wt);
   } finally {
     try {
       const rt = loadRuntimeModule();
@@ -7757,16 +13266,48 @@ function runInCommitWorktree(projectRoot, sha, command, timeoutMs) {
     if (!linkLeft) gitOut(projectRoot, ['worktree', 'remove', '--force', wt]);
     gitOut(projectRoot, ['worktree', 'prune']);
   }
-  return r;
 }
 
-/** OXB-172: the test files a vitest/jest run reports as failing (FAIL / × / ❯ lines). */
-function failingTestFiles(output) {
+/** OXB-175: runs a command on a commit's own tree (temporary detached worktree; junction unlinked before removal). */
+function runInCommitWorktree(projectRoot, sha, command, timeoutMs) {
+  try { process.stderr.write(`\n  [checkpoint] reconfere vermelho em ${String(sha).slice(0, 8)}: ${String(command).slice(0, 160)} (até ${Math.round((timeoutMs || 0) / 60000)} min)\n`); } catch { /* */ }
+  return withCommitWorktree(projectRoot, sha, (wt) => runChildCommandFull(wt, command, timeoutMs));
+}
+
+function stripRunnerNoise(text) {
+  return String(text || '')
+    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    .replace(/^[^\t\r\n]+\t[^\t\r\n]+\t\d{4}-\d{2}-\d{2}T[\d:.]+Z\s?/gm, '')
+    .replace(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+/gm, '');
+}
+
+/** OXB-172 + OXB-C3: the test files a vitest/jest/node-test run reports as failing (local or remote-verify / GH Actions). */
+function failingTestFiles(output, options = {}) {
+  const cleaned = stripRunnerNoise(output);
+  const projectRoot = options && options.projectRoot ? String(options.projectRoot) : null;
+  const normCandidatePath = (raw) => {
+    let f = String(raw || '').replace(/\\/g, '/').replace(/^\.\//, '');
+    if (projectRoot) {
+      const rootSlash = projectRoot.replace(/\\/g, '/').replace(/\/+$/, '');
+      if (f.toLowerCase().startsWith(`${rootSlash.toLowerCase()}/`)) {
+        f = f.slice(rootSlash.length + 1);
+      } else if (f.startsWith('/') && f.includes('/')) {
+        const parts = f.split('/').filter(Boolean);
+        for (let i = 1; i < parts.length - 1; i += 1) {
+          const suffix = parts.slice(i).join('/');
+          if (fs.existsSync(path.join(projectRoot, suffix))) { f = suffix; break; }
+        }
+      }
+    }
+    return f;
+  };
   const out = new Map();
-  for (const m of String(output).matchAll(/^\s*(?:FAIL|×|✗|❯)\s+([\w./\\@-]+\.(?:test|spec)\.[cm]?[jt]sx?)(?:\s*>\s*([^\n]+))?/gm)) {
-    const file = m[1].replace(/\\/g, '/').replace(/^\.\//, '');
+  const LINE_RE = /^\s*(?:FAIL|×|✗|✖|❯|❌)\s+(?:\|[^|\r\n]+\|\s+|\[[^\]\r\n]+\]\s+)?([\w./\\@+$()[\]-]+\.(?:test|spec)\.[cm]?[jt]sx?)(?::\d+(?::\d+)?)?(?:\s*(?:>|›)\s*([^\r\n]+))?/gm;
+  for (const m of cleaned.matchAll(LINE_RE)) {
+    const file = normCandidatePath(m[1]);
     if (!out.has(file)) out.set(file, []);
-    if (m[2] && !/\(\d+ tests?/.test(m[2])) out.get(file).push(m[2].trim().slice(0, 120));
+    if (m[2] && !/\(\d+ tests?/.test(m[2]) && !/^\[.*\]$/.test(m[2].trim())) out.get(file).push(m[2].trim().slice(0, 120));
   }
   return [...out].map(([file, names]) => ({ file, names: [...new Set(names)].slice(0, 5) }));
 }
@@ -7783,29 +13324,66 @@ function commitTaskCheckpoint(projectRoot, runState, taskId, options = {}) {
   const files = [...new Set([...baseFiles, ...coupled])];
   if (!files.length) return { committed: false, reason: 'tarefa sem escopo declarado' };
   if (!gitLines(projectRoot, ['rev-parse', '--is-inside-work-tree'])) return { committed: false, reason: 'sem repositório git' };
+  // OxeSpace 15/11 (F6 T34/T35): a declared ratchet whose file is in the scope comes down to the real count in this
+  // task's own commit (never up), so the suites that require cap <= count do not fail the checkpoint.
+  let ratchetsLowered = [];
+  const ratchetBackups = new Map();
+  if (options.ratchets !== false) {
+    try {
+      const ratchetsLib = require('./oxe-ratchets.cjs');
+      const cfg = options.config || readProjectConfig(projectRoot) || {};
+      for (const r of ratchetsLib.ratchetsOf(cfg)) {
+        if (!ratchetBackups.has(r.file)) {
+          try { ratchetBackups.set(r.file, fs.readFileSync(path.join(projectRoot, r.file), 'utf8')); } catch { /* */ }
+        }
+      }
+      ratchetsLowered = ratchetsLib.lowerRatchets(projectRoot, cfg, files);
+    } catch { ratchetsLowered = []; }
+  }
+  const restoreRatchetsIfNeeded = () => {
+    if (!ratchetsLowered.length) return;
+    for (const r of ratchetsLowered) {
+      if (ratchetBackups.has(r.file)) {
+        try { fs.writeFileSync(path.join(projectRoot, r.file), ratchetBackups.get(r.file), 'utf8'); } catch { /* */ }
+      }
+    }
+  };
   // OXB-168: built from what CHANGED under the scope, never from the scope as pathspecs (a path another task already
   // removed made git reject the whole commit).
   const changed = changedPathsUnder(projectRoot, files);
   const scopeAbsent = files.filter((p) => !fs.existsSync(path.join(projectRoot, p)) && !(gitLines(projectRoot, ['ls-files', '--', p]) || []).length && !changed.some((c) => isPathInScope(c, [p])));
-  if (!changed.length) return { committed: false, reason: 'nada mudou no escopo da tarefa', scope_absent: scopeAbsent };
+  if (!changed.length) { restoreRatchetsIfNeeded(); return { committed: false, reason: 'nada mudou no escopo da tarefa', scope_absent: scopeAbsent }; }
   // OXB-170: only what THIS task wrote — paths already dirty when it started carry only its own diff.
+  // OXB-C17: any dirty path in task.files already present from prior attempts/reopens (before === nowBlob) is still
+  // part of this task's checkpoint unless another pending/interrupted task holds it.
   const own = taskOwnContent(projectRoot, changed, options.baseline || null);
-  if (own.problems.length) return { committed: false, failed: true, reason: own.problems.join(' · '), snapshot: own.entries, scope_absent: scopeAbsent };
-  if (!Object.keys(own.entries).length) return { committed: false, reason: 'nada mudou no escopo da tarefa (o que está sujo já estava antes dela)', scope_absent: scopeAbsent };
+  if (options.baseline) {
+    const failedPaths = new Set(own.problems.map((pr) => String(pr).split(':')[0].trim()));
+    const foreign = options.foreignDirty instanceof Set ? options.foreignDirty : null;
+    for (const rel of changed) {
+      if (Object.prototype.hasOwnProperty.call(own.entries, rel) || failedPaths.has(rel)) continue;
+      if (foreign && foreign.has(rel)) continue;
+      own.entries[rel] = storeBlob(projectRoot, rel) || 'deleted';
+    }
+  }
+  if (own.problems.length) { restoreRatchetsIfNeeded(); return { committed: false, failed: true, reason: own.problems.join(' · '), snapshot: own.entries, scope_absent: scopeAbsent }; }
+  if (!Object.keys(own.entries).length) { restoreRatchetsIfNeeded(); return { committed: false, reason: 'nada mudou no escopo da tarefa (o que está sujo já estava antes dela)', scope_absent: scopeAbsent }; }
   // OXB-188: a done checkpoint never carries an added stub marker (BLOCKED / TODO() / not implemented …).
   if (options.stubGuard !== false) {
     try {
       const stub = require('./oxe-stub-check.cjs');
       const found = stub.stubFindings(projectRoot, { levels: ['substantive'], since: 'HEAD', scope: Object.keys(own.entries) });
       if (found.length) {
+        restoreRatchetsIfNeeded();
         const bl = stub.blockedLine(found);
         return { committed: false, failed: true, stub_markers: found.map((f) => ({ file: f.file, line: f.line, why: f.why, needs: f.needs || [] })), reason: `${bl ? `${bl} · ` : ''}checkpoint recusado: ${found.length} marcador(es) de stub adicionados (${found.slice(0, 3).map((f) => `${f.file}:${f.line} ${f.why}`).join('; ')}) — uma tarefa done não leva stub`, snapshot: own.entries, scope_absent: scopeAbsent };
       }
     } catch { /* o guard nunca derruba o checkpoint por erro próprio */ }
   }
-  const message = checkpointMessageFor(projectRoot, runState, taskId, options.task || {}, options.phase, options.config || null);
+  const message = options.message || checkpointMessageFor(projectRoot, runState, taskId, options.task || {}, options.phase, options.config || null);
   const res = commitExactContent(projectRoot, own.entries, message, { ...options, scope: files });
-  return { ...res, scope: files, ...(scopeAbsent.length ? { scope_absent: scopeAbsent } : {}), snapshot: res.committed ? undefined : own.entries };
+  if (!res.committed) restoreRatchetsIfNeeded();
+  return { ...res, scope: files, ...(scopeAbsent.length ? { scope_absent: scopeAbsent } : {}), ...(res.committed && ratchetsLowered.length ? { ratchets_lowered: ratchetsLowered } : {}), snapshot: res.committed ? undefined : own.entries };
 }
 
 /**
@@ -7867,9 +13445,23 @@ function touchProgramPhase(projectRoot, activeSession, status, patch = {}) {
     const phase = runtime.findPhase(state, state.active_phase);
     if (!phase || phase.status === 'closed') return null;
     let next = state;
+    // Bench B27/B34/B44: on the manual path (no `runtime execute`) the phase stayed `planning` for good, so
+    // `status` kept saying "execute" after a green verify. A verify (or a task commit) of the plan that declares
+    // the active phase moves it forward too — planning → executing → verifying.
+    const planDeclaresPhase = () => {
+      try {
+        const planJson = path.join(path.dirname(paths.plan || path.join(projectRoot, '.oxe', 'PLAN.md')), 'PLAN.json');
+        return JSON.parse(fs.readFileSync(planJson, 'utf8')).phase === phase.id;
+      } catch {
+        return false;
+      }
+    };
     // planning → executing → verifying; execute após verify volta a `executing`.
     if (status === 'executing' && (phase.status === 'planning' || phase.status === 'verifying')) {
       next = runtime.setPhaseStatus(next, phase.id, 'executing', patch);
+    } else if (status === 'verifying' && phase.status === 'planning' && planDeclaresPhase()) {
+      next = runtime.setPhaseStatus(next, phase.id, 'executing', patch);
+      next = runtime.setPhaseStatus(next, phase.id, 'verifying', patch);
     } else if (status === 'verifying' && phase.status === 'executing') {
       next = runtime.setPhaseStatus(next, phase.id, 'verifying', patch);
     } else if (status === phase.status && Object.keys(patch).length) {
@@ -7880,6 +13472,136 @@ function touchProgramPhase(projectRoot, activeSession, status, patch = {}) {
   } catch {
     return null;
   }
+}
+
+/**
+ * lean 1.1 — `oxe-cc phase close`: the whole end of a phase in one deterministic command, no model turn.
+ *   1. `runtime verify` (frozen acceptance tests, task checks, regression, project gates);
+ *   2. green → every plan task still pending gets its commit (OXE-Task trailer) and `done`. A task whose files are
+ *      already committed is marked done on the verified HEAD (the proof is the green verify of that commit);
+ *   3. the handoff of the dossier gets a generated draft when it is empty (the human edits it if there is more to say);
+ *   4. `runtime program close` with the options given (sign-offs, waivers) — every pending item listed at once.
+ * It stops at the first step that fails, with the reasons and the single thing to do next. Bench Restitui: closing a
+ * phase by hand took ~15 min and 6 to 10 human actions per phase.
+ * @returns {Promise<{ closed: boolean, phase: string|null, stopped_at: string|null, reasons: string[], next: string|null,
+ *   steps: Array<{ step: string, ok: boolean, detail: string }>, verify: object|null, close: object|null }>}
+ */
+async function runtimePhaseClose(projectRoot, activeSession, options = {}) {
+  const steps = [];
+  const stop = (stoppedAt, reasons, next, extra = {}) => ({ closed: false, phase: phaseId, stopped_at: stoppedAt, reasons, next, steps, verify: verifySummary, close: null, ...extra });
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programLib = require('./oxe-program.cjs');
+  const program = paths.programDir ? programLib.readProgram(paths.programDir) : null;
+  let phaseId = options.phase || (program && program.active_phase) || null;
+  let verifySummary = null;
+  if (!program) throw new Error('Sem programa. Rode `oxe-cc runtime program init`.');
+  if (!phaseId) throw new Error('Nenhuma fase ativa. Rode `oxe-cc runtime program start`.');
+
+  // 1. verify
+  const verified = options.verified || await runRuntimeVerify(projectRoot, activeSession, options.verify || {});
+  const reportStatus = verified.report && verified.report.status;
+  const regFailed = (verified.regression && verified.regression.failed) || [];
+  const gatesFailed = (verified.gates && verified.gates.failed) || [];
+  const checks = (verified.report && verified.report.check_results) || [];
+  const red = checks.filter((c) => c && (c.status === 'fail' || c.status === 'error'));
+  verifySummary = { status: reportStatus, checks: checks.length, red: red.map((c) => c.check_id), regression_failed: regFailed.map((f) => f.check_id), gates_failed: gatesFailed };
+  // A criterion verified by hand has no command: its check is skipped (`needs_structured_check`) and the report is
+  // `partial`. With nothing red, that is not a failure — the automated part passed and the human part is the sign-off
+  // the close asks for below.
+  const manualChecks = checks.filter((c) => c && c.status === 'skip' && c.skip_reason === 'needs_structured_check');
+  const gapsNow = (verified.report && verified.report.gaps) || [];
+  const onlyHumanLeft = reportStatus !== 'failed' && reportStatus !== 'passed' && !red.length && !regFailed.length && !gatesFailed.length
+    && manualChecks.length > 0 && gapsNow.every((g) => /não é executável/i.test(String(g)));
+  const verifyOk = (reportStatus === 'passed' || onlyHumanLeft) && !regFailed.length && !gatesFailed.length;
+  steps.push({ step: 'verify', ok: verifyOk, detail: onlyHumanLeft ? `automático verde · ${checks.length} checks · ${manualChecks.length} critério(s) à espera de sign-off humano` : `${reportStatus || 'sem status'} · ${checks.length} checks${red.length ? ` · vermelhos: ${red.map((c) => c.check_id).join(', ')}` : ''}` });
+  if (!verifyOk) {
+    const reasons = [
+      ...red.map((c) => `check ${c.check_id}: ${String(c.error || c.summary || c.status).split(/\r?\n/).find((l) => l.trim()) || c.status}`.slice(0, 240)),
+      ...regFailed.map((f) => `regressão ${f.check_id}: ${String(f.error || f.summary || '').split(/\r?\n/).find((l) => l.trim()) || 'vermelho'}`.slice(0, 240)),
+      ...gatesFailed.map((g) => `gate do projeto vermelho: ${g}`),
+      ...((verified.report && verified.report.gaps) || []).map((g) => `gap: ${g}`),
+    ];
+    if (!reasons.length) reasons.push(`verify ${reportStatus || 'sem status'} (bloqueado ou parcial): veja ${verified.projected && verified.projected.paths ? path.relative(projectRoot, verified.projected.paths.verify) : 'VERIFY.md'}`);
+    return stop('verify', reasons, reportStatus === 'failed' || regFailed.length || gatesFailed.length ? 'corrija o que está vermelho e rode `oxe-cc phase close` de novo' : 'resolva o que bloqueia o verify (sign-off humano ou check sem comando) e rode `oxe-cc phase close` de novo');
+  }
+
+  // 2. the plan's pending tasks: commit + done
+  const work = runtimePhaseWork(projectRoot, activeSession);
+  const committed = [];
+  const markedOnHead = [];
+  if (work.pending.length) {
+    const by = String(options.by || 'phase-close').trim();
+    const planJsonLib = require('./oxe-plan-json.cjs');
+    const dirtyCode = changedEntriesUnder(projectRoot, ['.']).map((e) => String(e.path || '').replace(/\\/g, '/')).filter((p) => p && !p.startsWith('.oxe/'));
+    try {
+      if (!dirtyCode.length) {
+        // nothing left to commit: the work is already in HEAD (committed without the trailer). The verify above judged
+        // exactly this commit, so the task is done on it.
+        const head = require('./oxe-verdicts.cjs').headOf(projectRoot);
+        if (!head) throw new Error('repositório sem commit: não há o que marcar como concluído');
+        for (const id of work.pending) {
+          planJsonLib.markPlanTaskDone(paths.plan, id, { commit: head });
+          appendEvent(projectRoot, activeSession, { type: 'PlanTaskMarkedDone', work_item_id: id, payload: { task: id, commit: head, by, proof: 'phase_verify_passed', verification_tree: (readRunState(projectRoot, activeSession) || {}).verification_tree || null } });
+          markedOnHead.push(id);
+        }
+      } else if (work.pending.length === 1) {
+        const r = runtimeCommitTask(projectRoot, activeSession, { task: work.pending[0], by, verifiedByPhase: true });
+        committed.push({ tasks: [work.pending[0]], commit: r.commit || (r.checkpoint && r.checkpoint.commit) || null });
+      } else {
+        const r = runtimeCommitTasksTogether(projectRoot, activeSession, { tasks: work.pending, by, skipVerify: true });
+        committed.push({ tasks: r.tasks, commit: r.commit });
+      }
+    } catch (err) {
+      const msg = String((err && err.message) || err);
+      steps.push({ step: 'commit-task', ok: false, detail: msg.slice(0, 240) });
+      const scope = /ScopeViolation/.test(msg);
+      return stop('commit-task', [msg], scope
+        ? 'há arquivos alterados fora do escopo das tarefas: inclua-os em `files` da tarefa certa no PLAN.json (ou desfaça a mudança) e rode `oxe-cc phase close` de novo'
+        : 'resolva o erro acima e rode `oxe-cc phase close` de novo');
+    }
+    steps.push({ step: 'commit-task', ok: true, detail: committed.length ? `${committed.map((c) => `${c.tasks.join(', ')} → ${String(c.commit || '').slice(0, 8)}`).join('; ')}` : `${markedOnHead.join(', ')} concluída(s) no HEAD verificado` });
+  } else {
+    steps.push({ step: 'commit-task', ok: true, detail: 'nenhuma tarefa pendente' });
+  }
+
+  // 3. handoff draft
+  try {
+    const dossier = runtimeDossier(projectRoot, activeSession, { phase: phaseId });
+    if (dossier && dossier.handoff_required !== false && !dossier.handoff_filled) {
+      const dossierLib = require('./oxe-dossier.cjs');
+      const file = path.join(dossier.dir, 'plan.md');
+      const text = readTextIfExists(file) || '';
+      if (text.includes(dossierLib.HANDOFF_PLACEHOLDER)) {
+        const { doc } = readPlanJsonDoc(projectRoot, activeSession);
+        const tasks = ((doc && doc.tasks) || []).filter((t) => t && t.done === true);
+        const api = dossier.api_surface;
+        const lines = [
+          `_Rascunho gerado pelo \`oxe-cc phase close\` em ${new Date().toISOString().slice(0, 10)}; edite se houver mais a dizer._`,
+          '',
+          `- Entregue na ${phaseId}: ${tasks.length ? tasks.map((t) => `${t.id} ${String(t.title || '').trim()}`).join('; ') : 'sem tarefas no PLAN.json'}.`,
+          api ? `- Superfície pública: ${api.added} adicionada(s), ${api.changed} alterada(s), ${api.removed} removida(s)${api.flagged.length ? ` — fora do pack: ${api.flagged.slice(0, 5).join(', ')}` : ''} (detalhe em api-surface.md e em program/interfaces/${phaseId}.json).` : `- Interfaces da fase: program/interfaces/${phaseId}.json.`,
+          `- Regressão: os testes de aceite desta fase ficam congelados; uma fase seguinte não os edita (use \`oxe-cc plan amend-test\` com motivo).`,
+          dossier.pending.length ? `- Pendências humanas levadas adiante: ${dossier.pending.map((p) => p.replace(/^signoff_pending: /, '')).join(', ')}.` : '- Sem sign-off pendente.',
+        ];
+        fs.writeFileSync(file, text.replace(dossierLib.HANDOFF_PLACEHOLDER, lines.join('\n')), 'utf8');
+        steps.push({ step: 'handoff', ok: true, detail: `rascunho gerado em ${path.relative(projectRoot, file).replace(/\\/g, '/')}` });
+      }
+    }
+  } catch { /* the close below reports a handoff that is still empty */ }
+
+  // 4. close
+  const close = runtimeProgramClose(projectRoot, activeSession, { ...(options.close || {}), phase: phaseId });
+  steps.push({ step: 'program close', ok: Boolean(close.closed), detail: close.closed ? `fase ${close.phase} fechada` : `${close.gate.reasons.length} motivo(s)` });
+  if (!close.closed) {
+    // with only the human part left, "verify não concluído (status: blocked)" is that same pending sign-off
+    const reasons = close.gate.reasons.filter((r) => !(onlyHumanLeft && /^verify não concluído/.test(r)));
+    const signoffs = reasons.filter((r) => /^sign-off pendente: /.test(r)).map((r) => r.replace(/^sign-off pendente: /, '').replace(/ \(ou adie:.*$/, ''));
+    const next = signoffs.length && signoffs.length === reasons.length
+      ? `só faltam sign-offs humanos: depois de conferir, rode \`oxe-cc runtime signoff --phase ${phaseId} --criteria ${signoffs.join(',')} --by <quem conferiu> --evidence "<o que foi visto>"\` e \`oxe-cc phase close\` de novo`
+      : 'resolva os motivos acima (todos listados de uma vez) e rode `oxe-cc phase close` de novo';
+    return { closed: false, phase: phaseId, stopped_at: 'program close', reasons, next, steps, verify: verifySummary, close, signoffs_pending: signoffs };
+  }
+  return { closed: true, phase: close.phase, stopped_at: null, reasons: [], next: close.next ? `oxe-cc runtime program start --phase ${close.next.id}` : null, steps, verify: verifySummary, close };
 }
 
 function runtimeProgramStatus(projectRoot, activeSession) {
@@ -7902,7 +13624,28 @@ function runtimeProgramStatus(projectRoot, activeSession) {
       }
     }
   } catch { /* auxiliar */ }
-  return { exists: true, state, progress: runtime.programProgress(state), paths: where, amended_closed: amendedClosed };
+  const progress = runtime.programProgress(state);
+  return { exists: true, state, progress, paths: where, amended_closed: amendedClosed, phase_plan: phasePlanReadiness(projectRoot, activeSession, progress && progress.phase) };
+}
+
+/**
+ * A phase in `planning` whose plan already exists (PLAN.json for that phase, with tasks): the next step is the
+ * execute, not /oxe-plan. `program start` on oxespace-152 said "Próximo: /oxe-plan" with PLAN.json, PLAN.md and the
+ * packs of F1 in place and `plan lint` OK. The lint here is the plan-only one (no preflight, no dry-verify): cheap.
+ * @returns {{ exists: boolean, tasks: number, lint_ok: boolean | null, errors: number } | null}
+ */
+function phasePlanReadiness(projectRoot, activeSession, phase) {
+  if (!phase || phase.status !== 'planning') return null;
+  try {
+    const { doc } = readPlanJsonDoc(projectRoot, activeSession);
+    const tasks = doc && Array.isArray(doc.tasks) ? doc.tasks.filter(Boolean) : [];
+    if (!doc || !tasks.length || (doc.phase && doc.phase !== phase.id)) return { exists: false, tasks: 0, lint_ok: null, errors: 0 };
+    let lint = null;
+    try { lint = runtimePlanLint(projectRoot, activeSession, { preflight: false, noPrecheck: true }); } catch { lint = null; }
+    return { exists: true, tasks: tasks.length, lint_ok: lint ? Boolean(lint.ok) : null, errors: lint && Array.isArray(lint.errors) ? lint.errors.length : 0 };
+  } catch {
+    return null;
+  }
 }
 
 function runtimeProgramInit(projectRoot, activeSession, options = {}) {
@@ -7923,7 +13666,13 @@ function runtimeProgramInit(projectRoot, activeSession, options = {}) {
     type: 'ProgramCreated',
     payload: { phases: state.phases.map((phase) => phase.id), roadmap: state.roadmap_ref },
   });
-  return { ...runtimeProgramStatus(projectRoot, activeSession), warnings: roadmapCriteriaWarnings(readTextIfExists(paths.spec) || '', state) };
+  // 1.21.2: every program starts with its SYSTEM-DESIGN skeleton, so the design-drift gate of the close applies from
+  // phase 1 (before, only programs where someone ran `design build` had it).
+  let design = null;
+  try {
+    if (!fs.existsSync(require('./oxe-system-design.cjs').FILE(projectRoot))) design = runtimeDesignBuild(projectRoot, activeSession);
+  } catch { design = null; }
+  return { ...runtimeProgramStatus(projectRoot, activeSession), warnings: roadmapCriteriaWarnings(readTextIfExists(paths.spec) || '', state), ...(design ? { design_created: true } : {}) };
 }
 
 /**
@@ -8007,6 +13756,158 @@ function phaseGateInputFromRun(run) {
  * Gate de fase: verify `completed`, regressão verde e contratos ok. Passando, congela a regressão,
  * grava as interfaces reais, faz o commit local da fase (sem push) e fecha a fase.
  */
+/**
+ * The CI proof of `program close --by-ci`: an attached run of the phase (ci.ndjson) that is green and whose head
+ * contains this HEAD's code — HEAD is an ancestor of the run's head, or nothing but .oxe/docs/*.md changed between them.
+ * @returns {{ ok: boolean, why?: string, run?: string|number, head?: string, url?: string|null, checked: object[] }}
+ */
+function closeProofByCi(projectRoot, programDir, phaseId, options = {}) {
+  const gatesLib = require('./oxe-phase-gates.cjs');
+  let records = [];
+  try { records = fs.readFileSync(path.join(programDir, 'ci.ndjson'), 'utf8').split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); } catch { records = []; }
+  const mine = records.filter((r) => r.kind === 'ci' && (!r.phase || r.phase === phaseId)).reverse();
+  if (!mine.length) return { ok: false, why: `nenhum run de CI anexado à fase ${phaseId} (oxe-cc runtime ci --attach <run|url>)`, checked: [] };
+  const head = require('./oxe-verdicts.cjs').headOf(projectRoot);
+  const docOnly = (p) => p.startsWith('.oxe/') || /^docs\//.test(p) || /\.md$/i.test(p);
+  // R36: code not committed would go into the phase commit untested by CI
+  const st0 = gitOut(projectRoot, ['-c', 'core.quotepath=false', 'status', '--porcelain', '--untracked-files=all']);
+  const dirty = String(st0.stdout || '').split(/\r?\n/).filter(Boolean).map((l) => l.slice(3).replace(/^.* -> /, '').replace(/^"|"$/g, '')).filter((p) => p && !docOnly(p));
+  if (dirty.length) return { ok: false, why: `há código fora de commit (${dirty.slice(0, 5).join(', ')}${dirty.length > 5 ? ', …' : ''}) — o CI não o testou; commite (e anexe o run que o contém) ou descarte antes do close`, checked: [] };
+  const checked = [];
+  for (const rec of mine) {
+    const st = gatesLib.ciRunStatus({ ...rec, head: null }, { spawn: options.ghSpawn });
+    const runHead = st && st.data && st.data.headSha ? String(st.data.headSha) : null;
+    const entry = { run: rec.run, state: st.state || (st.ok ? 'green' : 'unknown'), head: runHead, message: st.message || null };
+    checked.push(entry);
+    if (!st.ok || !runHead || !head) continue;
+    const ancestor = gitOut(projectRoot, ['merge-base', '--is-ancestor', head, runHead]).status === 0;
+    let sameCode = false;
+    if (!ancestor) {
+      const d = gitOut(projectRoot, ['-c', 'core.quotepath=false', 'diff', '--name-only', runHead, head, '--']);
+      sameCode = d.status === 0 && String(d.stdout || '').split(/\r?\n/).filter(Boolean).every(docOnly);
+    }
+    entry.contains_head = ancestor || sameCode;
+    if (entry.contains_head) return { ok: true, run: rec.run, head: runHead, url: (st.data && st.data.url) || null, checked };
+  }
+  const why = checked.map((c) => `${c.run}: ${c.state === 'green' || c.state === undefined ? (c.contains_head === false ? `verde, mas não contém HEAD ${String(head || '').slice(0, 8)} (git fetch, ou anexe o run de main que contém a fase)` : c.message || 'sem head') : c.message || c.state}`).join(' · ');
+  return { ok: false, why: `nenhum run de CI verde anexado contém HEAD — ${why}`, checked };
+}
+
+/**
+ * OXB-C6 #4 (P2): Checks whether every task marked `done` in the closing phase has its commit/work landed on
+ * `base` (`main`/`origin/main`) by ancestry, `cherry picked from commit` trailer, equivalent patch (`git cherry`),
+ * or matching files at `base` (squash/external PR merge). Returns `{ checked, base, base_sha, unpromoted }`.
+ */
+function findUnpromotedDoneTasks(projectRoot, activeSession, phase, options = {}) {
+  if (!gitLines(projectRoot, ['rev-parse', '--git-dir'])) return { checked: false, base: null, base_sha: null, unpromoted: [] };
+  const remote = String(options.remote || 'origin');
+  let base = options.base ? String(options.base).trim() : null;
+  if (!base) {
+    base = resolvePromoteBase(projectRoot, null, remote, { fetch: options.fetch === true }).ref;
+  }
+  let baseSha = (gitLines(projectRoot, ['rev-parse', '--verify', '-q', `${base}^{commit}`]) || [])[0];
+  if (!baseSha && !options.base) {
+    for (const fallback of ['master', `${remote}/master`]) {
+      const s = (gitLines(projectRoot, ['rev-parse', '--verify', '-q', `${fallback}^{commit}`]) || [])[0];
+      if (s) { base = fallback; baseSha = s; break; }
+    }
+  }
+  const headSha = (gitLines(projectRoot, ['rev-parse', 'HEAD']) || [])[0];
+  if (!baseSha || !headSha) return { checked: false, base, base_sha: null, unpromoted: [] };
+
+  let doc = null;
+  try { doc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { doc = null; }
+  if (!doc || !Array.isArray(doc.tasks)) return { checked: true, base, base_sha: baseSha, unpromoted: [] };
+  if (phase && phase.id && doc.phase && String(doc.phase).toUpperCase() !== String(phase.id).toUpperCase()) {
+    return { checked: true, base, base_sha: baseSha, unpromoted: [] };
+  }
+
+  const headOnBase = spawnSync('git', ['merge-base', '--is-ancestor', headSha, baseSha], { cwd: projectRoot, windowsHide: true }).status === 0;
+  if (headOnBase) {
+    // HEAD is already at/behind baseSha (e.g. origin/main after cherry-pick/squash PRs merged): no unpromoted program work remains.
+    return { checked: true, base, base_sha: baseSha, unpromoted: [] };
+  }
+  const picked = new Set();
+  const equivalent = new Set();
+  for (const line of gitLines(projectRoot, ['log', baseSha, '--format=%B', '--grep=cherry picked from commit']) || []) {
+    const m = /cherry picked from commit ([0-9a-f]{7,40})/.exec(line);
+    if (m) picked.add(m[1]);
+  }
+  for (const l of gitLines(projectRoot, ['cherry', baseSha, headSha, baseSha]) || []) {
+    if (l.startsWith('-')) equivalent.add(l.slice(2).trim());
+  }
+
+  const isCommitOnBase = (sha) => {
+    if (!sha) return true;
+    const full = (gitLines(projectRoot, ['rev-parse', '--verify', '-q', `${sha}^{commit}`]) || [])[0];
+    if (!full) return false;
+    if (spawnSync('git', ['merge-base', '--is-ancestor', full, baseSha], { cwd: projectRoot, windowsHide: true }).status === 0) return true;
+    for (const p of picked) { if (full.startsWith(p) || p.startsWith(full)) return true; }
+    if (equivalent.has(full)) return true;
+    // Squash merge or another PR delivering the exact same file contents onto `base`
+    const touched = (gitLines(projectRoot, ['diff-tree', '--no-commit-id', '--name-only', '-r', full]) || [])
+      .filter((f) => f && !f.startsWith('.oxe/') && !/(^|\/)parked[^/]*\//i.test(f));
+    if (touched.length) {
+      const d = spawnSync('git', ['diff', '--quiet', baseSha, full, '--', ...touched], { cwd: projectRoot, windowsHide: true });
+      if (d.status === 0) return true;
+    }
+    return false;
+  };
+
+  const range = `${baseSha}..HEAD`;
+  const phaseCtx = { phase: phase && phase.id ? phase.id : null, since: (phase && phase.started_at) || null };
+  const unpromoted = [];
+
+  for (const t of doc.tasks) {
+    if (!t || t.done !== true) continue;
+    if (t.superseded || t.merged_into) continue;
+    if (t.kind === 'external_delivery' || t.kind === 'verify_only' || t.verify_only || (t.meta && (['external_delivery', 'spike', 'verify_only'].includes(t.meta.kind) || t.meta.verify_only))) continue;
+
+    const taskShas = [];
+    if (t.done_commit) {
+      const fullDone = (gitLines(projectRoot, ['rev-parse', '--verify', '-q', `${t.done_commit}^{commit}`]) || [])[0];
+      taskShas.push(fullDone || String(t.done_commit));
+    }
+    if (!headOnBase) {
+      for (const s of taskCommitShas(projectRoot, t.id, range, phaseCtx)) {
+        if (!taskShas.includes(s)) taskShas.push(s);
+      }
+    }
+
+    if (taskShas.length) {
+      const pendingShas = taskShas.filter((s) => !isCommitOnBase(s));
+      if (pendingShas.length) {
+        unpromoted.push({
+          task: t.id,
+          title: t.title || null,
+          shas: pendingShas,
+          detail: `commit ${String(pendingShas[0]).slice(0, 8)} não está em ${base}`,
+        });
+      }
+      continue;
+    }
+
+    if (!headOnBase) {
+      const scopeFiles = (Array.isArray(t.files) ? t.files : [])
+        .map((p) => String(typeof p === 'string' ? p : (p && p.path) || '').replace(/\\/g, '/').replace(/^\.\//, ''))
+        .filter((p) => p && !p.includes('*') && !p.startsWith('.oxe/') && !/(^|\/)parked[^/]*\//i.test(p));
+      if (!scopeFiles.length) continue;
+      const scopeCommits = (gitLines(projectRoot, ['log', '--format=%H', range, '--', ...scopeFiles]) || [])
+        .filter((sha) => !isCommitOnBase(sha));
+      if (scopeCommits.length) {
+        unpromoted.push({
+          task: t.id,
+          title: t.title || null,
+          shas: scopeCommits,
+          detail: `mudanças em ${scopeFiles.slice(0, 2).join(', ')} não estão em ${base} (${String(scopeCommits[0]).slice(0, 8)})`,
+        });
+      }
+    }
+  }
+
+  return { checked: true, base, base_sha: baseSha, unpromoted };
+}
+
 function runtimeProgramClose(projectRoot, activeSession, options = {}) {
   const runtime = requireProgramRuntime();
   const programLib = require('./oxe-program.cjs');
@@ -8015,8 +13916,10 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
   if (!state) throw new Error('Sem programa. Rode `oxe-cc runtime program init`.');
   const phase = options.phase ? runtime.findPhase(state, options.phase) : runtime.activePhase(state);
   if (!phase) throw new Error('Nenhuma fase ativa. Rode `oxe-cc runtime program start`.');
-  const run = options.runState || readRunState(projectRoot, activeSession);
-  const gateInput = phaseGateInputFromRun(run);
+  let run = options.runState || readRunState(projectRoot, activeSession);
+  // R36: the run of a phase already closed is not this phase's (its checks would be frozen again as this regression)
+  if (run && run.run_id && !options.runState) { try { if (isClosedPhaseRun(projectRoot, activeSession, run.run_id)) run = null; } catch { /* */ } }
+  let gateInput = phaseGateInputFromRun(run);
   // OXB-079: "verify não concluído (status: running)" right after a passed verify — the run stays `running` while an
   // external task of the graph is pending. A passed verify counts when the plan's work is done or external-only.
   if (gateInput.verify_status !== 'completed' && run && run.verification_status === 'passed') {
@@ -8036,21 +13939,100 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     changeLib.appendNdjson(changeLib.changesFile(paths.programDir || path.join(projectRoot, '.oxe', 'program')), { kind: 'drift_waiver', phase: phase.id, globs: acceptDrift, by, reason, at: new Date().toISOString() });
     appendEvent(projectRoot, activeSession, { type: 'DriftWaived', payload: { phase: phase.id, globs: acceptDrift, by } });
   }
-  const closeGates = programCloseGateReasons(projectRoot, activeSession, { phase, run, paths, state, skip: options.gates === false });
+  const acceptUnpromotedRaw = options.acceptUnpromoted;
+  const acceptUnpromotedReason = typeof acceptUnpromotedRaw === 'string'
+    ? acceptUnpromotedRaw.trim()
+    : (acceptUnpromotedRaw === true ? String(options.reason || '').trim() : '');
+  if (acceptUnpromotedRaw && acceptUnpromotedReason.length < 8) {
+    throw new Error('--accept-unpromoted exige o motivo (mínimo 8 caracteres), ex.: --accept-unpromoted "motivo…"');
+  }
+  // OxeSpace 15/11 (user decision, ~18:00Z): `program close --by-ci --by <papel> --reason "…"` — the phase closes on
+  // the green CI attached to it (runtime ci --attach: its PRs' runs or the main run that contains it), without a phase
+  // verify. Only the verify requirement is replaced; dossier, hashes, drift, handoff, rollback, sign-offs, defects and
+  // CRs still hold.
+  let byCi = null;
+  if (options.byCi) {
+    const by = String(options.by || '').trim();
+    const reason = String(options.reason || '').trim();
+    if (!by || reason.length < 8) throw new Error('--by-ci exige --by <papel> e --reason "…" (o close sem verify fica registrado)');
+    if (options.ciRun) {
+      runtimeCiAttach(projectRoot, activeSession, {
+        run: options.ciRun,
+        repo: options.repo || undefined,
+        phase: phase.id,
+        spawn: options.ghSpawn,
+      });
+    }
+    byCi = closeProofByCi(projectRoot, paths.programDir || path.join(projectRoot, '.oxe', 'program'), phase.id, options);
+    if (byCi.ok) {
+      // R36: a verify of another commit is not this close's proof — its old reds (fixed since, green on CI) and its
+      // proof results do not count; the CI run is the proof
+      const headNow = require('./oxe-verdicts.cjs').headOf(projectRoot);
+      // only the verification fields go (R37): the run's acceptance_lock (tamper check) and run_id stay
+      if (run && run.verification_head !== headNow) {
+        run = { ...run, verification_check_results: [], verification_results: [], verification_gates: null, verification_status: null, verification_head: null };
+      }
+      gateInput = phaseGateInputFromRun(run);
+      gateInput.verify_status = 'completed';
+    }
+  }
+  const closeGates = programCloseGateReasons(projectRoot, activeSession, { phase, run, paths, state, skip: options.gates === false, byCi: Boolean(byCi && byCi.ok) });
+  if (byCi && !byCi.ok) closeGates.reasons.push(`close --by-ci: ${byCi.why}`);
+  // OXB-C6 #4 (P2): every `done` task in the phase must have landed on `base` (`main`/`origin/main`) unless `--accept-unpromoted "<motivo>"` is given.
+  let unpromotedAccepted = null;
+  if (options.checkPromoted !== false) {
+    const promoStatus = findUnpromotedDoneTasks(projectRoot, activeSession, phase, options);
+    if (promoStatus.unpromoted.length) {
+      if (acceptUnpromotedRaw) {
+        unpromotedAccepted = {
+          base: promoStatus.base,
+          tasks: promoStatus.unpromoted.map((u) => u.task),
+          by: options.by ? String(options.by) : null,
+          reason: acceptUnpromotedReason,
+        };
+        try {
+          const changeLib = require('./oxe-change.cjs');
+          changeLib.appendNdjson(changeLib.changesFile(paths.programDir || path.join(projectRoot, '.oxe', 'program')), {
+            kind: 'unpromoted_waiver',
+            phase: phase.id,
+            ...unpromotedAccepted,
+            at: new Date().toISOString(),
+          });
+        } catch { /* auxiliar */ }
+        appendEvent(projectRoot, activeSession, { type: 'UnpromotedTasksAccepted', payload: { phase: phase.id, ...unpromotedAccepted } });
+      } else {
+        for (const u of promoStatus.unpromoted) {
+          closeGates.reasons.push(`tarefa done não promovida para ${promoStatus.base}: ${u.task} (${u.detail}) — promova com \`oxe-cc runtime promote ${u.task} --base ${promoStatus.base} --open-pr\` ou feche com --accept-unpromoted "<motivo>"`);
+        }
+      }
+    }
+  }
   // OXB-124: the phase verify must be of the code being closed — no code commit after the commit it judged.
-  if (run && run.verification_head) {
+  // With --by-ci the proof is the CI run that contains HEAD (checked above), not the verify's head.
+  if (run && run.verification_head && !(byCi && byCi.ok)) {
     const headNow = require('./oxe-verdicts.cjs').headOf(projectRoot);
     if (headNow && headNow !== run.verification_head) {
       const changedAfter = (gitLines(projectRoot, ['diff', '--name-only', run.verification_head, headNow, '--']) || []).filter((p) => !p.startsWith('.oxe/') && !/^docs\//.test(p) && !/\.md$/i.test(p));
-      if (changedAfter.length) closeGates.reasons.push(`stale_verdict: o verify da fase avaliou ${run.verification_head.slice(0, 8)}; depois disso mudaram ${changedAfter.slice(0, 4).join(', ')} — rode oxe-cc runtime verify de novo`);
+      // lean 1.1: the verify ran on the working tree; when HEAD now holds exactly that code, the verdict is of this code
+      const sameAsVerified = changedAfter.length && run.verification_tree
+        ? require('./oxe-verdicts.cjs').codeDiff(projectRoot, run.verification_tree, headNow)
+        : null;
+      if (changedAfter.length && !(sameAsVerified && sameAsVerified.length === 0)) closeGates.reasons.push(`stale_verdict: o verify da fase avaliou ${run.verification_head.slice(0, 8)}; depois disso mudaram ${changedAfter.slice(0, 4).join(', ')} — rode oxe-cc runtime verify de novo`);
     }
   }
   // OXB-117 (d): rollback rehearsal — the phase's commits must revert cleanly (a temporary worktree at HEAD).
   let rollbackRehearsal = null;
+  // OxeSpace 14/11 (Celular F2, merges of origin/main in the phase): closing without the rehearsal records the risk —
+  // who assumed it and why — in changes.ndjson and the events (the CLI requires --by and --reason for it).
+  if (options.rollbackCheck === false && options.by && options.reason) {
+    const changeLib = require('./oxe-change.cjs');
+    changeLib.appendNdjson(changeLib.changesFile(paths.programDir || path.join(projectRoot, '.oxe', 'program')), { kind: 'rollback_risk', phase: phase.id, by: String(options.by), reason: String(options.reason), at: new Date().toISOString() });
+    appendEvent(projectRoot, activeSession, { type: 'RollbackRiskAccepted', payload: { phase: phase.id, by: String(options.by), reason: String(options.reason) } });
+  }
   if (options.rollbackCheck !== false) {
     try {
       rollbackRehearsal = require('./oxe-phase-extras.cjs').rehearseRollback(projectRoot, phase.base_commit || null);
-      if (!rollbackRehearsal.ok) closeGates.reasons.push(`ensaio de rollback falhou: ${rollbackRehearsal.error || ''} ${(rollbackRehearsal.conflicts || []).join(', ')} — os commits da fase não revertem limpos (ou feche com --no-rollback-check e registre o risco)`.trim());
+      if (!rollbackRehearsal.ok) closeGates.reasons.push(`ensaio de rollback falhou: ${rollbackRehearsal.error || ''} ${(rollbackRehearsal.conflicts || []).join(', ')} — os commits da fase não revertem limpos (ou feche com --no-rollback-check --by <papel> --reason "…", que registra o risco)`.trim());
     } catch { /* auxiliar */ }
   }
   // OXB-123: edges marked prova_extra and prohibitions at level julgamento need explicit evidence (a sign-off naming them).
@@ -8072,9 +14054,11 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
   } catch { /* auxiliar */ }
   // OXB-136: seam review — seams.md in the dossier; open retro actions / missing end-to-end runs block when required.
   try {
-    const sm = runtimeSeams(projectRoot, activeSession, { phase: phase.id });
+    const sm = runtimeSeams(projectRoot, activeSession, { phase: phase.id, byCi: Boolean(byCi && byCi.ok) });
     const sc = ((readProjectConfig(projectRoot) || {}).close || {}).seams || {};
-    if (sc.require_behavior_run !== false) for (const c of sm.report.behavior_missing) closeGates.reasons.push(`costura: o critério ${c} pede o fluxo de ponta a ponta executado — registre com oxe-cc runtime seams --behavior-ran ${c} --evidence <relatório>`);
+    if (sc.require_behavior_run !== false && !(byCi && byCi.ok)) {
+      for (const c of sm.report.behavior_missing) closeGates.reasons.push(`costura: o critério ${c} pede o fluxo de ponta a ponta executado — registre com oxe-cc runtime seams --behavior-ran ${c} --evidence <relatório>`);
+    }
     if (sc.require_retro) for (const a of sm.report.retro_open) closeGates.reasons.push(`costura: ação da retro ${a.id} sem evidência (${a.action})`);
   } catch { /* auxiliar */ }
   // OXB-115: complexity alarms — a proposal always; a block in strict (profile strict or complexity.block).
@@ -8092,6 +14076,12 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
       if (defects.open.length > 15) closeGates.reasons.push(`e mais ${defects.open.length - 15} defeito(s) aberto(s) em .oxe/OPEN-DEFECTS.json`);
     } catch { /* auxiliar */ }
   }
+  // 1.21.2: alm.trace_gate "close" / "strict" — a loose end of the traceability graph blocks the close, each with its fix.
+  try {
+    const tg = traceGateFindings(projectRoot, activeSession, 'close');
+    for (const e of tg.errors.slice(0, 20)) closeGates.reasons.push(e);
+    if (tg.errors.length > 20) closeGates.reasons.push(`e mais ${tg.errors.length - 20} ponta(s) solta(s) — oxe-cc trace`);
+  } catch { /* auxiliar */ }
   // OXB-091: every standing criterion needs a sign-off of this phase with evidence (not deferrable: "erros na
   // interface não serão admitidos" holds at every close).
   const standing = require('./oxe-criteria-ids.cjs').standingAcceptance(projectRoot);
@@ -8113,9 +14103,9 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     }
   }
   // 1.20: um critério UAT com sign-off conta como verificado; o dossiê precisa estar sem drift e com handoff.
-  const dossier = options.dossier === false ? null : runtimeDossier(projectRoot, activeSession, { phase: phase.id, runState: run });
+  const dossier = options.dossier === false ? null : runtimeDossier(projectRoot, activeSession, { phase: phase.id, runState: run || {}, byCi: Boolean(byCi && byCi.ok) });
   if (dossier && gateInput.verify_status === 'blocked' && dossier.pending.length === 0) {
-    const onlyManual = (run.verification_check_results || []).every((c) => c.status === 'pass' || (c.status === 'skip' && c.skip_reason === 'needs_structured_check'));
+    const onlyManual = ((run && run.verification_check_results) || []).every((c) => c.status === 'pass' || (c.status === 'skip' && c.skip_reason === 'needs_structured_check'));
     if (onlyManual) gateInput.verify_status = 'completed';
   }
   // OXB-135: the members close in order — a dirty member stops; the landed shas go to the phase and the dossier.
@@ -8161,7 +14151,7 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
       else gate.reasons.push(`sign-off pendente: ${criterion} (ou adie: --defer-signoff --by <dono> --risk "<risco assumido>")`);
     }
     if (deferred.length) gate.deferred = deferred;
-    if (!dossier.handoff_filled) gate.reasons.push(`handoff vazio: preencha "O que a próxima fase deve saber" em ${path.relative(projectRoot, path.join(dossier.dir, 'plan.md'))}`);
+    if (dossier.handoff_required !== false && !dossier.handoff_filled) gate.reasons.push(`handoff vazio: preencha "O que a próxima fase deve saber" em ${path.relative(projectRoot, path.join(dossier.dir, 'plan.md'))}`);
     gate.ok = gate.reasons.length === 0;
   }
   if (closeGates.reasons.length) {
@@ -8189,8 +14179,25 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
   }
   // OXB-105: what the phase touched, for the compact (structural CODEBASE-DELTA entry).
   try { require('./oxe-system-design.cjs').deltaEntry(projectRoot, phase.id, phase.base_commit); } catch { /* auxiliar */ }
-  const regressionChecks = programLib.freezeRegressionChecks(run.verification_check_results, run.verification_suite);
-  const regressionFile = programLib.writeRegression(paths.programDir, phase.id, regressionChecks, { run_id: run.run_id || null });
+  // a copy: re-pinning below must not touch the run's own suite
+  const regressionChecks = JSON.parse(JSON.stringify(programLib.freezeRegressionChecks((run || {}).verification_check_results || [], (run || {}).verification_suite || null)));
+  // OxeSpace 15/11 (OxeChat F3): the snapshot copied the suite's hash — compiled BEFORE a CR re-froze the test — and
+  // every later verify read the re-frozen file as tampered. The close gate has just accepted the files as they are,
+  // so the regression record pins each frozen file at its content NOW.
+  try {
+    const rt = loadRuntimeModule();
+    for (const check of regressionChecks) {
+      for (const f of Array.isArray(check.frozen_files) ? check.frozen_files : []) {
+        if (!f || !f.path) continue;
+        const abs = path.resolve(projectRoot, String(f.path));
+        if (!fs.existsSync(abs) || !rt || typeof rt.sha256File !== 'function') continue;
+        if (typeof rt.frozenFileMatches === 'function' && f.sha256 && rt.frozenFileMatches(abs, f.sha256)) continue;
+        const now = rt.sha256File(abs);
+        if (now && now !== f.sha256) { f.sha256_compiled = f.sha256 || null; f.sha256 = now; }
+      }
+    }
+  } catch { /* auxiliar: the compiled hashes stay */ }
+  const regressionFile = programLib.writeRegression(paths.programDir, phase.id, regressionChecks, { run_id: (run && run.run_id) || null });
 
   const parsers = loadSdkParsers();
   const planText = readTextIfExists(paths.plan);
@@ -8199,20 +14206,32 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     : { tasks: [] };
   const modules = programLib.buildInterfaces(projectRoot, runtime, programLib.contractedFiles(parsedPlan));
   const interfacesFile = programLib.writeInterfaces(paths.programDir, phase.id, modules);
+  // 1.21.2: a branch with an open PR (a merge train may forbid pushes to it) never gets the phase commit unless asked
+  // with --force-branch. oxespace-152-code: the close committed onto PR #792, already queued in the train.
+  const openPr = options.commit === false || options.forceBranch ? null : branchOpenPr(projectRoot, options.ghSpawn);
+  // The documents go into the phase commit only when the project asked for it (`docs_publish` configured): the close
+  // never writes files nobody requested.
+  let docsPublished = null;
+  const cfgClose = readProjectConfig(projectRoot) || {};
+  if (!openPr && options.commit !== false && cfgClose.docs_publish && typeof cfgClose.docs_publish === 'object') {
+    try { docsPublished = runtimeDocsPublish(projectRoot, activeSession, {}); } catch (err) { docsPublished = { error: err.message }; }
+  }
 
   const commit = options.commit === false
     ? { commit: null, committed: false, reason: 'commit desativado (--no-commit)' }
-    : programLib.commitPhase(projectRoot, options.message || `feat(phase-${phase.id.toLowerCase()}): ${phase.title}`);
+    : openPr
+      ? { commit: null, committed: false, reason: `o branch ${openPr.branch} tem PR aberto (${openPr.url || `#${openPr.number}`}) — fase fechada sem commit; commite num branch separado ou rode de novo com --force-branch` }
+      : programLib.commitPhase(projectRoot, options.message || `feat(phase-${phase.id.toLowerCase()}): ${phase.title}`);
 
   if (gate.deferred && gate.deferred.length && gateInput.verify_status === 'blocked') {
-    const onlyManual = (run.verification_check_results || []).every((c) => c.status === 'pass' || (c.status === 'skip' && c.skip_reason === 'needs_structured_check'));
+    const onlyManual = ((run && run.verification_check_results) || []).every((c) => c.status === 'pass' || (c.status === 'skip' && c.skip_reason === 'needs_structured_check'));
     if (onlyManual) gateInput.verify_status = 'completed';
   }
   const closed = runtime.closePhase(state, phase.id, gateInput, {
     closed_commit: commit.commit,
     regression_ref: programLib.relativeRef(projectRoot, regressionFile),
     interfaces_ref: programLib.relativeRef(projectRoot, interfacesFile),
-    run_id: run.run_id || null,
+    run_id: (run && run.run_id) || null,
     plan_ref: paths.plan ? programLib.relativeRef(projectRoot, paths.plan) : null,
   });
   if (gate.deferred && gate.deferred.length) {
@@ -8220,6 +14239,11 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     if (target) target.deferred = [...(target.deferred || []), ...gate.deferred];
   }
   programLib.writeProgram(paths.programDir, closed.state);
+  // close --by-ci: who closed without a phase verify, on which CI run, and the verify gates that were not asked
+  const closeByCi = byCi && byCi.ok ? { run: byCi.run, head: byCi.head, url: byCi.url || null, verify_gates_skipped: closeGates.verify_gates_skipped || [], by: String(options.by), reason: String(options.reason) } : null;
+  if (closeByCi) {
+    try { require('./oxe-change.cjs').appendNdjson(require('./oxe-change.cjs').changesFile(paths.programDir), { kind: 'close_by_ci', phase: phase.id, ...closeByCi, at: new Date().toISOString() }); } catch { /* auxiliar */ }
+  }
   try { projectStateMd(projectRoot, activeSession); } catch { /* projeção auxiliar */ }
   // OXB-117 (e): the one-page phase report, for people.
   let reportFile = null;
@@ -8255,7 +14279,7 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
   } catch { /* o relatório é auxiliar */ }
   appendEvent(projectRoot, activeSession, {
     type: 'PhaseClosed',
-    run_id: run.run_id,
+    run_id: (run && run.run_id) || null,
     payload: {
       phase: phase.id,
       commit: commit.commit,
@@ -8263,32 +14287,80 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
       commit_note: commit.reason,
       regression_checks: regressionChecks.length,
       interface_modules: modules.length,
+      ...(closeByCi ? { close_by_ci: closeByCi } : {}),
     },
   });
+  almAutoSync(projectRoot, activeSession);
   return {
     closed: true,
     phase: phase.id,
     gate,
     commit,
+    ...(closeByCi ? { close_by_ci: closeByCi } : {}),
+    ...(unpromotedAccepted ? { unpromoted_accepted: unpromotedAccepted } : {}),
     report: reportFile,
     rollback_rehearsal: rollbackRehearsal,
     regression_checks: regressionChecks.length,
     interface_modules: modules.length,
+    docs: docsPublished,
     next: runtime.nextOpenPhase(closed.state),
   };
 }
 
 /** Resumo da regressão de fases anteriores: aparece separado no VERIFY e no gate de fase. */
+/**
+ * Bench B25: the verifier saw the frozen tests changed against the plan commit and asked for a new decision — the
+ * official record (CR + `plan amend-test`) never reached it. VERIFY.md lists the amendments of PLAN.json.
+ */
+function acceptanceAmendmentsSection(projectRoot, activeSession) {
+  try {
+    const { doc } = readPlanJsonDoc(projectRoot, activeSession);
+    const rows = [];
+    for (const entry of (doc && Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])) {
+      for (const a of Array.isArray(entry && entry.amended) ? entry.amended : []) {
+        const short = (s) => (s ? String(s).slice(0, 10) : '—');
+        rows.push(`| ${entry.criterion || entry.id || '—'} | ${a.file || '—'} | ${short(a.previous_sha256)} → ${short(a.sha256)} | ${String(a.reason || '—').replace(/\|/g, '\\|')} | ${a.by || '—'} | ${String(a.at || '').slice(0, 10) || '—'} |`);
+      }
+    }
+    if (!rows.length) return '';
+    return [
+      '',
+      '## Emendas de aceite (registro oficial)',
+      '',
+      'Testes congelados alterados pelo caminho oficial (`runtime feedback` → `plan amend-test`). Uma diferença destes arquivos contra o commit do plano é esperada; só um arquivo alterado **fora** desta lista é adulteração.',
+      '',
+      '| Critério | Arquivo | Hash anterior → novo | Motivo (CR) | Por | Quando |',
+      '|---|---|---|---|---|---|',
+      ...rows,
+      '',
+    ].join('\n');
+  } catch {
+    return '';
+  }
+}
+
 function summarizeRegression(regressionChecks, checkResults) {
   if (!regressionChecks.length) return null;
   const ids = new Set(regressionChecks.map((check) => check.id));
   const results = (Array.isArray(checkResults) ? checkResults : []).filter((result) => ids.has(result.check_id));
-  const failed = results.filter((result) => result.status === 'fail' || result.status === 'error');
+  const red = results.filter((result) => result.status === 'fail' || result.status === 'error');
+  // Bench B42: a whole-suite regression check (`npm test`) also runs this phase's frozen tests; while any of them is
+  // red the whole-suite red is not evidence of a regression — reported apart (`masked`), not as a regression.
+  const wholeSuite = new Set(regressionChecks.filter((c) => c.whole_suite).map((c) => c.id));
+  const currentRed = (Array.isArray(checkResults) ? checkResults : []).some((r) => !ids.has(r.check_id) && (r.status === 'fail' || r.status === 'error'));
+  const masked = currentRed ? red.filter((r) => wholeSuite.has(r.check_id)).map((r) => r.check_id) : [];
+  const failed = red.filter((r) => !masked.includes(r.check_id));
   return {
     phases: [...new Set(regressionChecks.map((check) => check.regression_phase))],
     total: regressionChecks.length,
     passed: results.filter((result) => result.status === 'pass').length,
-    failed: failed.map((result) => ({ check_id: result.check_id, error: result.error || null })),
+    ...(masked.length ? { masked } : {}),
+    failed: failed.map((result) => ({
+      check_id: result.check_id,
+      error: result.error || null,
+      // bench B41: one line of why, for the CLI (the full output stays in the evidence file)
+      summary: String(result.error || result.summary || result.stderr || '').split(/\r?\n/).map((l) => l.trim()).find((l) => /not ok|fail|erro|error|tamper|adulter/i.test(l)) || null,
+    })),
   };
 }
 
@@ -8463,10 +14535,13 @@ function projectRuntimeArtifacts(projectRoot, activeSession, options = {}) {
   // execute/verify and used to project "planned / 0 concluídos" over real progress. The stored
   // snapshot is only merged in as a fallback for progress recorded without events.
   let canonicalLive = reduceCanonicalRunStateLive(projectRoot, activeSession, { runState: current });
+  const excludedIds = excludedCompletedIdsFromPlan(projectRoot, activeSession, current && current.run_id ? current.run_id : null);
   if (current.canonical_state) {
-    const stored = mergeCanonicalStateWithRunState(current.canonical_state, current, activeSession, current.compiled_graph);
+    const sanitizedStored = stripTasksFromCanonicalState(current.canonical_state, excludedIds).state;
+    const stored = mergeCanonicalStateWithRunState(sanitizedStored, current, activeSession, current.compiled_graph);
     canonicalLive = canonicalLive ? unionCanonicalStates(canonicalLive, stored) : stored;
   }
+  if (canonicalLive) stripTasksFromCanonicalState(canonicalLive, excludedIds);
   if (!canonicalLive) {
     throw new Error('Não foi possível reconstruir o estado canônico da run.');
   }
@@ -8515,7 +14590,7 @@ function projectRuntimeArtifacts(projectRoot, activeSession, options = {}) {
     ensureDirForFile(paths.state);
     fs.writeFileSync(planStatusPath, projections.plan + '\n', 'utf8');
     // STATE.md and VERIFY.md are curated by people and workflows: only the marked block is ours.
-    writeProjectedBlock(paths.verify, projections.verify, 'Verificação do runtime (projetado)');
+    writeProjectedBlock(paths.verify, `${projections.verify}${acceptanceAmendmentsSection(projectRoot, activeSession)}`, 'Verificação do runtime (projetado)');
     // OXB-121 (contradiction): the top block of STATE.md is written first (a template STATE.md is replaced whole), then the runtime block,, from the same run state, so
     // the two blocks never disagree ("completed 38/38" above, "failed · 0 concluídos · 7 falhos" below).
     try { projectStateMd(projectRoot, activeSession); } catch { /* projeção auxiliar */ }
@@ -9119,6 +15194,8 @@ function writeRunState(projectRoot, activeSession, runState = {}) {
     },
     active_tasks: Array.isArray(runState.active_tasks) ? runState.active_tasks.map(String) : [],
     pending_checkpoints: Array.isArray(runState.pending_checkpoints) ? runState.pending_checkpoints.map(String) : [],
+    // an explicit `runtime pause`, held until `runtime resume` (OxeSpace 15/11)
+    ...(runState.pause_requested && typeof runState.pause_requested === 'object' ? { pause_requested: { reason: String(runState.pause_requested.reason || ''), at: runState.pause_requested.at || null } } : {}),
     retries: Array.isArray(runState.retries) ? runState.retries : [],
     failures: Array.isArray(runState.failures) ? runState.failures : [],
     evidence: Array.isArray(runState.evidence) ? runState.evidence : [],
@@ -9154,6 +15231,10 @@ function writeRunState(projectRoot, activeSession, runState = {}) {
     // OXB-079: the verify's own outcome (program close reads it; dropping it here kept the close on `running`).
     verification_status: typeof runState.verification_status === 'string' ? runState.verification_status : null,
     verified_at: typeof runState.verified_at === 'string' ? runState.verified_at : null,
+    // OXB-124 + lean 1.1: the commit and the tree the phase verify judged. They were written by the verify and dropped
+    // here, so the close never saw them: a code commit made after the verify closed the phase unverified.
+    verification_head: typeof runState.verification_head === 'string' ? runState.verification_head : null,
+    verification_tree: typeof runState.verification_tree === 'string' ? runState.verification_tree : null,
     // 1.19: hash dos testes de aceite do plano congelado no compile; resumo da regressão de fases.
     acceptance_lock: runState.acceptance_lock && typeof runState.acceptance_lock === 'object' ? runState.acceptance_lock : null,
     verification_regression: runState.verification_regression && typeof runState.verification_regression === 'object' ? runState.verification_regression : null,
@@ -9194,30 +15275,70 @@ function writeRunState(projectRoot, activeSession, runState = {}) {
   return payload;
 }
 
+/**
+ * The explicit `runtime pause` that holds a new execute, or null. A pause left on the run of a phase already closed
+ * never holds the next phase (R34).
+ * @returns {{ run: object, pause: { reason: string, at: string|null }, reason: string }|null}
+ */
+function runtimePauseHold(projectRoot, activeSession) {
+  let rs = null;
+  try { rs = readRunState(projectRoot, activeSession); } catch { rs = null; }
+  if (!rs || !rs.pause_requested) return null;
+  try { if (rs.run_id && isClosedPhaseRun(projectRoot, activeSession, rs.run_id)) return null; } catch { /* */ }
+  const p = rs.pause_requested;
+  return { run: rs, pause: p, reason: `run pausado por runtime pause em ${p.at || '?'}${p.reason ? ` (${p.reason})` : ''} — nada roda até oxe-cc runtime resume` };
+}
+
+/**
+ * OxeSpace 15/11: during an execute, neither run file said "running" — `runtime status` showed the old "paused" while
+ * T8 ran. At each task start the run is marked running, with the task as cursor. A pause requested after `sinceMs`
+ * (the execute's start) is never overwritten: the scheduler reads it before the next task.
+ */
+function markRunLive(projectRoot, activeSession, taskId, sinceMs) {
+  try {
+    const rs = readRunState(projectRoot, activeSession);
+    if (!rs || !rs.run_id) return null;
+    if (rs.pause_requested) return null; // an explicit pause holds until runtime resume
+    if (rs.status === 'paused' && (Date.parse(rs.updated_at || '') || 0) >= sinceMs) return null;
+    return writeRunState(projectRoot, activeSession, { ...rs, status: 'running', updated_at: new Date().toISOString(), cursor: { ...(rs.cursor || {}), task: taskId } });
+  } catch { return null; }
+}
+
 function readRunState(projectRoot, activeSession) {
   const p = operationalPaths(projectRoot, activeSession);
   const activeRaw = readTextIfExists(p.activeRun);
   let runId = null;
+  let active = null;
   if (activeRaw) {
     try {
-      runId = JSON.parse(activeRaw).run_id || null;
+      active = JSON.parse(activeRaw);
+      runId = active.run_id || null;
     } catch {
       runId = null;
     }
   }
   if (!runId && fs.existsSync(p.runsDir)) {
-    const files = fs.readdirSync(p.runsDir).filter((name) => name.endsWith('.json')).sort();
+    // the run files only — never the budget ledger next to them (oxe-run-x.budget.json) nor a cache file
+    // (cross-review 15/11: "precheck-cache.json" sorts after "oxe-run-…" and would be read as the latest run)
+    const files = fs.readdirSync(p.runsDir).filter((name) => name.endsWith('.json') && !/\.budget\.json$|cache\.json$/i.test(name)).sort();
     if (files.length) runId = files[files.length - 1].replace(/\.json$/i, '');
   }
   if (!runId) return null;
   const filePath = path.join(p.runsDir, `${runId}.json`);
   const raw = readTextIfExists(filePath);
   if (!raw) return null;
+  let run;
   try {
-    return JSON.parse(raw);
+    run = JSON.parse(raw);
   } catch {
     return null;
   }
+  // OxeSpace 15/11 (OxeChat F3): state.json showed "planned" for the run whose ACTIVE-RUN said paused/running — the two
+  // files had drifted. The newer of the two (updated_at) wins for the live fields.
+  if (active && active.run_id === run.run_id && active.status && (Date.parse(active.updated_at || '') || 0) > (Date.parse(run.updated_at || '') || 0)) {
+    run = { ...run, status: active.status, updated_at: active.updated_at, ...(active.cursor ? { cursor: active.cursor } : {}), ...(active.current_wave != null ? { current_wave: active.current_wave } : {}) };
+  }
+  return run;
 }
 
 function readGitActivity(projectRoot, since) {
@@ -9439,7 +15560,11 @@ function applyRuntimeAction(projectRoot, activeSession, input = {}) {
   if (action === 'pause') {
     next.status = 'paused';
     next.metrics.pause_count = Number((current.metrics || {}).pause_count || 0) + 1;
+    // OxeSpace 15/11 (OQ polish wave 8, OxeChat F4 T9): an explicit pause holds until `runtime resume` — a new execute
+    // refuses and a running one stops at the next attempt boundary (a status alone was overwritten as "running")
+    next.pause_requested = { reason: input.reason || '', at: now };
   } else if (action === 'resume') {
+    delete next.pause_requested;
     next.status = pendingCheckpoints.length ? 'waiting_approval' : 'running';
   } else if (action === 'replay') {
     next.status = 'replaying';
@@ -9613,6 +15738,8 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 
 module.exports = {
   relatedTestsCommand,
+  relatedRedsOfTask,
+  failingTestFiles,
   runtimePlanSkeleton,
   runtimeProgramMember,
   runtimeProgramQueue,
@@ -9622,6 +15749,8 @@ module.exports = {
   runtimePlanBuild,
   runtimeSpecStress,
   implicitPhaseGates,
+  phaseSuitesGates,
+  programCloseGateReasons,
   runtimeNfr,
   runtimeWaive,
   runtimeRepair,
@@ -9644,6 +15773,28 @@ module.exports = {
   runtimeHandoff,
   runtimeContextUsage,
   runtimeDecision,
+  runtimeGrill,
+  runtimeAlmRefine,
+  runtimeQuick,
+  runtimeCheckOrigin,
+  runtimeShipPr,
+  runtimeCommitMsg,
+  runtimeTrace,
+  runtimeGrooming,
+  runtimeAlmAdmin,
+  traceGateFindings,
+  traceSnapshot,
+  runtimeAlmRefineImport,
+  runtimeAlmMetrics,
+  grillPaths,
+  runtimeSpecCheck,
+  runtimeSpecApprove,
+  specApproval,
+  runtimeDeliveryStatus,
+  readPlanJsonDoc,
+  activeProgramPhase,
+  prdPathFor,
+  resolveRuntimeArtifactPaths,
   runtimeDefects,
   projectStatusPaths,
   runtimePlanReopen,
@@ -9666,8 +15817,10 @@ module.exports = {
   runtimeProgramPhaseAdd,
   runtimeProgramExport,
   runtimeProgramPhaseEdit,
+  runtimeProgramPhaseRestoreClose,
   runtimeChangeSetStatus,
   runtimeProgramCriterionMove,
+  runtimeProgramRegressionRepin,
   oxeHistoryWarning,
   runtimeSync,
   runtimePromote,
@@ -9678,6 +15831,28 @@ module.exports = {
   runtimeScorecard,
   runtimePlanDone,
   runtimeCommitTask,
+  runtimeCommitTasksTogether,
+  applyTaskGatesToGraph,
+  reopeningCrsOf,
+  runtimePlanScopeAdd,
+  runtimePlanTaskEdit,
+  runtimePlanTaskFold,
+  runtimePlanVerifyPrune,
+  runtimePlanVerifyEdit,
+  runtimePlanVerifyAdd,
+  runtimePlanPackSync,
+  runtimePlanTaskSupersede,
+  runtimePauseHold,
+  commitTaskVerifyTimeout,
+  isClosedPhaseRun,
+  pruneVerifyCommand,
+  isExternallyDelivered,
+  runtimeReuseAttempt,
+  runtimeFailureCost,
+  attachAcceptanceLock,
+  runtimePlanPackFix,
+  runtimePlanPackReady,
+  uiCardGaps,
   writeTaskVerifyFresh,
   findTaskCheckpoint,
   taskCommitShas,
@@ -9693,6 +15868,17 @@ module.exports = {
   buildNodeContextProvider,
   detectRuntimeAdapters,
   runtimeProgramStatus,
+  phasePlanReadiness,
+  looksLikeStaticFileApp,
+  packSymbolProblems,
+  productDocsLint,
+  runtimePrd,
+  runtimeRfc,
+  runtimeDocsPublish,
+  runtimeAlm,
+  almAutoSync,
+  detectMergedPrs,
+  lintPlanForCommonPitfalls,
   runtimeRollback,
   commitTaskCheckpoint,
   runtimeStartTask,
@@ -9707,6 +15893,9 @@ module.exports = {
   runtimeProgramInit,
   runtimeProgramStart,
   runtimeProgramClose,
+  runtimePhaseClose,
+  runtimePlanMutate,
+  findUnpromotedDoneTasks,
   phaseChanges,
   phaseGateInputFromRun,
   readExecutorUsageRows,
@@ -9719,6 +15908,9 @@ module.exports = {
   summarizeEvents,
   writeRunState,
   readRunState,
+  markRunLive,
+  sweepCheckpointWorkspaces,
+  sweepStalePromoteWorkspaces,
   readGitActivity,
   verifyGitEvidence,
   runtimeStateWarnings,

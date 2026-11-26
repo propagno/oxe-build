@@ -9,6 +9,7 @@ updated: YYYY-MM-DD
   - status: open (aguardando respostas) | closed (todas as decisões tomadas)
   - Atribuir IDs D-01, D-02, … sequencialmente às decisões fechadas.
   - Referenciar D-NN em PLAN.md (campo "Decisão vinculada:") e VERIFY.md (tabela Fidelidade de decisões).
+  - Ao fechar: `oxe-cc decision import` traz a tabela para .oxe/program/decisions.ndjson e publica os ADRs em docs/adr/.
 -->
 
 # OXE — Discuss

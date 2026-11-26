@@ -51,14 +51,28 @@ function checkSteps(steps, where, errors) {
   });
 }
 
+function insideFolder(folder, rel) {
+  if (!rel || typeof rel !== 'string') return null;
+  const base = path.resolve(folder);
+  const abs = path.resolve(base, rel);
+  const diff = path.relative(base, abs);
+  if (diff.startsWith('..') || path.isAbsolute(diff)) return null;
+  return abs;
+}
+
 function validate(folder, options = {}) {
   const errors = [];
   let doc;
   try { doc = read(folder); } catch (err) { return { ok: false, errors: [err.message], doc: null }; }
   if (doc.schema !== 1) errors.push(`schema: esperado 1 (veio ${doc.schema})`);
   if (!doc.sha || !/^[0-9a-f]{7,40}$/i.test(String(doc.sha))) errors.push('sha: o commit avaliado é obrigatório');
-  if (options.head && doc.sha && !String(options.head).startsWith(String(doc.sha)) && !String(doc.sha).startsWith(String(options.head))) errors.push(`sha ${String(doc.sha).slice(0, 10)}: o pacote avaliou outro commit (HEAD ${String(options.head).slice(0, 10)})`);
+  if (options.head && doc.sha) {
+    const h = String(options.head).toLowerCase();
+    const s = String(doc.sha).toLowerCase();
+    if (!h.startsWith(s) && !s.startsWith(h)) errors.push(`sha ${String(doc.sha).slice(0, 10)}: o pacote avaliou outro commit (HEAD ${String(options.head).slice(0, 10)})`);
+  }
   const threshold = Number(doc.diff_threshold ?? options.diffThreshold ?? 0.01);
+  if (!Number.isFinite(threshold) || threshold < 0) errors.push(`diff_threshold inválido (${doc.diff_threshold})`);
   const required = options.matrix || doc.matrix;
   if (!required || typeof required !== 'object') errors.push('matrix: declare locale × tema × SO');
   const runs = Array.isArray(doc.runs) ? doc.runs : [];
@@ -73,15 +87,29 @@ function validate(folder, options = {}) {
     if (!caps.length) errors.push(`${at}: sem capturas`);
     const a11y = new Map((Array.isArray(r.a11y) ? r.a11y : []).map((a) => [a && a.state, a]));
     for (const cap of caps) {
-      if (!cap || !cap.file || !fs.existsSync(path.join(folder, cap.file))) errors.push(`${at}: captura ${cap && cap.file} não existe no pacote`);
-      if (cap && cap.baseline && !fs.existsSync(path.join(folder, cap.baseline))) errors.push(`${at}: baseline ${cap.baseline} não existe`);
+      const capAbs = cap && cap.file ? insideFolder(folder, cap.file) : null;
+      if (cap && cap.file && !capAbs) errors.push(`${at}: captura ${cap.file} escapa da pasta do pacote`);
+      else if (!capAbs || !fs.existsSync(capAbs)) errors.push(`${at}: captura ${cap && cap.file} não existe no pacote`);
+      if (cap && cap.baseline) {
+        const baseAbs = insideFolder(folder, cap.baseline);
+        if (!baseAbs) errors.push(`${at}: baseline ${cap.baseline} escapa da pasta do pacote`);
+        else if (!fs.existsSync(baseAbs)) errors.push(`${at}: baseline ${cap.baseline} não existe`);
+      }
       if (cap && cap.baseline && cap.diff_ratio == null) errors.push(`${at}: ${cap.state}: diff visual não medido contra a baseline`);
-      if (cap && Number(cap.diff_ratio) > threshold) errors.push(`${at}: ${cap.state}: diff visual ${cap.diff_ratio} acima do limite ${threshold}`);
+      if (cap && cap.diff_ratio != null) {
+        const dr = Number(cap.diff_ratio);
+        if (typeof cap.diff_ratio === 'boolean' || String(cap.diff_ratio).trim() === '' || !Number.isFinite(dr) || dr < 0) errors.push(`${at}: ${cap.state}: diff visual inválido (${cap.diff_ratio})`);
+        else if (Number.isFinite(threshold) && dr > threshold) errors.push(`${at}: ${cap.state}: diff visual ${cap.diff_ratio} acima do limite ${threshold}`);
+      }
       const a = a11y.get(cap && cap.state);
       if (!a) errors.push(`${at}: ${cap && cap.state}: sem relatório de acessibilidade`);
       else {
-        if (!a.file || !fs.existsSync(path.join(folder, a.file))) errors.push(`${at}: ${cap.state}: relatório de acessibilidade ${a.file} não existe`);
-        if (Number(a.violations) > 0) errors.push(`${at}: ${cap.state}: ${a.violations} violação(ões) de acessibilidade`);
+        const aAbs = a.file ? insideFolder(folder, a.file) : null;
+        if (a.file && !aAbs) errors.push(`${at}: ${cap.state}: relatório de acessibilidade ${a.file} escapa da pasta do pacote`);
+        else if (!aAbs || !fs.existsSync(aAbs)) errors.push(`${at}: ${cap.state}: relatório de acessibilidade ${a.file} não existe`);
+        const vCount = Array.isArray(a.violations) ? a.violations.length : (a.violations == null || typeof a.violations === 'boolean' || String(a.violations).trim() === '' ? NaN : Number(a.violations));
+        if (!Number.isFinite(vCount) || vCount < 0) errors.push(`${at}: ${cap.state}: contagem de violações inválida (${a.violations})`);
+        else if (vCount > 0) errors.push(`${at}: ${cap.state}: ${vCount} violação(ões) de acessibilidade`);
       }
     }
   });
@@ -126,11 +154,13 @@ function freeze(projectRoot, folder, options = {}) {
   const v = validate(folder, options);
   const doc = v.doc;
   if (!doc) throw new Error(v.errors[0]);
-  const dir = options.testDir || 'tests/ui-regression';
+  const dir = String(options.testDir || 'tests/ui-regression').replace(/\\/g, '/').replace(/\/+$/, '');
   const out = [];
   for (const f of (doc.findings || []).filter((x) => x && x.id && Array.isArray(x.steps) && x.steps.length)) {
-    const rel = `${dir}/${String(f.id).replace(/[^A-Za-z0-9_-]+/g, '-')}.spec.js`;
-    const abs = path.join(projectRoot, rel);
+    const safeId = String(f.id).replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'finding';
+    const rel = `${dir}/${safeId}.spec.js`;
+    const abs = insideFolder(projectRoot, rel);
+    if (!abs) throw new Error(`testDir inválido: ${dir}`);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     fs.writeFileSync(abs, renderTest(f, doc));
     out.push({ finding: f.id, file: rel, criteria: doc.criteria || [] });
@@ -144,8 +174,14 @@ function uiStandingCriteria(config, standing, specText) {
   if (config && config.ui_evidence && Array.isArray(config.ui_evidence.criteria)) return config.ui_evidence.criteria.map((c) => String(c).toUpperCase());
   if (!(config && config.ui_evidence && config.ui_evidence.standing === true)) return [];
   const rows = new Map();
-  for (const m of String(specText || '').matchAll(/^\|\s*(A\d+)\s*\|\s*([^|]*)\|/gm)) rows.set(m[1], m[2]);
-  return (standing || []).filter((c) => UI_TEXT_RE.test(rows.get(c) || ''));
+  for (const m of String(specText || '').matchAll(/^\|\s*((?:A|G)\d+(?:\.\d+)*)\s*\|\s*((?:\\.|[^|])*)\|/gim)) {
+    rows.set(m[1].toUpperCase(), m[2].replace(/\\\|/g, '|'));
+  }
+  return (standing || []).filter((c) => {
+    const id = String(c || '').toUpperCase();
+    const txt = rows.get(id) || (id.includes('.') ? rows.get(id.split('.')[0]) : '') || '';
+    return UI_TEXT_RE.test(txt);
+  });
 }
 
 module.exports = { FILE, validate, freeze, renderTest, cells, uiStandingCriteria };

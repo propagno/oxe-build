@@ -3,8 +3,12 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ALL_BUILT_IN_SCHEMAS = exports.BUILT_IN_TOOLS = exports.PathContainmentError = void 0;
+exports.ALL_BUILT_IN_SCHEMAS = exports.BUILT_IN_TOOLS = exports.BoundedOutput = exports.PathContainmentError = void 0;
 exports.resolveWithin = resolveWithin;
+exports.realPathOf = realPathOf;
+exports.samePathKey = samePathKey;
+exports.windowsNullRedirects = windowsNullRedirects;
+exports.setFinishTaskGuard = setFinishTaskGuard;
 exports.setQuestionResolver = setQuestionResolver;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
@@ -29,7 +33,54 @@ function resolveWithin(cwd, candidate) {
         return target;
     if (rel.startsWith('..') || path_1.default.isAbsolute(rel))
         throw new PathContainmentError(candidate);
+    // External review 15/11 (P0-2): a path through a symlink or a junction (the runtime itself links node_modules into
+    // worktrees) lexically inside the root can land outside it. The REAL path must stay inside the real root.
+    const realRoot = realPathOf(root);
+    const realRel = path_1.default.relative(samePathKey(realRoot), samePathKey(realPathOf(target)));
+    if (realRel !== '' && (realRel.startsWith('..') || path_1.default.isAbsolute(realRel)))
+        throw new PathContainmentError(candidate);
     return target;
+}
+/**
+ * The real path of `p`, following links. For a path that does not exist yet (a new file), the real path of its
+ * nearest existing ancestor joined with the rest — a write through a linked directory is resolved too.
+ */
+function realPathOf(p, depth = 0) {
+    let cur = path_1.default.resolve(p);
+    const rest = [];
+    for (;;) {
+        try {
+            const real = fs_1.default.realpathSync.native(cur);
+            return rest.length ? path_1.default.join(real, ...rest.reverse()) : real;
+        }
+        catch {
+            // Cross-review 15/11: a DANGLING link (its target does not exist yet) fails realpath too; climbing past it
+            // would answer "inside" while a write follows the link out. Resolve the link's target instead.
+            let link = null;
+            try {
+                if (fs_1.default.lstatSync(cur).isSymbolicLink())
+                    link = fs_1.default.readlinkSync(cur);
+            }
+            catch {
+                link = null;
+            }
+            if (link !== null) {
+                if (depth >= 40)
+                    throw new PathContainmentError(p);
+                const target = path_1.default.resolve(path_1.default.dirname(cur), link);
+                return realPathOf(rest.length ? path_1.default.join(target, ...rest.reverse()) : target, depth + 1);
+            }
+            const parent = path_1.default.dirname(cur);
+            if (parent === cur)
+                return path_1.default.resolve(p);
+            rest.push(path_1.default.basename(cur));
+            cur = parent;
+        }
+    }
+}
+/** Case-insensitive file systems (Windows, macOS): paths compare in lower case. */
+function samePathKey(p) {
+    return process.platform === 'win32' || process.platform === 'darwin' ? p.toLowerCase() : p;
 }
 // ─── read_file ────────────────────────────────────────────────────────────────
 const readFile = {
@@ -161,6 +212,9 @@ function globSync(pattern, root) {
             const matches = micromatch(entry.name, head);
             if (!matches)
                 continue;
+            // links (symlinks, junctions) are never walked into: the search stays in the real workspace
+            if (entry.isSymbolicLink())
+                continue;
             const full = path_1.default.join(dir, entry.name);
             if (tail.length === 0) {
                 results.push(path_1.default.relative(root, full).replace(/\\/g, '/'));
@@ -234,6 +288,8 @@ function grepDir(dir, regex, root, out) {
         const full = path_1.default.join(dir, entry.name);
         if (out.length > GREP_MAX_MATCHES * 5)
             return;
+        if (entry.isSymbolicLink())
+            continue; // links are not followed (see globSync)
         if (entry.isDirectory() && !entry.name.startsWith('.') && !GREP_SKIP_DIRS.has(entry.name)) {
             grepDir(full, regex, root, out);
         }
@@ -269,7 +325,7 @@ const runCommand = {
         type: 'function',
         function: {
             name: 'run_command',
-            description: 'Run a shell command in the workspace directory',
+            description: 'Run a shell command in the workspace directory (on Windows the shell is cmd.exe: discard output with 2>nul; elsewhere sh: 2>/dev/null). The output is cut to its first and last 64 KB, and a command printing more than 64 MB is stopped. node_modules may be a link to a shared dependencies folder: exclude node_modules, dist and .git from recursive grep/find/cat (prefer the search tool).',
             parameters: {
                 type: 'object',
                 properties: {
@@ -286,9 +342,60 @@ const runCommand = {
         return runShell(command, cwd, timeoutMs);
     },
 };
+/**
+ * OxeSpace 14/11 (P0): a command that printed more than ~512 MB (a recursive grep that followed the node_modules
+ * junction) made `Buffer.concat(out).toString()` throw ERR_STRING_TOO_LONG and killed the whole run. The output is now
+ * bounded: the first and the last `keep` bytes, with the count of what was cut; past `hardLimit` the command is killed.
+ */
+class BoundedOutput {
+    constructor(keep = 64 * 1024, hardLimit = 64 * 1024 * 1024) {
+        this.keep = keep;
+        this.hardLimit = hardLimit;
+        this.head = [];
+        this.headBytes = 0;
+        this.tail = [];
+        this.tailBytes = 0;
+        this.total = 0;
+    }
+    push(chunk) {
+        this.total += chunk.length;
+        let c = chunk;
+        if (this.headBytes < this.keep) {
+            const take = Math.min(this.keep - this.headBytes, c.length);
+            this.head.push(c.subarray(0, take));
+            this.headBytes += take;
+            c = c.subarray(take);
+        }
+        if (!c.length)
+            return;
+        this.tail.push(c);
+        this.tailBytes += c.length;
+        while (this.tail.length > 1 && this.tailBytes - this.tail[0].length >= this.keep)
+            this.tailBytes -= this.tail.shift().length;
+    }
+    get overLimit() { return this.total > this.hardLimit; }
+    text() {
+        const head = Buffer.concat(this.head).toString('utf8');
+        let tail = Buffer.concat(this.tail);
+        if (tail.length > this.keep)
+            tail = tail.subarray(tail.length - this.keep);
+        const cut = this.total - this.headBytes - tail.length;
+        if (cut <= 0)
+            return (head + tail.toString('utf8')).trim();
+        return `${head}\n[… ${cut} bytes cortados da saída (${this.total} no total) — restrinja o comando: exclua node_modules, dist e .git de buscas recursivas …]\n${tail.toString('utf8')}`.trim();
+    }
+}
+exports.BoundedOutput = BoundedOutput;
+/**
+ * OxeSpace 14/11 (OxeChat F2 T5): the agent ran `… 2>$null` (PowerShell) through cmd.exe, which created a file named
+ * `$null` in the worktree (a ScopeViolation). On Windows, a redirect to `$null` or `/dev/null` goes to `nul`.
+ */
+function windowsNullRedirects(command) {
+    return command.replace(/(\d?>>?|&>)\s*(?:\$null|\/dev\/null)(?![\w/])/gi, (_m, op) => (op === '&>' ? '>nul 2>&1' : `${op}nul`));
+}
 function runShell(command, cwd, timeoutMs) {
     return new Promise((resolve) => {
-        const shell = (0, shell_argv_1.shellInvocation)(command);
+        const shell = (0, shell_argv_1.shellInvocation)(process.platform === 'win32' ? windowsNullRedirects(command) : command);
         // stdin is closed so a command that waits for input (e.g. grep without a file) ends instead of hanging.
         const proc = (0, child_process_1.spawn)(shell.file, shell.args, {
             cwd,
@@ -296,15 +403,25 @@ function runShell(command, cwd, timeoutMs) {
             stdio: ['ignore', 'pipe', 'pipe'],
             windowsVerbatimArguments: shell.windowsVerbatimArguments,
         });
-        const out = [];
+        const out = new BoundedOutput();
         let timedOut = false;
+        let killedForSize = false;
         const timer = setTimeout(() => { timedOut = true; proc.kill('SIGTERM'); }, timeoutMs);
-        proc.stdout.on('data', (c) => out.push(c));
-        proc.stderr.on('data', (c) => out.push(c));
+        const onData = (c) => {
+            out.push(c);
+            if (out.overLimit && !killedForSize) {
+                killedForSize = true;
+                proc.kill('SIGTERM');
+            }
+        };
+        proc.stdout.on('data', onData);
+        proc.stderr.on('data', onData);
         proc.on('close', (code) => {
             clearTimeout(timer);
-            const text = Buffer.concat(out).toString('utf8').trim();
-            if (timedOut)
+            const text = out.text();
+            if (killedForSize)
+                resolve(`[interrompido: a saída passou de ${Math.round(out.hardLimit / (1024 * 1024))} MB — o comando foi parado; restrinja-o (exclua node_modules de buscas recursivas)]\n${text}`);
+            else if (timedOut)
                 resolve(`[timed out after ${timeoutMs}ms]\n${text}`);
             else
                 resolve(code === 0 ? text || '(no output)' : `[exit ${code}]\n${text}`);
@@ -312,7 +429,15 @@ function runShell(command, cwd, timeoutMs) {
         proc.on('error', (err) => { clearTimeout(timer); resolve(`[error] ${err}`); });
     });
 }
-// ─── finish_task ──────────────────────────────────────────────────────────────
+let finishTaskGuard = null;
+/**
+ * OXB-C1 Adendo 2: optional synchronous guard checked inside `finish_task` (e.g. file-size cap check)
+ * so oversized files fail inside the SAME executor attempt for free instead of ending the attempt and
+ * paying for a second attempt after checkpoint failure.
+ */
+function setFinishTaskGuard(fn) {
+    finishTaskGuard = fn;
+}
 const finishTask = {
     idempotent: true,
     schema: {
@@ -330,7 +455,21 @@ const finishTask = {
             },
         },
     },
-    async execute(args, _cwd) {
+    async execute(args, cwd) {
+        if (finishTaskGuard) {
+            try {
+                const res = finishTaskGuard(cwd, args);
+                if (res && res.ok === false) {
+                    return JSON.stringify({
+                        __finish_task__: false,
+                        error: String(res.error || 'finish_task recusado pela validação pré-conclusão'),
+                    });
+                }
+            }
+            catch {
+                // Guard failure must never crash the tool handler
+            }
+        }
         return JSON.stringify({
             __finish_task__: true,
             summary: String(args.summary || ''),

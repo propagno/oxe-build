@@ -11,7 +11,8 @@ const op = require('../bin/lib/oxe-operational.cjs');
 // 1.21.2 — OXB-200: `oxe-cc runtime commit-task <Tn> [--by <agent|role>] [--skip-verify-if-fresh]`
 
 const dirs = [];
-after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); });
+// a verify killed by its timeout can leave its grandchild alive a moment on Windows (shell: true): retry the removal
+after(() => { for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); } catch { /* temp dir */ } } });
 const CLI = path.join(__dirname, '..', 'bin', 'oxe-cc.js');
 const git = (cwd, ...args) => spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
 const write = (dir, rel, content) => {
@@ -195,5 +196,28 @@ describe('OXB-200: `oxe-cc runtime commit-task <Tn>` atomic CLI for external sub
     assert.equal(parsed.ok, true);
     assert.equal(parsed.verify_skipped, true, 'skipped re-running verify command because fresh green log was present');
     assert.equal(fs.existsSync(flagPath), false, 'verify command process was indeed skipped');
+  });
+
+  it('uses the config verify_timeout_ms and says "estourou o tempo" when the verify is killed by it (OxeSpace 15/11, OQ T18)', () => {
+    const dir = makeProject();
+    const doc = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8'));
+    doc.tasks[1].verify.commands = ['node -e "setTimeout(() => {}, 2000)"'];
+    write(dir, '.oxe/PLAN.json', doc);
+    write(dir, '.oxe/config.json', { external_dependency_check: false, checkpoint_commits: true, verify_timeout_ms: 400 });
+    write(dir, 'src/second.js', 'module.exports = { mul: (a, b) => a * b };\n');
+    assert.throws(() => op.runtimeCommitTask(dir, null, { task: 'T2', by: 'tl' }), /verify de T2 estourou o tempo .*0 s|verify de T2 estourou o tempo/);
+    // the explicit option still wins: a long one lets the verify finish (exit 0)
+    doc.tasks[1].verify.commands = ['node -e "setTimeout(() => {}, 600)"'];
+    write(dir, '.oxe/PLAN.json', doc);
+    const out = op.runtimeCommitTask(dir, null, { task: 'T2', by: 'tl', verifyTimeoutMs: 20_000 });
+    assert.equal(out.ok, true);
+  });
+
+  it('R53: a remote-verify command gets at least its own 30 min above verify_timeout_ms; an explicit option wins', () => {
+    const t = op.commitTaskVerifyTimeout;
+    assert.equal(t('.', {}, 'node scripts/remote-verify.mjs --job e2e', 900_000), 30 * 60_000);
+    assert.equal(t('.', {}, 'node scripts/remote-verify.mjs', 45 * 60_000), 45 * 60_000, 'a larger config stays');
+    assert.equal(t('.', {}, 'npx vitest run', 900_000), 900_000);
+    assert.equal(t('.', { verifyTimeoutMs: 60_000 }, 'node scripts/remote-verify.mjs', 900_000), 60_000);
   });
 });

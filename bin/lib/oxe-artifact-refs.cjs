@@ -14,14 +14,30 @@ function readConfig(projectRoot) {
   try { return JSON.parse(fs.readFileSync(path.join(projectRoot, '.oxe', 'config.json'), 'utf8')) || {}; } catch { return {}; }
 }
 
+function isInsideRoot(rootAbs, targetAbs) {
+  const rel = path.relative(rootAbs, targetAbs);
+  return Boolean(rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel)));
+}
+
 /** Configured refs, resolved: { spec, roadmap } with { configured, path, exists } each (null when not configured). */
 function artifactRefs(projectRoot) {
-  const config = readConfig(projectRoot);
+  const rootAbs = path.resolve(projectRoot);
+  const config = readConfig(rootAbs);
   const one = (key) => {
     const raw = typeof config[key] === 'string' ? config[key].trim() : '';
     if (!raw) return null;
-    const abs = path.resolve(projectRoot, raw);
-    return { configured: raw, path: abs, exists: fs.existsSync(abs) };
+    const abs = path.resolve(rootAbs, raw);
+    if (!isInsideRoot(rootAbs, abs)) {
+      return { configured: raw, path: abs, exists: false, outside_root: true };
+    }
+    let isFile = false;
+    let isDir = false;
+    try {
+      const st = fs.statSync(abs);
+      isFile = st.isFile();
+      isDir = st.isDirectory();
+    } catch { /* absent */ }
+    return { configured: raw, path: abs, exists: isFile, ...(isDir ? { is_directory: true } : {}) };
   };
   return { spec: one('spec_ref'), roadmap: one('roadmap_ref') };
 }
@@ -40,6 +56,8 @@ function refWarnings(projectRoot) {
   for (const [key, name] of [['spec', 'SPEC.md'], ['roadmap', 'ROADMAP.md']]) {
     const ref = refs[key];
     if (!ref) continue;
+    if (ref.outside_root) { out.push(`${key}_ref aponta para ${ref.configured}, fora da raiz do repositório — ignorado; o runtime usa .oxe/${name}`); continue; }
+    if (ref.is_directory) { out.push(`${key}_ref aponta para ${ref.configured}, que é uma pasta (esperado um arquivo ${name}) — o runtime usa .oxe/${name}`); continue; }
     if (!ref.exists) { out.push(`${key}_ref aponta para ${ref.configured}, que não existe — o runtime usa .oxe/${name}`); continue; }
     const copy = path.join(projectRoot, '.oxe', name);
     if (path.resolve(copy) !== path.resolve(ref.path) && fs.existsSync(copy)) {

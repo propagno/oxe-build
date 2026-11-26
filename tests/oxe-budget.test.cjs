@@ -79,3 +79,17 @@ describe('scheduler respeita o orçamento', () => {
     assert.equal(result.blocked.length, 1);
   });
 });
+
+describe('o teto de US$ vale antes da próxima tentativa (OxeSpace 14/11, OxeCode F4)', () => {
+  const budget = require('../bin/lib/oxe-budget.cjs');
+  it('com US$ 59,69 de 60 e tentativas de ~US$ 3,5, a próxima não começa', () => {
+    const ledger = { limit_usd: 60, used_usd: 59.69, limit_turns: null, used_turns: 0, attempts: [{ cost_usd: 3.4 }, { cost_usd: 3.6 }] };
+    assert.match(budget.exhaustedReason(ledger), /restam US\$ 0\.31 de 60\.00 e uma tentativa custa em média US\$ 3\.50/);
+    ledger.used_usd = 50;
+    assert.equal(budget.exhaustedReason(ledger), null, 'with room for one more attempt');
+  });
+  it('sem histórico de custo, só o teto puro', () => {
+    assert.equal(budget.exhaustedReason({ limit_usd: 60, used_usd: 59.69, attempts: [] }), null);
+    assert.match(budget.exhaustedReason({ limit_usd: 60, used_usd: 60, attempts: [] }), /budget_usd: US\$ 60\.00\/60\.00/);
+  });
+});

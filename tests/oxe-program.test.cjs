@@ -270,3 +270,31 @@ describe('fase com critério UAT (1.20 sign-off)', () => {
     }
   });
 });
+
+// 1.21.2 — oxespace-152-code: the F1 close committed onto the branch of PR #792, already queued in the merge train
+// (and added an ADR index nobody asked for). A branch with an open PR gets no phase commit unless --force-branch.
+describe('program close on a branch with an open PR', () => {
+  it('closes the phase, makes no commit, says why; no docs written without docs_publish', { skip: !hasGit }, async () => {
+    const tmp = makeProject();
+    try {
+      op.runtimeProgramInit(tmp, null);
+      op.runtimeProgramStart(tmp, null);
+      writePhaseArtifacts(tmp, SPEC1, PLAN1, PACK1);
+      await op.runRuntimeExecute(tmp, null, { executor: writer({ 'src/store.js': 'function save(item) { return item; }\nmodule.exports = { save };\n' }), skipPreflight: true });
+      await op.runRuntimeVerify(tmp, null);
+      writeHandoff(tmp);
+      const head = git(tmp, ['rev-parse', 'HEAD']).stdout.trim();
+      const calls = [];
+      const ghSpawn = (cmd, args) => { calls.push([cmd, ...args].join(' ')); return { status: 0, stdout: JSON.stringify([{ number: 792, url: 'https://github.com/o/r/pull/792' }]), stderr: '' }; };
+      const closed = op.runtimeProgramClose(tmp, null, { commit: true, ghSpawn });
+      assert.equal(closed.closed, true, JSON.stringify(closed.gate));
+      assert.equal(closed.commit.committed, false);
+      assert.match(closed.commit.reason, /tem PR aberto \(https:\/\/github\.com\/o\/r\/pull\/792\).*--force-branch/);
+      assert.equal(git(tmp, ['rev-parse', 'HEAD']).stdout.trim(), head, 'no new commit');
+      assert.ok(calls.some((c) => /^gh pr list --head \S+ --state open/.test(c)));
+      assert.equal(fs.existsSync(path.join(tmp, 'docs')), false, 'the close writes no docs/ without docs_publish');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});

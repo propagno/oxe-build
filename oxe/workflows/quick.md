@@ -8,6 +8,18 @@ Quando o trabalho envolve **2 ou mais domínios distintos** (ex.: backend + fron
 Usar quando: correção pontual, refactor local, feature pequena ou protótipo que **não** justifica critérios de aceite completos.
 </objective>
 
+<caminho_curto>
+## Caminho curto (padrão) — nenhum passo é opcional
+Use este caminho quando o pedido cabe em um domínio e em poucos arquivos (correção pontual, ajuste local). Não leia o resto deste arquivo nesse caso. O quick sem estes comandos não deixa registro nem trailer: implementar e commitar à mão **não** é um quick.
+
+1. `oxe-cc quick <KEY> "<objetivo em uma frase>"` — `<KEY>` é a chave do card, do CR ou um rótulo curto (`QK-01`). Abre o registro e diz os trailers.
+2. Implemente. Mudou comportamento: inclua ou ajuste um teste. Não toque em teste de aceite congelado.
+3. `oxe-cc quick commit -m "<tipo>: <resumo>" --all` — o CLI commita com `OXE-Quick`. (Commit é local; não precisa de outro OK além do pedido do quick.)
+4. `oxe-cc quick done --verify "<comando da suíte>"` — o CLI roda a verificação e só fecha com ela verde. Vermelha: corrija e repita o passo 3 e este.
+5. Responda em até 6 linhas: objetivo, o que mudou, a verificação (comando e resultado) e o próximo passo de `oxe-cc status --json`.
+Passe ao fluxo completo abaixo (QUICK.md com passos, agentes PDDA) só quando houver 2 ou mais domínios, 5 ou mais passos ou a flag `--agents`. Mais de 8 arquivos, contrato público ou segurança: pare e recomende `/oxe-spec`.
+</caminho_curto>
+
 <context>
 - Aplicar `oxe/workflows/references/reasoning-planning.md` em modo lean. Mesmo sem plano formal completo, o quick deve explicitar objetivo, validação, riscos e condição de promoção.
 - Seguir `oxe/workflows/references/flow-robustness-contract.md`. Quick continua leve, mas não pode fingir que existe plano formal quando ele não existe.
@@ -147,7 +159,7 @@ Se **sim**, o próximo passo recomendado no chat é **`/oxe-spec`** (depois disc
 0. **Git safety check (pré-execução):** antes de criar ou substituir QUICK.md, verificar `git status` do projeto (se `.git` existir). Se houver mudanças não commitadas **não relacionadas** ao objetivo deste quick, alertar: *"Existem mudanças não commitadas. Quer commitar antes de começar este quick?"* — não bloquear a execução, apenas perguntar. Prosseguir se o usuário confirmar ou se não houver git.
 1. Garantir `.oxe/` (usar template de STATE só se `STATE.md` não existir). Verificar `OBSERVATIONS.md` do escopo resolvido — se houver entradas `pendente` com impacto `all`, registrar como restrições nos **Passos** ou no **Contexto** do QUICK.md antes de finalizar; marcar as OBS como `incorporada → quick (data)`.
 2. Avaliar se PDDA lean se aplica (ver `<plan_driven_dynamic_agents_lean>` — domínios distintos, 5+ passos, ou flag `--agents`).
-3. Criar ou substituir **`QUICK.md`** no escopo resolvido com:
+3. **Abrir o quick pelo CLI** (registro verificável, G9): `oxe-cc quick <KEY> "<objetivo>"` — ou `oxe-cc quick --from-card <KEY>` para pré-popular automaticamente o objetivo a partir de `.oxe/alm/refine/<KEY>.json` / `.oxe/alm/specs/<KEY>.md` (sem ALM, `oxe-cc quick "<objetivo>"`; adicione `--no-alm` em execuções paralelas). Ele grava `.oxe/quick/<id>.json`, escreve o cabeçalho do **`QUICK.md`** com o objetivo e diz os trailers dos commits (`OXE-Quick`, `OXE-Card`). Com ALM e `--apply`, o card recebe a minispec e vai para "em desenvolvimento" (só de uma coluna anterior). Sem `oxe-cc` disponível, declarar **fallback legado** e seguir só com o QUICK.md. Depois completar o **`QUICK.md`** com:
    - **Objetivo** — uma frase. *(Esta é a minispec: restringe o escopo de todos os agentes e passos.)*
    - **Contexto** — 2–5 bullets (arquivos/pastas já vistos).
    - **Passos** — lista numerada, **máximo 10** passos acionáveis; se PDDA ativo, anotar `<!-- agente: id -->` em cada passo.
@@ -162,23 +174,25 @@ Se **sim**, o próximo passo recomendado no chat é **`/oxe-spec`** (depois disc
    - Preencher `agents[]` derivando de cada grupo de passos do QUICK.md.
 5. Se existir **`.oxe/plan-agents.json`** com schema 2 e lifecycle ainda não `invalidated`, aplicar a invalidação descrita em **context** (actualizar JSON + **STATE.md** — blueprint de agentes).
 6. Se existir **`.oxe/quick-agents.json`** anterior com `status` não-terminal, invalidá-lo (ver **context**).
-7. Atualizar **`.oxe/STATE.md`**: fase `quick_active`, próximo passo `oxe:execute` ou implementação manual + `oxe:verify`; se PDDA ativo, registrar `quick_agents_status: active` e `quick_id: <quickId>`.
+7. **Estado (`STATE.md`):** não edite manualmente os blocos gerenciados/projetados pelo runtime em `.oxe/STATE.md` — o próprio CLI (`oxe-cc quick` / `oxe-cc quick done` / `oxe-cc status`) já prioriza `.oxe/quick/current.json` sobre fases antigas de `PROGRAM.json`. Apenas em fallback legado (sem CLI) ou quando PDDA lean estiver ativo, registre fora do bloco gerenciado `quick_agents_status: active` e `quick_id: <quickId>`.
 8. Responder no chat com resumo em ≤10 linhas, nesta ordem:
    - **Objetivo**
    - **Plano**
    - **Validação**
    - **Riscos / assumptions**
    - **Próximo passo**
-   Se promover = sim, destacar **`/oxe-spec`** como próximo passo lógico; se blueprint plan-agent foi invalidado, mencionar **`/oxe-plan-agent`** para novo roteiro.
-9. **Sugestão de commit (pós-verify bem-sucedido):** após o bloco **Verificar** passar, sugerir ao usuário: *"Quick concluído. Commitar? `git add -p && git commit -m 'quick: <objetivo em uma linha>'`"* — apenas sugerir, não executar automaticamente.
+   O **Próximo passo** é o do rodapé (`oxe-cc status --json`); com promover = sim, ele é **`/oxe-spec`**. Se o blueprint plan-agent foi invalidado, mencionar que um novo roteiro com agentes sai de `/oxe-plan --agents`.
+9. **Commit e fechamento pelo CLI (pós-verify):** nada do quick é commitado à mão (a trava de origem, G11, recusa commit sem origem no PR). Com o OK do usuário para commitar: `oxe-cc quick commit -m "<mensagem>" <arquivos…>` (o CLI acrescenta `OXE-Quick`/`OXE-Card`). Depois `oxe-cc quick done --verify "<comando do Verificar>"`, que **fecha a quick** (o CLI roda a verificação; se falhar, o quick continua aberto; fechada: no modo local, o padrão, os commits do quick já são a entrega e o ciclo fecha; com `delivery.mode: "pr"`, a entrega segue no `/oxe-ship` com `oxe-cc quick promote --open-pr` numa branch ≠ base, e o ciclo só fecha depois do CI/merge e do deploy, quando houver `deploy_env`) e, com ALM, `--apply` comenta os commits e o resultado no card. No PR: `oxe-cc ship check-origin <#PR>`.
 </process>
+
+**Ao terminar:** o **Próximo passo** de `oxe-cc status --json` (ver `references/next-step-footer.md`): quick aberta → `oxe-cc quick done --verify "<comando>"`; fechada → ciclo fechado (local) ou `oxe-cc quick promote --open-pr` → `oxe-cc ship status` (pr).
 
 <success_criteria>
 - [ ] `.oxe/QUICK.md` existe com objetivo (minispec), passos (mini-plano) e bloco **Verificar** (critério de aceite).
 - [ ] `STATE.md` reflete fase `quick_active` e próximo passo coerente.
 - [ ] Fica explícito quando **promover** para spec/plan (regra acima + campo no arquivo).
 - [ ] Scope creep gate verificado ao fim de cada passo; se critério atingido, pausa apresentada ao usuário.
-- [ ] Após verify bem-sucedido, sugestão de commit apresentada (não executada automaticamente).
+- [ ] Quick aberto pelo CLI (`.oxe/quick/<id>.json`); commits pelo `oxe-cc quick commit` (com o OK do usuário) e fechamento por `oxe-cc quick done --verify`; nenhum commit sem `OXE-Quick`.
 - [ ] Se havia blueprint schema 2 activo, `plan-agents.json` e `STATE.md` reflectem **`invalidated`** por quick.
 - [ ] Se PDDA ativo: `quick-agents.json` existe com `status: active`, `quickId` único, agentes com `role` específico à demanda, `steps` alinhados aos passos do QUICK.md; seção `## Agentes dinâmicos` presente no QUICK.md.
 - [ ] Se PDDA ativo: máximo 3 agentes; se mais necessário, QUICK.md declara `Promover para spec/plan?: sim` com razão "necessita > 3 agentes".

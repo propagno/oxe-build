@@ -16,16 +16,23 @@ const rank = (s) => ORDER.indexOf(String(s || '').toLowerCase());
 
 function readJson(p) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } }
 
+function matchesCriterion(a, b) {
+  const x = String(a || '').trim().toUpperCase();
+  const y = String(b || '').trim().toUpperCase();
+  return Boolean(x && y && (x === y || x.startsWith(`${y}.`) || y.startsWith(`${x}.`)));
+}
+
 function loadRules(projectRoot) {
   const base = readJson(path.join(__dirname, '..', '..', 'oxe', 'templates', 'finding-rules.json')) || { rules: [] };
   const local = readJson(path.join(projectRoot, '.oxe', 'finding-rules.json')) || { rules: [] };
-  const byId = new Map((base.rules || []).map((r) => [r.id, { ...r, source: 'package' }]));
+  const byId = new Map((base.rules || []).filter((r) => r && r.id && rank(r.severity) >= 0).map((r) => [r.id, { ...r, severity: String(r.severity).toLowerCase(), source: 'package' }]));
   const problems = [];
   for (const r of local.rules || []) {
     if (!r || !r.id || rank(r.severity) < 0) { problems.push(`regra inválida em .oxe/finding-rules.json: ${JSON.stringify(r)}`); continue; }
+    const sev = String(r.severity).toLowerCase();
     const prev = byId.get(r.id);
-    if (prev && rank(r.severity) < rank(prev.severity)) { problems.push(`${r.id}: o projeto não pode baixar a severidade (${prev.severity} → ${r.severity}); mantida ${prev.severity}`); continue; }
-    byId.set(r.id, { ...(prev || {}), ...r, source: prev ? 'raised' : 'project' });
+    if (prev && rank(sev) < rank(prev.severity)) { problems.push(`${r.id}: o projeto não pode baixar a severidade (${prev.severity} → ${sev}); mantida ${prev.severity}`); continue; }
+    byId.set(r.id, { ...(prev || {}), ...r, severity: sev, source: prev ? 'raised' : 'project' });
   }
   return { rules: byId, problems };
 }
@@ -48,18 +55,31 @@ function rate(projectRoot, input = {}) {
 
 /** Open CRs that block the close under `close.block_on` (e.g. "critical", "high@standing"). */
 function blockingFindings(crs, blockOn, standing) {
-  const specs = (Array.isArray(blockOn) ? blockOn : ['critical', 'high@standing']).map((x) => { const [sev, scope] = String(x).split('@'); return { sev: sev.toLowerCase(), scope: scope || null }; });
-  const std = new Set(standing || []);
-  return (crs || []).filter((cr) => cr && cr.status === 'open' && cr.severity && cr.severity !== 'unrated' && specs.some((s) => {
-    if (rank(cr.severity) < rank(s.sev)) return false;
-    if (s.scope === 'standing') return (cr.criteria || []).some((c) => std.has(c));
-    return true;
-  }));
+  const specs = (Array.isArray(blockOn) ? blockOn : ['critical', 'high@standing']).map((x) => {
+    const [sev, scope] = String(x || '').split('@');
+    return { sev: sev.trim().toLowerCase(), scope: scope ? scope.trim().toLowerCase() : null };
+  });
+  const std = (standing || []).map((c) => String(c).trim()).filter(Boolean);
+  return (crs || []).filter((cr) => {
+    if (!cr || cr.status !== 'open') return false;
+    const crRank = rank(cr.severity);
+    if (crRank < 0) return false;
+    return specs.some((s) => {
+      const minRank = rank(s.sev);
+      if (minRank < 0 || crRank < minRank) return false;
+      if (s.scope === 'standing') return (cr.criteria || []).some((c) => std.some((sc) => matchesCriterion(c, sc)));
+      return !s.scope;
+    });
+  });
 }
 
 function bySeverity(crs) {
   const out = { critical: [], high: [], medium: [], low: [], unrated: [] };
-  for (const cr of crs || []) (out[cr.severity] || out.unrated).push(cr);
+  for (const cr of crs || []) {
+    if (!cr) continue;
+    const sev = String(cr.severity || '').toLowerCase();
+    (out[sev] || out.unrated).push(cr);
+  }
   return out;
 }
 

@@ -23,8 +23,17 @@ function add(root, program, input) {
   if (!input.path) throw new Error('member add exige --path <caminho do repositório, relativo ao coordenador>');
   const abs = path.resolve(root, input.path);
   if (git(abs, ['rev-parse', '--git-dir']).status !== 0) throw new Error(`${input.path} não é um repositório git`);
-  program.members = (program.members || []).filter((m) => m.name !== name);
-  const member = { name, path: path.relative(root, abs).replace(/\\/g, '/') || '.', remote: input.remote || null, branch: input.branch || 'main', order: Number.isInteger(Number(input.order)) && input.order != null ? Number(input.order) : program.members.length + 1 };
+  const prev = (program.members || []).find((m) => m && m.name === name);
+  program.members = (program.members || []).filter((m) => m && m.name !== name);
+  const maxOrder = program.members.reduce((acc, m) => Math.max(acc, Number(m.order) || 0), 0);
+  const defaultOrder = prev && Number.isInteger(Number(prev.order)) ? Number(prev.order) : maxOrder + 1;
+  const member = {
+    name,
+    path: path.relative(root, abs).replace(/\\/g, '/') || '.',
+    remote: input.remote !== undefined ? input.remote || null : (prev && prev.remote) || null,
+    branch: input.branch || (prev && prev.branch) || 'main',
+    order: input.order != null && Number.isInteger(Number(input.order)) ? Number(input.order) : defaultOrder,
+  };
   program.members.push(member);
   return member;
 }
@@ -36,15 +45,25 @@ function remove(program, name) {
   return name;
 }
 
+const fileStr = (f) => String(typeof f === 'string' ? f : (f && f.path) || '');
+
 /** Lint: unknown repo; a task touching two repositories. */
 function lint(doc, program) {
   const errors = [];
   const names = new Set(list(program).map((m) => m.name));
   if (!names.size) return errors;
   for (const t of (doc && doc.tasks) || []) {
-    if (!t) continue;
+    if (!t || t.superseded || t.merged_into) continue;
     if (t.repo && !names.has(t.repo)) errors.push(`${t.id}: repo "${t.repo}" não é membro do programa (oxe-cc program member list)`);
-    const prefixed = new Set((t.files || []).map((f) => /^([a-z0-9][a-z0-9_-]*):(?!\/\/)/i.exec(String(f))).filter(Boolean).map((m) => m[1]).filter((n) => names.has(n)));
+    const prefixed = new Set(
+      (t.files || [])
+        .map(fileStr)
+        .filter((s) => !/^[A-Za-z]:[\\/]/.test(s))
+        .map((s) => /^([a-z0-9][a-z0-9_-]*):(?!\/\/)/i.exec(s))
+        .filter(Boolean)
+        .map((m) => m[1])
+        .filter((n) => names.has(n)),
+    );
     const repos = new Set([...(t.repo ? [t.repo] : []), ...prefixed]);
     if (repos.size > 1 || (!t.repo && prefixed.size)) errors.push(`${t.id}: a tarefa toca mais de um repositório (${[...new Set([t.repo || '(coordenador)', ...prefixed])].join(', ')}) — divida em uma tarefa por repositório`);
   }
@@ -59,15 +78,20 @@ function closeMembers(root, program) {
     const st = git(abs, ['status', '--porcelain']);
     if (st.status !== 0) return { ok: false, landed, reason: `membro ${m.name}: ${m.path} não é legível como repositório` };
     if (String(st.stdout || '').trim()) return { ok: false, landed, reason: `membro ${m.name} (ordem ${m.order}) tem mudanças não commitadas — commite ou descarte antes do close` };
-    const sha = git(abs, ['rev-parse', 'HEAD']).stdout.trim();
-    const branch = git(abs, ['rev-parse', '--abbrev-ref', 'HEAD']).stdout.trim();
+    const headRes = git(abs, ['rev-parse', '--verify', 'HEAD']);
+    const sha = String(headRes.stdout || '').trim();
+    if (headRes.status !== 0 || !sha) return { ok: false, landed, reason: `membro ${m.name} (ordem ${m.order}) ainda não tem commit em HEAD` };
+    const rawBranch = String(git(abs, ['rev-parse', '--abbrev-ref', 'HEAD']).stdout || '').trim();
+    const branch = rawBranch === 'HEAD' || !rawBranch ? 'detached' : rawBranch;
     landed.push({ name: m.name, order: m.order, path: m.path, branch, sha });
   }
   return { ok: true, landed };
 }
 
+const escCell = (v) => String(v == null ? '' : v).replace(/\|/g, '\\|');
+
 function renderMembers(phaseId, landed) {
-  return [`# Membros do programa — ${phaseId}`, '', '| Ordem | Membro | Caminho | Branch | sha pousado |', '|---|---|---|---|---|', ...landed.map((l) => `| ${l.order} | ${l.name} | ${l.path} | ${l.branch} | ${l.sha.slice(0, 12)} |`), ''].join('\n');
+  return [`# Membros do programa — ${phaseId}`, '', '| Ordem | Membro | Caminho | Branch | sha pousado |', '|---|---|---|---|---|', ...(landed || []).map((l) => `| ${escCell(l.order)} | ${escCell(l.name)} | ${escCell(l.path)} | ${escCell(l.branch)} | ${escCell(String(l.sha || '').slice(0, 12))} |`), ''].join('\n');
 }
 
 module.exports = { list, add, remove, lint, closeMembers, renderMembers };

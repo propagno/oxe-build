@@ -27,7 +27,46 @@ export function resolveWithin(cwd: string, candidate: unknown): string {
   const rel = path.relative(root, target);
   if (rel === '') return target;
   if (rel.startsWith('..') || path.isAbsolute(rel)) throw new PathContainmentError(candidate);
+  // External review 15/11 (P0-2): a path through a symlink or a junction (the runtime itself links node_modules into
+  // worktrees) lexically inside the root can land outside it. The REAL path must stay inside the real root.
+  const realRoot = realPathOf(root);
+  const realRel = path.relative(samePathKey(realRoot), samePathKey(realPathOf(target)));
+  if (realRel !== '' && (realRel.startsWith('..') || path.isAbsolute(realRel))) throw new PathContainmentError(candidate);
   return target;
+}
+
+/**
+ * The real path of `p`, following links. For a path that does not exist yet (a new file), the real path of its
+ * nearest existing ancestor joined with the rest — a write through a linked directory is resolved too.
+ */
+export function realPathOf(p: string, depth = 0): string {
+  let cur = path.resolve(p);
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      const real = fs.realpathSync.native(cur);
+      return rest.length ? path.join(real, ...rest.reverse()) : real;
+    } catch {
+      // Cross-review 15/11: a DANGLING link (its target does not exist yet) fails realpath too; climbing past it
+      // would answer "inside" while a write follows the link out. Resolve the link's target instead.
+      let link: string | null = null;
+      try { if (fs.lstatSync(cur).isSymbolicLink()) link = fs.readlinkSync(cur); } catch { link = null; }
+      if (link !== null) {
+        if (depth >= 40) throw new PathContainmentError(p);
+        const target = path.resolve(path.dirname(cur), link);
+        return realPathOf(rest.length ? path.join(target, ...rest.reverse()) : target, depth + 1);
+      }
+      const parent = path.dirname(cur);
+      if (parent === cur) return path.resolve(p);
+      rest.push(path.basename(cur));
+      cur = parent;
+    }
+  }
+}
+
+/** Case-insensitive file systems (Windows, macOS): paths compare in lower case. */
+export function samePathKey(p: string): string {
+  return process.platform === 'win32' || process.platform === 'darwin' ? p.toLowerCase() : p;
 }
 
 // ─── read_file ────────────────────────────────────────────────────────────────
@@ -161,6 +200,8 @@ function globSync(pattern: string, root: string): string[] {
     for (const entry of entries) {
       const matches = micromatch(entry.name, head);
       if (!matches) continue;
+      // links (symlinks, junctions) are never walked into: the search stays in the real workspace
+      if (entry.isSymbolicLink()) continue;
       const full = path.join(dir, entry.name);
       if (tail.length === 0) {
         results.push(path.relative(root, full).replace(/\\/g, '/'));
@@ -233,6 +274,7 @@ function grepDir(dir: string, regex: RegExp, root: string, out: string[]): void 
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
     if (out.length > GREP_MAX_MATCHES * 5) return;
+    if (entry.isSymbolicLink()) continue; // links are not followed (see globSync)
     if (entry.isDirectory() && !entry.name.startsWith('.') && !GREP_SKIP_DIRS.has(entry.name)) {
       grepDir(full, regex, root, out);
     } else if (entry.isFile() && !GREP_SKIP_FILE.test(entry.name)) {
@@ -268,7 +310,7 @@ const runCommand: BuiltInToolHandler = {
     type: 'function',
     function: {
       name: 'run_command',
-      description: 'Run a shell command in the workspace directory',
+      description: 'Run a shell command in the workspace directory (on Windows the shell is cmd.exe: discard output with 2>nul; elsewhere sh: 2>/dev/null). The output is cut to its first and last 64 KB, and a command printing more than 64 MB is stopped. node_modules may be a link to a shared dependencies folder: exclude node_modules, dist and .git from recursive grep/find/cat (prefer the search tool).',
       parameters: {
         type: 'object',
         properties: {
@@ -286,9 +328,57 @@ const runCommand: BuiltInToolHandler = {
   },
 };
 
+/**
+ * OxeSpace 14/11 (P0): a command that printed more than ~512 MB (a recursive grep that followed the node_modules
+ * junction) made `Buffer.concat(out).toString()` throw ERR_STRING_TOO_LONG and killed the whole run. The output is now
+ * bounded: the first and the last `keep` bytes, with the count of what was cut; past `hardLimit` the command is killed.
+ */
+export class BoundedOutput {
+  private head: Buffer[] = [];
+  private headBytes = 0;
+  private tail: Buffer[] = [];
+  private tailBytes = 0;
+  total = 0;
+  constructor(private readonly keep = 64 * 1024, readonly hardLimit = 64 * 1024 * 1024) {}
+
+  push(chunk: Buffer): void {
+    this.total += chunk.length;
+    let c = chunk;
+    if (this.headBytes < this.keep) {
+      const take = Math.min(this.keep - this.headBytes, c.length);
+      this.head.push(c.subarray(0, take));
+      this.headBytes += take;
+      c = c.subarray(take);
+    }
+    if (!c.length) return;
+    this.tail.push(c);
+    this.tailBytes += c.length;
+    while (this.tail.length > 1 && this.tailBytes - this.tail[0].length >= this.keep) this.tailBytes -= this.tail.shift()!.length;
+  }
+
+  get overLimit(): boolean { return this.total > this.hardLimit; }
+
+  text(): string {
+    const head = Buffer.concat(this.head).toString('utf8');
+    let tail = Buffer.concat(this.tail);
+    if (tail.length > this.keep) tail = tail.subarray(tail.length - this.keep);
+    const cut = this.total - this.headBytes - tail.length;
+    if (cut <= 0) return (head + tail.toString('utf8')).trim();
+    return `${head}\n[… ${cut} bytes cortados da saída (${this.total} no total) — restrinja o comando: exclua node_modules, dist e .git de buscas recursivas …]\n${tail.toString('utf8')}`.trim();
+  }
+}
+
+/**
+ * OxeSpace 14/11 (OxeChat F2 T5): the agent ran `… 2>$null` (PowerShell) through cmd.exe, which created a file named
+ * `$null` in the worktree (a ScopeViolation). On Windows, a redirect to `$null` or `/dev/null` goes to `nul`.
+ */
+export function windowsNullRedirects(command: string): string {
+  return command.replace(/(\d?>>?|&>)\s*(?:\$null|\/dev\/null)(?![\w/])/gi, (_m, op: string) => (op === '&>' ? '>nul 2>&1' : `${op}nul`));
+}
+
 function runShell(command: string, cwd: string, timeoutMs: number): Promise<string> {
   return new Promise((resolve) => {
-    const shell = shellInvocation(command);
+    const shell = shellInvocation(process.platform === 'win32' ? windowsNullRedirects(command) : command);
     // stdin is closed so a command that waits for input (e.g. grep without a file) ends instead of hanging.
     const proc = spawn(shell.file, shell.args, {
       cwd,
@@ -296,17 +386,23 @@ function runShell(command: string, cwd: string, timeoutMs: number): Promise<stri
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsVerbatimArguments: shell.windowsVerbatimArguments,
     });
-    const out: Buffer[] = [];
+    const out = new BoundedOutput();
     let timedOut = false;
+    let killedForSize = false;
 
     const timer = setTimeout(() => { timedOut = true; proc.kill('SIGTERM'); }, timeoutMs);
 
-    proc.stdout.on('data', (c: Buffer) => out.push(c));
-    proc.stderr.on('data', (c: Buffer) => out.push(c));
+    const onData = (c: Buffer) => {
+      out.push(c);
+      if (out.overLimit && !killedForSize) { killedForSize = true; proc.kill('SIGTERM'); }
+    };
+    proc.stdout.on('data', onData);
+    proc.stderr.on('data', onData);
     proc.on('close', (code) => {
       clearTimeout(timer);
-      const text = Buffer.concat(out).toString('utf8').trim();
-      if (timedOut) resolve(`[timed out after ${timeoutMs}ms]\n${text}`);
+      const text = out.text();
+      if (killedForSize) resolve(`[interrompido: a saída passou de ${Math.round(out.hardLimit / (1024 * 1024))} MB — o comando foi parado; restrinja-o (exclua node_modules de buscas recursivas)]\n${text}`);
+      else if (timedOut) resolve(`[timed out after ${timeoutMs}ms]\n${text}`);
       else resolve(code === 0 ? text || '(no output)' : `[exit ${code}]\n${text}`);
     });
     proc.on('error', (err) => { clearTimeout(timer); resolve(`[error] ${err}`); });
@@ -314,6 +410,24 @@ function runShell(command: string, cwd: string, timeoutMs: number): Promise<stri
 }
 
 // ─── finish_task ──────────────────────────────────────────────────────────────
+
+export interface FinishTaskGuardResult {
+  ok: boolean;
+  error?: string | null;
+}
+
+let finishTaskGuard: ((cwd: string, args: Record<string, unknown>) => FinishTaskGuardResult | null | undefined) | null = null;
+
+/**
+ * OXB-C1 Adendo 2: optional synchronous guard checked inside `finish_task` (e.g. file-size cap check)
+ * so oversized files fail inside the SAME executor attempt for free instead of ending the attempt and
+ * paying for a second attempt after checkpoint failure.
+ */
+export function setFinishTaskGuard(
+  fn: ((cwd: string, args: Record<string, unknown>) => FinishTaskGuardResult | null | undefined) | null,
+): void {
+  finishTaskGuard = fn;
+}
 
 const finishTask: BuiltInToolHandler = {
   idempotent: true,
@@ -332,7 +446,20 @@ const finishTask: BuiltInToolHandler = {
       },
     },
   },
-  async execute(args, _cwd) {
+  async execute(args, cwd) {
+    if (finishTaskGuard) {
+      try {
+        const res = finishTaskGuard(cwd, args);
+        if (res && res.ok === false) {
+          return JSON.stringify({
+            __finish_task__: false,
+            error: String(res.error || 'finish_task recusado pela validação pré-conclusão'),
+          });
+        }
+      } catch {
+        // Guard failure must never crash the tool handler
+      }
+    }
     return JSON.stringify({
       __finish_task__: true,
       summary: String(args.summary || ''),

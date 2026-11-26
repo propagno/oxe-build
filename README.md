@@ -15,7 +15,7 @@ Desenvolvimento assistido por IA com especificação, contexto persistente, exec
 npx oxe-cc@latest
 ```
 
-**Versão:** `1.21.2` · **Node.js:** `>=18`
+**Versão:** `1.22.0` · **Node.js:** `>=18`
 
 </div>
 
@@ -114,7 +114,7 @@ npx oxe-cc status --full
 /oxe adicionar importação de CSV com validação e histórico
 ```
 
-O Conductor classifica a complexidade, recupera contexto, seleciona personas e escolhe entre execução individual e Swarm Mode.
+O `/oxe` encaminha o objetivo: pequeno vai para `/oxe-quick`; o resto, para `/oxe-spec`. Cada etapa termina com **um** próximo passo, vindo de `oxe-cc status --json` (`nextStep`, `cursorCmd`, `reason`). Para o modo autônomo (Conductor, Agent ou Swarm Mode), peça explicitamente: "faz sozinho de ponta a ponta".
 
 ### 4. Ou controle o ciclo manualmente
 
@@ -123,6 +123,7 @@ O Conductor classifica a complexidade, recupera contexto, seleciona personas e e
 /oxe-plan
 /oxe-execute
 /oxe-verify
+/oxe-ship
 ```
 
 Ao terminar, o projeto contém não só a implementação, mas também os requisitos, decisões, evidências e lições que explicam como ela foi construída.
@@ -180,16 +181,19 @@ Use quando existirem três ou mais domínios, trabalho paralelo, risco operacion
 
 ## A trilha principal
 
-São seis comandos para o uso cotidiano:
+São sete comandos para o uso cotidiano (os mesmos do [AGENTS.md](AGENTS.md)):
 
 | Comando | Responsabilidade |
 |---|---|
-| `/oxe` | Entrada universal: situação, ajuda, pergunta contextual ou objetivo autônomo |
+| `/oxe` | Entrada universal: situação, ajuda, pergunta contextual ou objetivo (encaminha para quick ou spec) |
 | `/oxe-quick` | Demanda pequena com miniobjetivo, passos e verificação |
 | `/oxe-spec` | Perguntas → pesquisa opcional → requisitos → roteiro → aprovação |
 | `/oxe-plan` | Plano test-first por ondas; `--agents` gera blueprint multiagente |
 | `/oxe-execute` | Implementação completa, por onda ou por tarefa, com runtime tracking |
-| `/oxe-verify` | Critérios, evidências, integração, riscos, UAT e retrospectiva |
+| `/oxe-verify` | Critérios, evidências, integração, riscos, UAT e retrospectiva (automática) |
+| `/oxe-ship` | Entrega: PR → CI/merge → deploy → docs → close; `--local` só commita; `--defect` registra defeito pós-entrega |
+
+Toda etapa termina com **um** próximo passo, o de `oxe-cc status --json`; `oxe-cc status --journey` mostra o mapa da jornada.
 
 ### Flags que absorvem fluxos especializados
 
@@ -220,7 +224,7 @@ Os antigos comandos `scan`, `research`, `debug`, `forensics`, `checkpoint`, `sec
 
 ## Modo autônomo e agentes dinâmicos
 
-Quando recebe `/oxe <objetivo>`, o Conductor aplica uma heurística explícita:
+Quando o usuário pede explicitamente o modo autônomo (`/oxe <objetivo>` com "faz sozinho de ponta a ponta"), o Conductor aplica uma heurística explícita:
 
 | Complexidade | Sinal típico | Modo |
 |---|---|---|
@@ -315,9 +319,10 @@ Executor (`runtime execute --adapter`):
 | Adapter | Como roda | Credencial |
 |---|---|---|
 | `claude` | `claude -p` (Claude Code headless) por turno; as tools rodam no runtime, sob a allowlist do nó e contidas no workspace | nenhuma — usa o login do Claude Code |
+| `grok` | `grok --prompt-file` (Grok headless) por turno; as tools do Grok ficam desligadas e as do runtime executam o JSON | nenhuma — usa o login do Grok, ou `XAI_API_KEY` |
 | `http` | API OpenAI-compatível (`--base-url`, padrão Anthropic `/v1`) | `--api-key` ou `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` |
 
-Sem `--adapter`, o runtime usa `http` quando há chave ou `--base-url`, e `claude` quando o CLI está instalado e não há chave. `oxe-cc runtime providers` lista o que foi detectado. O prompt de cada tarefa leva o trecho dela no PLAN, o contrato do IMPLEMENTATION-PACK, o FIXTURE-PACK, o estado atual dos arquivos do escopo e as lições; custo e turnos por tarefa aparecem no RUN-SUMMARY.
+Sem `--adapter`, o runtime usa `http` quando há chave ou `--base-url`. Sem chave, usa o primeiro CLI instalado nesta ordem: `claude`, `grok`, `antigravity`. `oxe-cc runtime providers` lista o que foi detectado. O prompt de cada tarefa leva o trecho dela no PLAN, o contrato do IMPLEMENTATION-PACK, o FIXTURE-PACK, o estado atual dos arquivos do escopo e as lições; custo e turnos por tarefa aparecem no RUN-SUMMARY.
 
 Isso permite pausar, retomar, repetir uma onda, recuperar um journal interrompido e exigir aprovação formal sem depender do histórico do chat.
 
@@ -337,7 +342,7 @@ oxe-cc runtime program status
 - **Regressão acumulada:** os checks executáveis de cada fase fechada são congelados em `.oxe/program/regression/` e rodam (`reg-<fase>-*`) no verify das fases seguintes. Uma fase não fecha se quebrar uma anterior.
 - **Contratos de interface:** os `symbols` do IMPLEMENTATION-PACK são verificados estaticamente (JS/TS). Um módulo sem o export contratado falha com `exports_missing`.
 - **Contexto que escala:** o prompt de cada tarefa recebe `## Interfaces disponíveis`, com os exports e assinaturas das fases fechadas e das dependências, em vez dos arquivos inteiros.
-- **Mudar o programa com trilha (1.21.2):** `oxe-cc spec amend A40 --append "…" --by tl --reason "…" [--additive]` emenda um critério de qualquer fase (CR `spec_gap` com a linha antes/depois). `oxe-cc spec add criterion A42 --text "…" --verify "…"` e `spec add requirement R14 …` criam ids novos, sem duplicata nem buraco. `oxe-cc program phase add --after F7 --title "…" --acceptance A42,A43` insere uma fase e renumera só as fases ainda não iniciadas. `oxe-cc program phase edit F3 --add-acceptance A58 --add-requirements R17` edita uma fase, e `oxe-cc program criterion move A3 --from F1 --to F11` move um critério (tirando-o do plano atual quando a fase de origem está ativa). Cada mudança vai para `program/changes.ndjson`. Se o `.oxe/` estiver no .gitignore, `oxe-cc program export --out docs/oxe` (ou `program.export_dir` no config) mantém SPEC, ROADMAP, PROGRAM.json e changes.ndjson versionados.
+- **Mudar o programa com trilha (1.21.2):** `oxe-cc spec amend A40 --append "…" --by tl --reason "…" [--additive]` emenda um critério de qualquer fase (CR `spec_gap` com a linha antes/depois). `oxe-cc spec add criterion A42 --text "…" --verify "…" [--risk P1]` e `spec add requirement R14 …` criam ids novos, sem duplicata nem buraco. A linha do critério é escrita pelas colunas do cabeçalho: com a coluna Risco, `--risk` é obrigatório, e uma coluna que o comando não preenche faz o comando falhar. `oxe-cc program phase add --after F7 --title "…" --acceptance A42,A43` insere uma fase e renumera só as fases ainda não iniciadas. `oxe-cc program phase edit F3 --add-acceptance A58 --add-requirements R17` edita uma fase; critérios novos entram numa fase ainda não iniciada ou em planning sem tentativa executada, e `oxe-cc program criterion move A3 --from F1 --to F11` move um critério (tirando-o do plano atual quando a fase de origem está ativa). Cada mudança vai para `program/changes.ndjson`. Se o `.oxe/` estiver no .gitignore, `oxe-cc program export --out docs/oxe` (ou `program.export_dir` no config) mantém SPEC, ROADMAP, PROGRAM.json e changes.ndjson versionados.
 - **Branch do programa em dia com a main (1.21.2):** `oxe-cc runtime sync --from origin/main` faz o merge local (para e aborta no conflito) e roda de novo, segmento a segmento e sem executor, o verify das tarefas done cujos `files` mudaram na base: verde continua done, vermelho reabre. `oxe-cc runtime promote T7 --base main` cria uma branch a partir da base com os checkpoints da tarefa e os commits dos testes congelados (cherry-pick -x), roda o `pr:ready` do projeto e grava o corpo do PR em arquivo. Push e `gh pr create --body-file` só com `--open-pr`, nunca com force-push nem label.
 - **`PLAN.json` canônico:** `/oxe-plan` grava `PLAN.json` (`oxe/schemas/plan.schema.json`) ao lado do `PLAN.md`. O runtime lê o JSON, e o markdown é o fallback.
 
@@ -349,7 +354,7 @@ Ir de SPEC a verify é a parte fácil. O OXE cobre também o que acontece quando
 
 - **Aceite congelado:** o planner escreve os testes de aceite antes da execução. O runtime congela o hash deles; o executor não pode editá-los, e o verify exige que o teste nomeado tenha rodado (`proof_not_executed`).
 - **Gates do projeto** (`phase_gates`): typecheck, lint, a suíte de governança do repositório e a CI (`runtime ci --attach <run>`) rodam no verify da fase. Um gate vermelho abre sozinho um change request com a saída, e o executor recebe as regras do repositório no prompt.
-- **Ciclo de correção** (`runtime feedback`): toda pushback vira um CR classificado (`defect`, `spec_gap`, `constraint` ou `new_scope`) e reabre só o que foi impactado. **O CR só fecha quando um teste congelado ligado a ele fica verde.**
+- **Ciclo de correção** (`runtime feedback`): toda pushback vira um CR classificado (`defect`, `spec_gap`, `constraint` ou `new_scope`) e se liga ao que foi impactado; reabrir uma tarefa é explícito (`--reopen`), e uma tarefa concluída com commit nunca é reaberta em silêncio. **O CR só fecha quando um teste congelado ligado a ele fica verde.**
 - **Dossiê vivo por fase** (`runtime dossier`): contexto, arquitetura, techspec com Prova, diário com handoff, decisões e notas. O texto humano é preservado, e o dossiê aponta drift.
 - **Execução honesta e com orçamento:**
   - `--budget-turns`/`--budget-usd`: o teto nunca é ultrapassado; o runtime para entre tentativas;
@@ -524,6 +529,19 @@ oxe-cc azure operations list
 | `oxe-cc plan lint [--dry-verify] [--resume] [--only T5,T6] [--changed] [--no-preflight]` | valida o PLAN.json, os gates, o pack, o mesmo preflight do execute (autoavaliação, confiança, ambiente) e se cada verify está vermelho pelo motivo certo; "ok" quer dizer que o execute não recusa. O dry-verify mostra uma linha por comando no stderr, e `--resume` retoma uma rodada interrompida sem rodar de novo o que já passou na mesma árvore |
 | `oxe-cc plan done Tn` | marca uma tarefa concluída (com o checkpoint) no PLAN.json |
 | `oxe-cc plan build --from <papéis> [--auto-close-imports] [--fix-stale-paths] [--pair-as-deps]` | monta PLAN.json, PLAN.md e o pack a partir dos planos de papel; fecha o escopo com quem importa um arquivo removido, corrige um caminho que foi movido e ordena o contrato antes de quem o consome |
+| `oxe-cc decision add --title "…" [--context "…"] [--consequences "…"] [--check "<cmd>"] [--alt "texto::motivo"] [--supersedes D-…]` | registra uma decisão em `.oxe/program/decisions.ndjson` e publica o ADR em `docs/adr/` (`adr: false` desliga; `adr: { "dir": "…" }` muda a pasta). O `--check` vira gate no verify da fase |
+| `oxe-cc decision status <id> <active\|superseded\|retired> --reason "…" [--superseded-by D-…]` | muda o status de uma decisão (o registro continua só de acréscimo); o ADR e o índice acompanham, e o `plan lint` avisa tarefa que cita decisão não vigente |
+| `oxe-cc decision import [--from .oxe/DISCUSS.md]` · `oxe-cc decision publish [--out <pasta>]` | traz a tabela D-NN do DISCUSS para o registro, com os mesmos IDs · regera os ADRs e o `README.md` da pasta, preservando o texto escrito fora dos marcadores |
+| `oxe-cc grill start|ask|answer|fact|defer|confirm|term|conflict|resolve|status|close|export` | a descoberta da spec como árvore de decisões: uma pergunta por vez, cada uma com a resposta recomendada, retomável entre sessões (`.oxe/grill/`). O `close` só aceita sem ramo aberto, sem contradição e com glossário, e então grava `.oxe/GLOSSARY.md` e as decisões (→ ADRs) |
+| `oxe-cc spec check [--fast]` · `oxe-cc spec approve --by <papel>` | portão de qualidade do upstream (R→A, Risco e Como verificar, PRD, glossário, grill fechado, decisões, RFC para P0/P1, ROADMAP) · aprovação registrada, só sobre check verde |
+| `oxe-cc alm refine <KEY…> | --jql "…"` · `alm refine lint` · `alm refine apply <KEY> [--confirm-overwrite]` | relê os cards do Jira para um spec guiado por tipo (história, bug, tarefa, épico): coleta só de leitura, reescrita pelo agente sem inventar ("A confirmar" + pergunta), lint, e apply só pelo escritor (`spec-v1`, texto original preservado em comentário). `alm.ready_gate` barra item sem `spec-v1` em "Em andamento" |
+| `oxe-cc trace [--json]` · `oxe-cc trace publish [--apply]` | o grafo de rastreabilidade (PRD, SPEC, decisões e ADRs, RFC, PLAN, CRs, cards) e as pontas soltas, cada uma com a correção; `publish` mantém em cada card um comentário "Documentos (OXE)" (PRD, critérios com evidência, ADRs, CRs) |
+| `oxe-cc alm metrics [--jql "…"] [--max N]` | o quadro em números: tempo por coluna, lead e cycle time, vazão semanal, WIP por coluna (com `alm.wip`) e o gargalo; relatório em `.oxe/alm/metrics.md` |
+| `oxe-cc status --journey [--json]` · `oxe-cc ship status [--offline]` | o mapa da jornada (etapas 0 a 9) com o próximo passo · o estado da entrega: PRs, merge, deploy |
+| `oxe-cc prd lint` | rastreabilidade do `.oxe/PRD.md`: história sem critério, critério sem história, referência a A*/R* inexistente, métrica sem meta |
+| `oxe-cc rfc new --title "…" [--phase Fn]` · `rfc accept <RFC-…>` · `rfc reject <RFC-…> --reason "…"` · `rfc list` | proposta técnica antes do plano de uma fase de risco; o accept exige as perguntas em aberto respondidas e registra a decisão (ADR) com as alternativas recusadas |
+| `oxe-cc docs publish [--out <pasta>]` | publica PRD, RFCs, ADRs e SYSTEM-DESIGN em `docs/`. Com `docs_publish` no config, roda também no close da fase, que os inclui no commit |
+| `oxe-cc alm status \| push [--stories-only\|--tasks-only] [--dry-run] \| sync [--dry-run] \| move <ref> <etapa> \| link <ref> <chave> \| defect --title "…" --origin <ref> \| queue \| ack <id> [--key <chave>]` | ALM (Jira / Azure DevOps): histórias do PRD e tarefas do plano viram itens sem duplicar; início de tarefa, PR, merge e deploy movem os itens pelo nome do estado; a chave entra no título do PR, nos commits e no branch. Falha do ALM nunca derruba o comando. Com `alm.transport: "mcp"`, as escritas vão para uma fila que o agente executa com as ferramentas MCP da sessão (`queue` / `ack`), sem token |
 | `oxe-cc plan amend-test <arquivo> --reason "<CR>" [--by <papel>]` | emenda um teste congelado com a CR que autoriza: confere o rigor, recalcula só o `sha256` dele e mantém as tarefas já concluídas |
 | `oxe-cc runtime resume [continue\|reset-task]` | retoma uma tarefa interrompida com a árvore suja: sem argumento só inspeciona (arquivos no escopo, fora dele e sintaxe JSON/TS); `continue` mantém o trabalho, `reset-task` descarta só os arquivos da tarefa |
 | `oxe-cc runtime commit-task Tn [--by <agente>] [--skip-verify-if-fresh] [--strict-scope]` | fecha uma tarefa feita fora do executor (subagente, fallback manual) pelo mesmo crivo: escopo, hash dos testes congelados, anti-stub, verify, commit isolado e eventos no ledger |

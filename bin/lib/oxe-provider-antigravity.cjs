@@ -28,6 +28,7 @@ function normalizeAdapterId(value) {
   const clean = String(value || '').trim().toLowerCase();
   if (clean === 'antigravity' || clean === 'agy') return 'antigravity';
   if (clean === 'claude') return 'claude';
+  if (clean === 'grok') return 'grok';
   if (clean === 'http') return 'http';
   return clean;
 }
@@ -43,6 +44,9 @@ function normalizeProviderConfig(provider) {
   if (isAntigravityAlias(candidate)) {
     out.adapter = ADAPTER_ID;
     if (!out.name) out.name = ADAPTER_ID;
+  } else if (String(candidate).trim().toLowerCase() === 'grok') {
+    out.adapter = 'grok';
+    if (!out.name || String(out.name).toLowerCase() === 'grok') out.name = 'grok';
   } else if (out.adapter) {
     out.adapter = normalizeAdapterId(out.adapter);
   } else if (out.name && (String(out.name).toLowerCase() === 'claude' || String(out.name).toLowerCase() === 'http')) {
@@ -54,7 +58,7 @@ function normalizeProviderConfig(provider) {
 /**
  * Resolves options passed to `AntigravityCliAdapter` from CLI flags, `.oxe/config.json` `runtime.provider`, and `process.env`.
  */
-function resolveAntigravityOptions({ flagModel = null, timeoutMs = undefined, persisted = null, env = process.env } = {}) {
+function resolveAntigravityOptions({ flagModel = null, timeoutMs = undefined, persisted = null, cwd = undefined, env = process.env } = {}) {
   const norm = normalizeProviderConfig(persisted) || {};
   const isPersistedAgy = isAntigravityAlias(norm.adapter || norm.name);
   const persistedModel = isPersistedAgy && norm.model && norm.model !== HTTP_DEFAULT_MODEL ? String(norm.model) : null;
@@ -67,6 +71,7 @@ function resolveAntigravityOptions({ flagModel = null, timeoutMs = undefined, pe
   return {
     ...(command ? { command } : {}),
     model,
+    ...(cwd ? { cwd } : {}),
     ...(mode !== undefined ? { mode } : {}),
     ...(outputFormat ? { outputFormat } : {}),
     ...(timeoutMs ? { timeoutMs } : {}),

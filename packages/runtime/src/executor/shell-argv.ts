@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 /**
  * Portable shell invocation for verify commands and the `run_command` tool.
  *
@@ -5,11 +8,44 @@
  * which cmd.exe does not understand: `grep -q "npm start" README.md` and `node -e "..."` broke
  * and agents burned retries on quoting instead of code. `cmd /d /s /c "<command>"` with
  * `windowsVerbatimArguments` hands cmd the command line exactly as written.
+ * When a verify command uses POSIX/bash syntax (e.g. `|| touch ... ; ... && test ! -e ...`),
+ * route it through Git Bash (`bash.exe`) when available on Windows.
  */
 export interface ShellInvocation {
   file: string;
   args: string[];
   windowsVerbatimArguments: boolean;
+}
+
+const POSIX_CMD_RE = /(?:^|&&|\|\||;)\s*(?:touch|test\s+!?\s*-[efdsrwxz]|rm\s+-[rf]+|mkdir\s+-p|export\s+[A-Za-z_]\w*=)\b|\s;\s/;
+
+function stripQuotedSegments(command: string): string {
+  return String(command || '')
+    .replace(/"(?:\\.|[^"\\])*"/g, '""')
+    .replace(/'[^']*'/g, "''");
+}
+
+export function isPosixShellCommand(command: string): boolean {
+  const unquoted = stripQuotedSegments(command);
+  return POSIX_CMD_RE.test(unquoted);
+}
+
+export function findWindowsGitBash(env: NodeJS.ProcessEnv = process.env): string | null {
+  const candidates = [
+    'C:\\Program Files\\Git\\bin\\bash.exe',
+    'C:\\Program Files\\Git\\usr\\bin\\bash.exe',
+    'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
+  ];
+  for (const p of candidates) {
+    try { if (fs.existsSync(p)) return p; } catch { /* ignore */ }
+  }
+  const pathDirs = String(env.PATH || env.Path || '').split(';').filter(Boolean);
+  for (const dir of pathDirs) {
+    if (/\\system32(?:\\|$)/i.test(dir)) continue;
+    const candidate = path.join(dir, 'bash.exe');
+    try { if (fs.existsSync(candidate)) return candidate; } catch { /* ignore */ }
+  }
+  return null;
 }
 
 /**
@@ -38,6 +74,12 @@ export function decodeConsoleOutput(buf: Buffer | string | null | undefined): st
 
 export function shellInvocation(command: string, platform: NodeJS.Platform = process.platform): ShellInvocation {
   if (platform === 'win32') {
+    if (isPosixShellCommand(command)) {
+      const bash = findWindowsGitBash();
+      if (bash) {
+        return { file: bash, args: ['-c', command], windowsVerbatimArguments: false };
+      }
+    }
     return { file: 'cmd.exe', args: ['/d', '/s', '/c', `"${windowsLaunchers(command)}"`], windowsVerbatimArguments: true };
   }
   return { file: 'sh', args: ['-c', command], windowsVerbatimArguments: false };
@@ -61,6 +103,7 @@ export const PROVIDER_CREDENTIAL_ENV = [
   'GOOGLE_APPLICATION_CREDENTIALS',
   'ANTIGRAVITY_API_KEY',
   'ANTIGRAVITY_AUTH_TOKEN',
+  'XAI_API_KEY',
 ];
 
 let extraScrub: RegExp[] = [];

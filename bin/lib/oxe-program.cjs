@@ -61,16 +61,38 @@ function freezeRegressionChecks(checkResults, suite) {
       .filter((result) => result && result.status === 'pass')
       .map((result) => result.check_id),
   );
-  return (suite && Array.isArray(suite.checks) ? suite.checks : []).filter((check) => {
+  const frozen = (suite && Array.isArray(suite.checks) ? suite.checks : []).filter((check) => {
     if (!check || check.regression_phase) return false;
     const executable = Boolean(check.command)
       || (Array.isArray(check.files_exist) && check.files_exist.length > 0)
       || (Array.isArray(check.exports_expected) && check.exports_expected.length > 0);
     return executable && passed.has(check.id);
   });
+  // Bench B42: a whole-suite command (`npm test`) frozen as regression also runs the NEXT phase's frozen tests, still
+  // red before its execute — F1 showed up "regressed" as soon as F2's tests were committed. A whole-suite check whose
+  // criterion has a scoped check frozen too is dropped (the scoped one is the regression); the rest is marked.
+  const refOf = (c) => String(c.acceptance_ref || '').toUpperCase();
+  const scopedRefs = new Set(frozen.filter((c) => c.command && !isWholeSuiteCommand(c.command) && refOf(c)).map(refOf));
+  return frozen
+    .filter((c) => !(c.command && isWholeSuiteCommand(c.command) && refOf(c) && scopedRefs.has(refOf(c))))
+    .map((c) => (c.command && isWholeSuiteCommand(c.command) ? { ...c, whole_suite: true } : c));
+}
+
+/** `npm test`, `node --test` with no path, `npx vitest run` with no file: runs every test of the repo. */
+function isWholeSuiteCommand(command) {
+  const cmd = String(command || '').trim().replace(/\s+/g, ' ');
+  return /^(?:npm|pnpm|yarn)(?: run)? test(?: --)?$/.test(cmd)
+    || /^node --test(?: --[\w-]+(?:=\S+)?)*$/.test(cmd)
+    || /^npx (?:vitest(?: run)?|jest)(?: --[\w-]+(?:=\S+)?)*$/.test(cmd);
+}
+
+function isSafePhaseId(phaseId) {
+  const s = typeof phaseId === 'string' ? phaseId.trim() : '';
+  return Boolean(s && !/[/\\]/.test(s) && s !== '.' && s !== '..' && !s.includes('..'));
 }
 
 function writeRegression(programDir, phaseId, checks, meta = {}) {
+  if (!isSafePhaseId(phaseId)) throw new Error(`phaseId inválido: ${phaseId}`);
   const file = path.join(programPaths(programDir).regressionDir, `${phaseId}.json`);
   writeJson(file, { schema_version: 1, phase: phaseId, frozen_at: new Date().toISOString(), ...meta, checks });
   return file;
@@ -81,11 +103,15 @@ function loadRegressionChecks(programDir, state, phaseId) {
   if (!state || !Array.isArray(state.phases)) return [];
   // OXB-033: with phase dependencies a later phase can close first; every closed phase other than this one is
   // regression (in the serial default only earlier phases are closed, so nothing changes).
-  const before = state.phases.filter((phase) => phase.status === 'closed' && phase.id !== phaseId);
+  const before = state.phases.filter((phase) => phase && phase.status === 'closed' && phase.id !== phaseId && isSafePhaseId(phase.id));
   const checks = [];
   for (const phase of before) {
     const frozen = readJson(path.join(programPaths(programDir).regressionDir, `${phase.id}.json`));
-    for (const check of frozen && Array.isArray(frozen.checks) ? frozen.checks : []) {
+    const raw = frozen && Array.isArray(frozen.checks) ? frozen.checks : [];
+    // bench B42: regression frozen before the fix — the same whole-suite dedupe on read
+    const refOf = (c) => String(c.acceptance_ref || '').toUpperCase();
+    const scoped = new Set(raw.filter((c) => c.command && !isWholeSuiteCommand(c.command) && refOf(c)).map(refOf));
+    for (const check of raw.filter((c) => !(c.command && isWholeSuiteCommand(c.command) && refOf(c) && scoped.has(refOf(c))))) {
       checks.push({
         ...check,
         id: `reg-${phase.id.toLowerCase()}-${check.id}`,
@@ -101,18 +127,29 @@ function loadRegressionChecks(programDir, state, phaseId) {
 function contractedFiles(parsedPlan) {
   const files = new Set();
   for (const task of parsedPlan && Array.isArray(parsedPlan.tasks) ? parsedPlan.tasks : []) {
-    for (const file of task.filesExist || []) files.add(file);
-    for (const entry of task.exportsExpected || []) files.add(entry.file);
+    if (!task || typeof task !== 'object') continue;
+    for (const file of task.filesExist || []) {
+      if (typeof file === 'string' && file.trim()) files.add(file.trim().replace(/\\/g, '/'));
+    }
+    for (const entry of task.exportsExpected || []) {
+      if (entry && typeof entry.file === 'string' && entry.file.trim()) files.add(entry.file.trim().replace(/\\/g, '/'));
+    }
   }
   return [...files];
 }
 
 /** Superfície pública real dos arquivos contratados (só JS/TS; outros ficam sem `exports`). */
 function buildInterfaces(projectRoot, runtime, files) {
+  const rootAbs = path.resolve(projectRoot);
   const modules = [];
-  for (const file of files) {
-    const abs = path.resolve(projectRoot, file);
-    if (!fs.existsSync(abs)) continue;
+  for (const file of files || []) {
+    if (typeof file !== 'string' || !file.trim()) continue;
+    const abs = path.resolve(rootAbs, file);
+    const rel = path.relative(rootAbs, abs);
+    if (!rel || rel.startsWith(`..${path.sep}`) || rel === '..' || path.isAbsolute(rel)) continue;
+    let isFile = false;
+    try { isFile = fs.statSync(abs).isFile(); } catch { isFile = false; }
+    if (!isFile) continue;
     const exports = runtime && typeof runtime.readModuleExports === 'function' ? runtime.readModuleExports(abs) : null;
     if (!exports || exports.length === 0) continue;
     modules.push({ file, exports });
@@ -121,6 +158,7 @@ function buildInterfaces(projectRoot, runtime, files) {
 }
 
 function writeInterfaces(programDir, phaseId, modules) {
+  if (!isSafePhaseId(phaseId)) throw new Error(`phaseId inválido: ${phaseId}`);
   const file = path.join(programPaths(programDir).interfacesDir, `${phaseId}.json`);
   writeJson(file, { schema_version: 1, phase: phaseId, generated_at: new Date().toISOString(), modules });
   return file;
@@ -130,7 +168,7 @@ function writeInterfaces(programDir, phaseId, modules) {
 function loadClosedInterfaces(programDir, state) {
   const byFile = new Map();
   for (const phase of state && Array.isArray(state.phases) ? state.phases : []) {
-    if (phase.status !== 'closed') continue;
+    if (!phase || phase.status !== 'closed' || !isSafePhaseId(phase.id)) continue;
     const doc = readJson(path.join(programPaths(programDir).interfacesDir, `${phase.id}.json`));
     for (const module of doc && Array.isArray(doc.modules) ? doc.modules : []) {
       if (module && module.file && Array.isArray(module.exports)) byFile.set(module.file, { ...module, phase: phase.id });
@@ -148,7 +186,7 @@ function loadClosedHandoffs(dossierRoot, state) {
   const dossier = require('./oxe-dossier.cjs');
   const out = [];
   for (const phase of state && Array.isArray(state.phases) ? state.phases : []) {
-    if (phase.status !== 'closed') continue;
+    if (!phase || phase.status !== 'closed' || !isSafePhaseId(phase.id)) continue;
     let text = '';
     try {
       text = fs.readFileSync(path.join(dossierRoot, phase.id, 'plan.md'), 'utf8');
@@ -164,7 +202,7 @@ function loadClosedHandoffs(dossierRoot, state) {
 }
 
 function git(projectRoot, args) {
-  const result = spawnSync('git', args, { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
+  const result = spawnSync('git', ['-c', 'core.quotepath=false', ...args], { cwd: projectRoot, encoding: 'utf8', windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
   return { ok: result.status === 0, stdout: String(result.stdout || '').trim(), stderr: String(result.stderr || '').trim() };
 }
 
@@ -196,6 +234,7 @@ module.exports = {
   writeProgram,
   relativeRef,
   freezeRegressionChecks,
+  isWholeSuiteCommand,
   writeRegression,
   loadRegressionChecks,
   contractedFiles,

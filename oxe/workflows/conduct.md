@@ -4,7 +4,7 @@
 Ponto de entrada para objetivos em linguagem natural que requerem execução autônoma.
 O Conductor classifica a complexidade do objetivo, recupera memória relevante, carrega as personas adequadas e decide se o trabalho será feito em **Agent Mode** (Conductor age sozinho) ou **Swarm Mode** (equipe de agentes especializados).
 
-Invocado automaticamente por `oxe.md` quando o input é um **objetivo ou tarefa de implementação** — não uma pergunta situacional, não um pedido de roteamento simples.
+Invocado por `oxe.md` / `route.md` só quando o usuário pede **explicitamente** o modo autônomo ("faz sozinho de ponta a ponta"). Um objetivo de implementação comum vai para `/oxe-quick` (pequeno) ou `/oxe-spec`.
 </objective>
 
 <context>

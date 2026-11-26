@@ -48,7 +48,8 @@ Estes são os únicos comandos que você precisa conhecer para seguir o framewor
 ```
 /oxe              → onde estou / o que faço / help (entrada universal + perguntas situacionais)
 /oxe-quick        → tarefa pequena, sem cerimônia (com agentes lean quando necessário)
-/oxe-spec         → nova feature: perguntas → pesquisa → requisitos → roteiro → aprovação
+/oxe-spec         → nova feature: grill (1 pergunta por vez, com a recomendada) → requisitos → roteiro
+                    → PRD, glossário, ADRs, RFC → spec check → aprovação (--fast: blocos de perguntas)
                     Absorve: scan (--refresh / --full), research (--research / --deep), ui-spec (--ui)
 /oxe-plan         → tarefas por onda (--agents para blueprint multi-agente)
 /oxe-execute      → implementar (A: 1 sessão | B: por onda | C: por tarefa)
@@ -57,7 +58,11 @@ Estes são os únicos comandos que você precisa conhecer para seguir o framewor
 /oxe-verify       → validar e fechar o ciclo
                     Absorve: gaps (--gaps), security (--security), ui-review (--ui),
                              review-pr (--pr / --diff), retro (automático)
+/oxe-ship         → entregar: PR → CI/merge → deploy → docs → close (--local: só commit;
+                    --defect: defeito pós-deploy → ALM + CR)
 ```
+
+**A jornada (SDLC):** 0 Preparar → 1 Descobrir (grill) → 2 Validar a spec → 3 Programar (fases, ALM) → 4 Decidir (DISCUSS, RFC) → 5 Planejar → 6 Construir → 7 Verificar → 8 Entregar → 9 Operar. `oxe-cc status --journey` mostra onde você está; toda etapa termina com **um** próximo passo (`oxe-cc status --json`).
 
 ## Trilha avançada
 
@@ -71,6 +76,7 @@ Estes são os únicos comandos que você precisa conhecer para seguir o framewor
 ```
 /oxe-capabilities → listar, instalar, remover ou atualizar capabilities nativas do projeto
 /oxe-skill        → descobrir, invocar e gerenciar skills OXE via @<id>
+/oxe-alm          → configurar e operar o ALM (Jira / Azure DevOps, por REST ou MCP)
 oxe-cc azure      → autenticar, sincronizar inventário e operar Azure com checkpoint formal
 ```
 
@@ -100,7 +106,7 @@ Tudo o mais é ativado automaticamente por contexto, por config, ou existe como 
 
 ### Cursor
 
-Slash commands da trilha principal: `/oxe`, `/oxe-quick`, `/oxe-spec`, `/oxe-plan`, `/oxe-execute`, `/oxe-verify`
+Slash commands da trilha principal: `/oxe`, `/oxe-quick`, `/oxe-spec`, `/oxe-plan`, `/oxe-execute`, `/oxe-verify`, `/oxe-ship`
 
 Slash commands avançados: `/oxe-session`, `/oxe-dashboard`
 
@@ -142,7 +148,7 @@ Com **`compact_max_age_days`** em `.oxe/config.json` (ver `oxe/templates/CONFIG.
 ## Fluxo completo
 
 0. **situação** — `/oxe "pergunta"` responde com base nos artefatos reais. Sem input: próximo passo.
-1. **spec** — fluxo em **5 fases**: perguntas (máx 3 rodadas) → pesquisa (proposta inline na Fase 2, sem sair do spec) → requisitos R-ID (v1/v2/fora) → roteiro (`.oxe/ROADMAP.md`) → aprovação.
+1. **spec** — fluxo em **5 fases**: grill (árvore de decisões, uma pergunta por vez, com a resposta recomendada; `--fast` = blocos, máx 3 rodadas) → pesquisa (proposta inline na Fase 2, sem sair do spec) → requisitos R-ID (v1/v2/fora) → roteiro (`.oxe/ROADMAP.md`) → aprovação.
    - `/oxe-spec --refresh` — atualiza o mapa do codebase antes de spec (modo incremental)
    - `/oxe-spec --full` — força scan completo antes de spec
    - `/oxe-spec --research` — ativa pesquisa/spike explícita na Fase 2
@@ -219,7 +225,7 @@ Um pedido → **um** destino (sem gerar contrato). O agente aplica `route.md` ou
 
 | Se o utilizador disser (exemplos) | Comando / ação |
 |-----------------------------------|----------------|
-| **Objetivo de implementação** (“cria X”, “implementa Y”, “adiciona Z”, “corrige W”, “desenvolve N”) | `/oxe <objetivo>` → Conductor decide automaticamente Agent Mode (simples/médio) ou Swarm Mode (complexo) |
+| **Objetivo de implementação** (“cria X”, “implementa Y”, “adiciona Z”, “corrige W”, “desenvolve N”) | `/oxe <objetivo>` → pequeno (critérios do quick) → `/oxe-quick`; senão → `/oxe-spec`. Conductor (Agent/Swarm Mode) só com pedido explícito de modo autônomo |
 | Não sei que passo OXE sou / “o que faço agora?” | `/oxe` ou `npx oxe-cc status` |
 | Quero entender rapidamente a situação real da trilha atual | `/oxe “pergunta”` |
 | Acabei de clonar / falta OXE no projeto | `npx oxe-cc@latest` (ou `oxe-cc`) na raiz do repo |

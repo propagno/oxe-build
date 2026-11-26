@@ -22,6 +22,24 @@ function entriesOf(doc) {
   return (doc && Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : []).filter(Boolean);
 }
 
+/**
+ * Whether an `acceptance_tests` entry belongs exclusively to already-completed tasks:
+ *  - `entry.task` set → that task is `done: true`;
+ *  - `entry.criterion` set (without `entry.task`) → at least one task owns that criterion and every owning task is `done: true`.
+ */
+function isEntryDone(entry, tasks, doneIds) {
+  if (!entry) return false;
+  if (entry.task) return doneIds.has(entry.task);
+  if (entry.criterion) {
+    const owners = tasks.filter((t) => {
+      const acc = Array.isArray(t.acceptance) ? t.acceptance : Array.isArray(t.aceite) ? t.aceite : [];
+      return acc.includes(entry.criterion);
+    });
+    return owners.length > 0 && owners.every((t) => doneIds.has(t.id));
+  }
+  return false;
+}
+
 /** Per frozen test file: does it only assert on source text? */
 function sourceAssertionFindings(projectRoot, doc) {
   const out = [];
@@ -30,7 +48,7 @@ function sourceAssertionFindings(projectRoot, doc) {
   for (const entry of entriesOf(doc)) {
     if (entry.rigor === 'source-assertion' && typeof entry.rigor_reason === 'string' && entry.rigor_reason.trim().length >= 8) continue;
     // frozen tests of finished work are history; the gate is for tests still to be proven
-    if (entry.task && doneIds.has(entry.task)) continue;
+    if (isEntryDone(entry, tasks, doneIds)) continue;
     for (const f of entry.files || []) {
       const file = norm(typeof f === 'string' ? f : f.path);
       const req = testScope.testRequirements(projectRoot, file);
@@ -100,9 +118,30 @@ function collectTargetAcceptanceFiles(projectRoot, docOrFiles) {
   return [...files].sort();
 }
 
+const REGEX_PRECEDING_WORDS = new Set([
+  'return', 'typeof', 'void', 'throw', 'case', 'in', 'of', 'instanceof', 'delete', 'new', 'yield', 'await', 'else', 'do',
+]);
+
+function canStartRegexAt(commentArr, slashIdx) {
+  let k = slashIdx - 1;
+  while (k >= 0 && /\s/.test(commentArr[k])) k -= 1;
+  if (k < 0) return true;
+  const prev = commentArr[k];
+  if ((prev === '+' && commentArr[k - 1] === '+') || (prev === '-' && commentArr[k - 1] === '-')) return false;
+  if ('=,(,[:,;!&|?{}~^+-*%'.includes(prev)) return true;
+  if (/[\w$]/.test(prev)) {
+    let wStart = k;
+    while (wStart > 0 && /[\w$]/.test(commentArr[wStart - 1])) wStart -= 1;
+    const word = commentArr.slice(wStart, k + 1).join('');
+    return REGEX_PRECEDING_WORDS.has(word);
+  }
+  return false;
+}
+
 /**
- * Masks comments with spaces (`commentStripped`, keeping string literals intact) and also produces `structureOnly`
- * (strings/templates masked too, preserving `{`/`}` only in code and `\r`/`\n` everywhere so offsets/lines stay exact).
+ * Masks comments with spaces (`commentStripped`, keeping string and regex literals intact) and also produces
+ * `structureOnly` (strings/templates/regexes masked too, preserving `{`/`}` only in code and `\r`/`\n` everywhere so
+ * offsets/lines stay exact).
  */
 function maskJsSource(raw) {
   const src = String(raw || '');
@@ -145,6 +184,30 @@ function maskJsSource(raw) {
         i += 2;
       }
       continue;
+    }
+    // Regex literal /body/flags (single-line; prevents /[/*]/ from opening a fake block comment)
+    if (ch === '/' && canStartRegexAt(commentArr, i)) {
+      let j = i + 1;
+      let inClass = false;
+      let closed = false;
+      while (j < src.length && src[j] !== '\n' && src[j] !== '\r') {
+        if (src[j] === '\\') {
+          if (j + 1 >= src.length || src[j + 1] === '\n' || src[j + 1] === '\r') break;
+          j += 2;
+          continue;
+        }
+        if (src[j] === '[') { inClass = true; j += 1; continue; }
+        if (src[j] === ']') { inClass = false; j += 1; continue; }
+        if (src[j] === '/' && !inClass) { closed = true; break; }
+        j += 1;
+      }
+      if (closed && j > i + 1) {
+        let end = j + 1;
+        while (end < src.length && /[dgimsuvy]/.test(src[end])) end += 1;
+        for (let m = i; m < end; m += 1) structArr[m] = ' ';
+        i = end;
+        continue;
+      }
     }
     // Single, double, or backtick string literal
     if (ch === '\'' || ch === '"' || ch === '`') {
@@ -346,15 +409,15 @@ function suspiciousRegexFindings(projectRoot, docOrFiles) {
     if (!fs.existsSync(abs)) continue;
     let raw;
     try { raw = fs.readFileSync(abs, 'utf8'); } catch { continue; }
-    // Replace block comments preserving newlines so line numbers stay exact
-    const text = raw.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
-    const lines = text.split(/\r?\n/);
+    // Mask // and /* */ comments while preserving string/regex literals (e.g. 'http://localhost' or /[/*]/) and exact lines
+    const { commentStripped } = maskJsSource(raw);
+    const rawLines = raw.split(/\r?\n/);
+    const codeLines = commentStripped.split(/\r?\n/);
 
-    for (let i = 0; i < lines.length; i += 1) {
-      const line = lines[i];
-      const trimmed = line.trim();
-      if (trimmed.startsWith('//')) continue;
-      const codeLine = line.replace(/\/\/.*$/, '');
+    for (let i = 0; i < codeLines.length; i += 1) {
+      const codeLine = codeLines[i];
+      if (!/\S/.test(codeLine)) continue;
+      const trimmed = (rawLines[i] || '').trim();
 
       callBeforeRe.lastIndex = 0;
       let m;
@@ -393,7 +456,7 @@ function suspiciousRegexFindings(projectRoot, docOrFiles) {
 
       if (stripDigitsRe.test(codeLine)) {
         // Case A: chained `expect(...replace(/\d+/g, '')...).toMatch(/2/)`
-        const window2 = `${codeLine} ${lines[i + 1] ? lines[i + 1].replace(/\/\/.*$/, '') : ''}`;
+        const window2 = `${codeLine} ${codeLines[i + 1] || ''}`;
         if (/\bexpect\s*\([^)]*\.replace(?:All)?\s*\(\s*\/(?:\\d\+|\[0-9\]\+)\//.test(window2) && assertionRequiresDigit(window2)) {
           findings.push({
             file,
@@ -405,15 +468,30 @@ function suspiciousRegexFindings(projectRoot, docOrFiles) {
           });
           continue;
         }
-        // Case B: `const x = ...replace(/\d+/g, '')` followed by `expect(x).toMatch(/2/)`
+        // Case B: `const x = ...replace(/\d+/g, '')` followed by `expect(x).toMatch(/2/)` (same line after `;` or next lines)
         const assignMatch = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/.exec(codeLine);
         if (assignMatch) {
           const varName = assignMatch[1];
           const escapedVar = varName.replace(/\$/g, '\\$');
           const expectVarRe = new RegExp(`\\bexpect\\s*\\(\\s*${escapedVar}(?:\\s*\\.[\\w$]+\\(\\s*\\))*\\s*\\)`);
           const reassignRe = new RegExp(`\\b${escapedVar}\\s*=[^=]`);
-          for (let j = i + 1; j < Math.min(lines.length, i + 12); j += 1) {
-            const nextCode = lines[j].replace(/\/\/.*$/, '');
+          const semiIdx = codeLine.indexOf(';', assignMatch.index + assignMatch[0].length);
+          if (semiIdx >= 0) {
+            const sameLineTail = codeLine.slice(semiIdx + 1);
+            if (!reassignRe.test(sameLineTail) && expectVarRe.test(sameLineTail) && assertionRequiresDigit(sameLineTail)) {
+              findings.push({
+                file,
+                line: i + 1,
+                kind: 'contradictory_strip_assert',
+                pattern: `${varName} (após .replace(/\\d+/g, ''))`,
+                suggestion: 'a instrução anterior removeu todos os dígitos com .replace(/\\d+/g, ""); a asserção de dígitos sempre falhará',
+                snippet: trimmed.slice(0, 140),
+              });
+              continue;
+            }
+          }
+          for (let j = i + 1; j < Math.min(codeLines.length, i + 12); j += 1) {
+            const nextCode = codeLines[j];
             if (/^\s*\}\s*\)\s*;?\s*$/.test(nextCode)) break;
             if (reassignRe.test(nextCode)) break;
             if (expectVarRe.test(nextCode) && assertionRequiresDigit(nextCode)) {
@@ -423,7 +501,7 @@ function suspiciousRegexFindings(projectRoot, docOrFiles) {
                 kind: 'contradictory_strip_assert',
                 pattern: `${varName} (após .replace(/\\d+/g, ''))`,
                 suggestion: 'a linha anterior removeu todos os dígitos com .replace(/\\d+/g, ""); a asserção de dígitos sempre falhará',
-                snippet: lines[j].trim().slice(0, 140),
+                snippet: (rawLines[j] || '').trim().slice(0, 140),
               });
               break;
             }
@@ -451,19 +529,52 @@ const MUTATORS = [
   { re: /\bfalse\b/, to: 'true' },
   { re: /(\w)\s*<\s*(\w)/, to: '$1 >= $2' },
   { re: /(\w)\s*>\s*(\w)/, to: '$1 <= $2' },
-  { re: /\breturn\s+(?!;)([^;\n]+);/, to: 'return undefined;' },
+  { re: /\breturn\s+(?!;)([^;\n]+);/, to: 'return undefined;', isReturn: true },
 ];
 
-/** Up to `max` mutants for a file's text: { line, before, after }. Comments and imports are skipped. */
+function blankTsGenerics(structLine) {
+  let s = structLine;
+  let prev;
+  do {
+    prev = s;
+    s = s
+      .replace(/\b[A-Za-z_$][\w$.]*<[^<>={};()]*>/g, (g) => ' '.repeat(g.length))
+      .replace(/(=\s*)(<[^<>={};()]*>)(?=\s*\()/g, (_m, eq, gen) => eq + ' '.repeat(gen.length));
+  } while (s !== prev);
+  return s;
+}
+
+/** Up to `max` mutants for a file's text: { line, before, after }. Comments, strings, types, generics and imports are skipped. */
 function mutantsOf(text, max) {
-  const lines = text.split('\n');
+  const rawStr = String(text || '');
+  const { structureOnly } = maskJsSource(rawStr);
+  const lines = rawStr.split('\n');
+  const structLines = structureOnly.split('\n');
   const out = [];
   for (let i = 0; i < lines.length && out.length < max; i += 1) {
     const l = lines[i];
-    if (/^\s*(\/\/|\*|\/\*|import\b|export\s+\{|#)/.test(l) || /require\(/.test(l)) continue;
-    const m = MUTATORS.find((x) => x.re.test(l));
-    if (!m) continue;
-    const after = l.replace(m.re, m.to);
+    const sLine = structLines[i] || '';
+    if (!/\S/.test(sLine)) continue;
+    if (/^\s*(?:import\b|export\s*\{|(?:export\s+)?(?:declare\s+)?(?:type|interface)\s+[A-Za-z_$]|declare\s+|#)/.test(sLine) || /\brequire\s*\(/.test(sLine)) continue;
+    const sClean = blankTsGenerics(sLine);
+    let chosen = null;
+    let match = null;
+    for (const cand of MUTATORS) {
+      const hit = cand.re.exec(sClean);
+      if (!hit) continue;
+      if (cand.isReturn) {
+        const rawSlice = l.slice(hit.index, hit.index + hit[0].length);
+        const expr = rawSlice.replace(/^\s*return\b/, '').replace(/;\s*$/, '');
+        if (!/\S/.test(expr)) continue;
+      }
+      chosen = cand;
+      match = hit;
+      break;
+    }
+    if (!chosen || !match) continue;
+    const rawSlice = l.slice(match.index, match.index + match[0].length);
+    const replacement = chosen.to.includes('$') ? rawSlice.replace(chosen.re, chosen.to) : chosen.to;
+    const after = l.slice(0, match.index) + replacement + l.slice(match.index + match[0].length);
     if (after !== l) out.push({ line: i + 1, before: l, after });
   }
   return out;
@@ -479,7 +590,7 @@ function mutationSample(projectRoot, doc, options = {}) {
   const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 120_000;
   const tasks = (doc && Array.isArray(doc.tasks) ? doc.tasks : []).filter(Boolean);
   const doneIds = new Set(tasks.filter((t) => t.done === true).map((t) => t.id));
-  const targets = entriesOf(doc).filter((e) => e.command && (!e.task || doneIds.has(e.task)));
+  const targets = entriesOf(doc).filter((e) => e.command && isEntryDone(e, tasks, doneIds));
   if (!targets.length) return [];
   const wt = path.join(projectRoot, '.oxe', 'mutation-ws', `m-${Date.now().toString(36)}`);
   fs.mkdirSync(path.dirname(wt), { recursive: true });
@@ -547,4 +658,6 @@ module.exports = {
   mutationSample,
   mutationMessages,
   mutantsOf,
+  maskJsSource,
+  isEntryDone,
 };

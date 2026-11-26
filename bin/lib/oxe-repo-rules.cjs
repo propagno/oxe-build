@@ -69,6 +69,15 @@ function policyRuleText(rule) {
   return `${rule.message || `proibido: /${rule.forbid}/`}${scope} [${rule.id}]`;
 }
 
+function generatedRuleText(rule) {
+  if (!rule || !rule.file || !rule.source) return null;
+  const files = (Array.isArray(rule.file) ? rule.file : [rule.file]).join(', ');
+  const sources = (Array.isArray(rule.source) ? rule.source : [rule.source]).join(', ');
+  const gen = rule.generator ? ` e rode ${rule.generator}` : ' e rode o gerador';
+  const test = rule.test ? ` (verificado por ${rule.test})` : '';
+  return `Nunca edite manualmente o arquivo gerado ${files}: edite a fonte ${sources}${gen}${test} [generated_files]`;
+}
+
 /**
  * @param {string} projectRoot
  * @param {{ config?: object }} [options]
@@ -82,6 +91,10 @@ function collectRepoRules(projectRoot, options = {}) {
 
   for (const rule of Array.isArray(config.policy_rules) ? config.policy_rules : []) {
     const text = policyRuleText(rule);
+    if (text) rules.push({ source: '.oxe/config.json', text });
+  }
+  for (const rule of Array.isArray(config.generated_files) ? config.generated_files : []) {
+    const text = generatedRuleText(rule);
     if (text) rules.push({ source: '.oxe/config.json', text });
   }
 

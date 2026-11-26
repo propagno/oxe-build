@@ -113,7 +113,9 @@ function validateWorkflowShapes(workflowsDir, options = {}) {
       }
     }
 
-    const bytes = Buffer.byteLength(content, 'utf8');
+    // LF bytes: a Windows checkout with core.autocrlf adds one byte per line, and the same plan.md read 45155 bytes there
+    // against 44594 in the repository (OxeSpace 15/11)
+    const bytes = Buffer.byteLength(content.replace(/\r\n/g, '\n'), 'utf8');
     if (bytes > maxBytesSoft) {
       fileWarnings.push(
         `ficheiro grande (${bytes} bytes); considere extrair para oxe/workflows/references/ (limite suave ${maxBytesSoft})`

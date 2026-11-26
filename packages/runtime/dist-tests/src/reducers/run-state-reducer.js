@@ -42,11 +42,12 @@ const VALID_WORK_ITEM_TRANSITIONS = {
 };
 const VALID_RUN_TRANSITIONS = {
     planned: ['running'],
-    running: ['paused', 'failed', 'completed', 'aborted', 'cancelled', 'waiting_approval'],
+    running: ['paused', 'failed', 'completed', 'blocked', 'aborted', 'cancelled', 'waiting_approval'],
     paused: ['running', 'cancelled'],
     waiting_approval: ['running', 'cancelled'],
+    blocked: ['running', 'replaying'],
     failed: ['replaying'],
-    replaying: ['running', 'failed', 'completed'],
+    replaying: ['running', 'failed', 'completed', 'blocked'],
     completed: [],
     aborted: [],
     cancelled: [],
@@ -96,7 +97,11 @@ function applyEvent(state, event) {
                 const item = event.payload;
                 workItems.set(event.work_item_id, { ...item, work_item_id: event.work_item_id, status: 'ready' });
             }
-            return { ...state, workItems };
+            const failedWorkItems = new Set(state.failedWorkItems);
+            failedWorkItems.delete(event.work_item_id);
+            const blockedWorkItems = new Set(state.blockedWorkItems);
+            blockedWorkItems.delete(event.work_item_id);
+            return { ...state, workItems, failedWorkItems, blockedWorkItems };
         }
         case 'AttemptStarted': {
             if (!event.work_item_id || !event.attempt_id)
@@ -136,15 +141,19 @@ function applyEvent(state, event) {
             }
             const completedWorkItems = new Set(state.completedWorkItems);
             completedWorkItems.add(event.work_item_id);
+            const failedWorkItems = new Set(state.failedWorkItems);
+            failedWorkItems.delete(event.work_item_id);
+            const blockedWorkItems = new Set(state.blockedWorkItems);
+            blockedWorkItems.delete(event.work_item_id);
             // Collect evidence refs from payload
             const evidence = event.payload.evidence ?? [];
             if (evidence.length > 0) {
                 const evidenceRefs = new Map(state.evidenceRefs);
                 const existing = evidenceRefs.get(event.work_item_id) ?? [];
                 evidenceRefs.set(event.work_item_id, [...existing, ...evidence]);
-                return { ...state, workItems, completedWorkItems, evidenceRefs };
+                return { ...state, workItems, completedWorkItems, failedWorkItems, blockedWorkItems, evidenceRefs };
             }
-            return { ...state, workItems, completedWorkItems };
+            return { ...state, workItems, completedWorkItems, failedWorkItems, blockedWorkItems };
         }
         case 'WorkItemBlocked': {
             if (!event.work_item_id)
@@ -158,6 +167,35 @@ function applyEvent(state, event) {
             const blockedWorkItems = new Set(state.blockedWorkItems);
             blockedWorkItems.add(event.work_item_id);
             return { ...state, workItems, blockedWorkItems };
+        }
+        case 'CheckpointFailed': {
+            const id = event.work_item_id ?? event.payload.task;
+            if (!id)
+                return state;
+            const completedWorkItems = new Set(state.completedWorkItems);
+            completedWorkItems.delete(id);
+            const workItems = new Map(state.workItems);
+            const item = workItems.get(id);
+            if (item)
+                workItems.set(id, { ...item, status: 'pending' });
+            return { ...state, workItems, completedWorkItems };
+        }
+        case 'PlanTaskReopened':
+        case 'TaskReopened': {
+            const id = event.work_item_id ?? event.payload.task;
+            if (!id)
+                return state;
+            const completedWorkItems = new Set(state.completedWorkItems);
+            completedWorkItems.delete(id);
+            const failedWorkItems = new Set(state.failedWorkItems);
+            failedWorkItems.delete(id);
+            const blockedWorkItems = new Set(state.blockedWorkItems);
+            blockedWorkItems.delete(id);
+            const workItems = new Map(state.workItems);
+            const item = workItems.get(id);
+            if (item)
+                workItems.set(id, { ...item, status: 'pending' });
+            return { ...state, workItems, completedWorkItems, failedWorkItems, blockedWorkItems };
         }
         case 'RetryScheduled': {
             if (!event.work_item_id)

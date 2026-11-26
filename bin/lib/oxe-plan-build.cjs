@@ -28,6 +28,12 @@ const KINDS = new Set(['add', 'remove', 'move', 'test-only', 'config-only']);
 const norm = (p) => String(p).replace(/\\/g, '/').replace(/^\.\//, '');
 const uniq = (xs) => [...new Set(xs.filter(Boolean))];
 
+/** Product code: a code file that is not a test, a script, a doc or a generated folder. */
+function isProductCode(file) {
+  const f = norm(file);
+  return CODE_RE.test(f) && !TEST_FILE_RE.test(f) && !NON_PROD_DIR_RE.test(f);
+}
+
 function inScope(file, scope) {
   const f = norm(file);
   for (const raw of scope || []) {
@@ -333,7 +339,19 @@ function renderPlanMd(plan, phase) {
   for (const w of waves) {
     lines.push(`## Onda ${w}`, '');
     for (const t of plan.tasks.filter((x) => x.wave === w)) {
-      lines.push(`### ${t.id} — ${t.title}`, '', `- **Arquivos prováveis:** ${(t.files || []).map((f) => `\`${f}\``).join(', ') || '—'}`, `- **Depende de:** ${(t.depends_on || []).join(', ') || '—'}`, `- **Onda:** ${t.wave}`, ...(t.kind ? [`- **Tipo:** ${t.kind}`] : []), '- **Verificar:**', `  - Comando: ${((t.verify && t.verify.commands) || []).map((c) => `\`${c}\``).join(' · ') || '—'}`, `- **Aceite vinculado:** ${(t.acceptance || []).join(', ') || '—'}`, '');
+      lines.push(
+        `### ${t.id} — ${t.title}`,
+        '',
+        `- **Arquivos prováveis:** ${(t.files || []).map((f) => `\`${f}\``).join(', ') || '—'}`,
+        `- **Depende de:** ${(t.depends_on || []).join(', ') || '—'}`,
+        `- **Onda:** ${t.wave}`,
+        ...(t.kind ? [`- **Tipo:** ${t.kind}`] : []),
+        ...(t.notes && String(t.notes).trim() ? [`- **Notas:** ${String(t.notes).trim().replace(/\r?\n/g, ' · ')}`] : []),
+        '- **Verificar:**',
+        `  - Comando: ${((t.verify && t.verify.commands) || []).map((c) => `\`${c}\``).join(' · ') || '—'}`,
+        `- **Aceite vinculado:** ${(t.acceptance || []).join(', ') || '—'}`,
+        '',
+      );
     }
   }
   return lines.join('\n');
@@ -1177,6 +1195,8 @@ function build(inputs, ctx = {}) {
     for (const f of ['deleted', 'created', 'edited']) {
       cur[f].push(...expandRolePaths(root, ref, rolePathList(t, f)));
     }
+    // OXB-C24-3: `swept` (existing tests the task updates, no symbols needed) on ANY task, not only removals
+    cur.swept.push(...expandRolePaths(root, ref, rolePathList(t, 'swept')));
     cur.moves.push(...(Array.isArray(t.moves) ? t.moves : []));
     roleByKey.set(k, cur);
   }
@@ -1352,6 +1372,18 @@ function build(inputs, ctx = {}) {
       ...rigor.pausedSocketMessages(rigor.pausedSocketFindings(root, plan)),
     );
   } catch { /* */ }
+  // OXB-C1 Adendo 2 (G47): warn and enrich task.notes when an in-scope file is within ~20 lines of its file-size cap.
+  try {
+    const fsg = require('./oxe-file-size-guard.cjs');
+    const annotated = fsg.annotatePlanFileSizeNotes(root, plan, { pack });
+    if (annotated.findings.length) {
+      warnings.push(...fsg.fileSizeHeadroomMessages(annotated.findings).warnings);
+    }
+  } catch { /* */ }
+  // OXB-C25: the preflight needs `ready: true`; without it, execute stopped on execution_rationality:not_ready with an
+  // empty gap list while plan lint said ok. The build's own checks decide it.
+  pack.ready = errors.length === 0;
+  pack.critical_gaps = [];
   return { plan, pack, planMd: renderPlanMd(plan, ctx.phase), errors, warnings, map: res.map, paired, notices_gate: noticesGate };
 }
 
@@ -1455,6 +1487,7 @@ function checkRole(root, doc, options = {}) {
 }
 
 module.exports = {
+  isProductCode,
   build,
   checkRole,
   importedSymbols,
@@ -1472,6 +1505,8 @@ module.exports = {
   applyCoupledScope,
   injectFrontendDesignLintVerify,
   buildImportIndex,
+  extractModuleImports,
+  loadPathAliases,
   resolveModuleSpecifier,
   findOrphanImporters,
   findCoupledUnionConsumers,

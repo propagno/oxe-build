@@ -22,6 +22,23 @@ describe('nomes de testes por runner', () => {
     assert.deepEqual(r.failed, ['não publica', 'tests/a.test.ts > registry > busy', 'test_bad', 'junit bad']);
   });
 
+  test('Gradle testLogging (Kotlin/JVM): Class > method PASSED|FAILED|SKIPPED, também com prefixo do log da CI', () => {
+    const out = [
+      '> Task :protocol:test',
+      'VtScreenScrollTest > theFilledScreenIsFiveRows PASSED',
+      'VtScreenScrollTest > lineFeedAtTheBottomOfAScrollRegionScrollsOnlyThatRegion PASSED (0.2s)',
+      'test\tRun tests\t2026-11-14T16:00:00.000Z TerminalEnterTest > anEnterKeySendsCarriageReturn PASSED',
+      'TerminalEnterTest > Nested > sendWithAnEmptyFieldSendsEnterAlone FAILED',
+      'TerminalEnterTest > ignoredOne SKIPPED',
+      'BUILD SUCCESSFUL in 41s',
+    ].join('\n');
+    const r = extractTestResults(out);
+    assert.deepEqual(r.passed, ['VtScreenScrollTest > theFilledScreenIsFiveRows', 'VtScreenScrollTest > lineFeedAtTheBottomOfAScrollRegionScrollsOnlyThatRegion', 'TerminalEnterTest > anEnterKeySendsCarriageReturn']);
+    assert.deepEqual(r.failed, ['TerminalEnterTest > Nested > sendWithAnEmptyFieldSendsEnterAlone']);
+    assert.deepEqual(missingProofs(['theFilledScreenIsFiveRows', 'lineFeedAtTheBottomOfAScrollRegionScrollsOnlyThatRegion', 'anEnterKeySendsCarriageReturn'], out), []);
+    assert.deepEqual(missingProofs(['sendWithAnEmptyFieldSendsEnterAlone', 'ignoredOne'], out), ['sendWithAnEmptyFieldSendsEnterAlone', 'ignoredOne']);
+  });
+
   test('missingProofs aceita "arquivo › nome" e nome parcial', () => {
     const out = ' ✓ tests/r.test.ts > voice registry (A1) > starts one session, stamps events 9ms';
     assert.deepEqual(missingProofs(['tests/r.test.ts › starts one session'], out), []);

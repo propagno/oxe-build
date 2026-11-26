@@ -265,7 +265,8 @@ describe('oxe-cc CLI edge', () => {
     assert.ok(j.staleCompact && typeof j.staleCompact.stale === 'boolean');
   });
 
-  test('status --json suggests /oxe for fresh workspace without spec or codebase maps', () => {
+  // jornada 1.21.2 (item 3): logo depois do init-oxe o próximo passo é /oxe-spec, nunca /oxe de novo
+  test('status --json suggests /oxe-spec for fresh workspace without spec or codebase maps', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-st-fresh-'));
     fs.mkdirSync(path.join(dir, '.oxe'), { recursive: true });
     fs.writeFileSync(path.join(dir, '.oxe', 'STATE.md'), '## Fase atual\n\n`initial`\n', 'utf8');
@@ -276,8 +277,10 @@ describe('oxe-cc CLI edge', () => {
     });
     assert.strictEqual(r.status, 0, r.stderr || r.stdout);
     const j = JSON.parse(r.stdout.trim().split(/\r?\n/).filter(Boolean).pop());
-    assert.strictEqual(j.nextStep, 'oxe');
-    assert.strictEqual(j.cursorCmd, '/oxe');
+    assert.strictEqual(j.nextStep, 'spec');
+    assert.strictEqual(j.next, 'spec', 'next é alias de nextStep');
+    assert.strictEqual(j.cursorCmd, '/oxe-spec');
+    assert.match(j.reason, /\/oxe-quick/);
   });
 
   test('status --json exposes package repo mode and release readiness without plan noise', () => {
@@ -481,7 +484,9 @@ describe('oxe-cc CLI edge', () => {
     assert.ok(j2.diagnostics.planWarnings.some((x) => /não supera o limiar executável/i.test(x)));
   });
 
-  test('status suggests dashboard when plan is executable but review is missing', () => {
+  // jornada 1.21.2 (item 6): plan_review_status só é gravado pelo dashboard; plano pronto → /oxe-execute, e o
+  // dashboard só quando o projeto exige a revisão (review.plan_required)
+  test('status suggests execute when plan is executable and review is not required (dashboard only when required)', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-st-dash-'));
     const oxe = path.join(dir, '.oxe');
     const codebase = path.join(oxe, 'codebase');
@@ -512,9 +517,14 @@ describe('oxe-cc CLI edge', () => {
     });
     assert.strictEqual(r.status, 0, r.stderr || r.stdout);
     const j = JSON.parse(r.stdout.trim().split(/\r?\n/).filter(Boolean).pop());
-    assert.strictEqual(j.nextStep, 'dashboard');
-    assert.strictEqual(j.cursorCmd, '/oxe-dashboard');
+    assert.strictEqual(j.nextStep, 'execute');
+    assert.strictEqual(j.cursorCmd, '/oxe-execute');
     assert.ok(j.diagnostics.reviewWarnings.some((x) => /plan_review_status/i.test(x)));
+    fs.writeFileSync(path.join(oxe, 'config.json'), JSON.stringify({ review: { plan_required: true } }), 'utf8');
+    const r2 = spawnSync(process.execPath, [CLI, 'status', '--json', '--dir', dir], { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env, OXE_NO_BANNER: '1' } });
+    const j2 = JSON.parse(r2.stdout.trim().split(/\r?\n/).filter(Boolean).pop());
+    assert.strictEqual(j2.nextStep, 'dashboard');
+    assert.strictEqual(j2.cursorCmd, '/oxe-dashboard');
   });
 
   test('status keeps nextStep in plan when confidence is exactly 90%', () => {

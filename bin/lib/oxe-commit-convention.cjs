@@ -69,11 +69,13 @@ function checkpointSubject(task, config) {
 /** Full message: subject, the task's body (when its `commit` has more lines), the trailers and `OXE-Task`. */
 function checkpointMessage(task, config) {
   const settings = settingsOf(config);
-  const subject = checkpointSubject(task, config);
+  let subject = checkpointSubject(task, config);
+  // ALM key (Jira "OXE-12", Azure DevOps "AB#123") at the end of the subject, once.
+  if (task && task.alm_key && !subject.includes(task.alm_key)) subject = `${subject.slice(0, Math.max(20, 100 - task.alm_key.length - 3)).trimEnd()} (${task.alm_key})`;
   const own = task && typeof task.commit === 'string' ? task.commit.trim().split(/\r?\n/).slice(1).join('\n').trim() : '';
   // OXB-166: T-ids restart per phase — the trailer names the phase (`OXE-Task: F2/T4`) and the run when known.
   const taskRef = task && task.phase ? `${task.phase}/${task.id}` : (task && task.id);
-  const trailers = [...(settings && Array.isArray(settings.trailers) ? settings.trailers : []), `OXE-Task: ${taskRef}`, ...(task && task.run_id ? [`OXE-Run: ${task.run_id}`] : [])];
+  const trailers = [...(settings && Array.isArray(settings.trailers) ? settings.trailers : []), `OXE-Task: ${taskRef}`, ...(task && task.run_id ? [`OXE-Run: ${task.run_id}`] : []), ...(task && Array.isArray(task.crs) ? task.crs.map((id) => `OXE-CR: ${id}`) : [])];
   return [subject, own, trailers.join('\n')].filter(Boolean).join('\n\n');
 }
 

@@ -21,7 +21,15 @@ function list(dir) {
   const byId = new Map();
   for (const r of read(dir)) {
     if (r.kind === 'deferred') byId.set(r.id, { ...r, status: 'open' });
-    else if (r.kind === 'deferred_close' && byId.has(r.id)) Object.assign(byId.get(r.id), { status: r.status, closed_at: r.at });
+    else if (r.kind === 'deferred_retry' && byId.has(r.id)) {
+      const prev = byId.get(r.id);
+      Object.assign(prev, {
+        status: 'open',
+        retried_at: r.at,
+        retry_count: (prev.retry_count || 0) + 1,
+        ...(r.evidence ? { evidence: r.evidence } : {}),
+      });
+    } else if (r.kind === 'deferred_close' && byId.has(r.id)) Object.assign(byId.get(r.id), { status: r.status, closed_at: r.at });
   }
   return [...byId.values()];
 }
@@ -36,6 +44,20 @@ function add(dir, input) {
   const n = all.filter((e) => String(e.id).startsWith(`AD-${phase}-`)).length + 1;
   const rec = { kind: 'deferred', id: existing ? existing.id : `AD-${phase}-${n}`, task: input.task, phase: input.phase || null, reason: input.reason || 'logic', evidence: input.evidence || '', run_id: input.run_id || null, at: new Date().toISOString() };
   fs.mkdirSync(dir, { recursive: true });
+  fs.appendFileSync(FILE(dir), `${JSON.stringify(rec)}\n`);
+  return rec;
+}
+
+function markRetried(dir, id, info = {}) {
+  fs.mkdirSync(dir, { recursive: true });
+  const rec = {
+    kind: 'deferred_retry',
+    id,
+    status: 'ready',
+    ...(info.task ? { task: info.task } : {}),
+    ...(info.tail ? { evidence: String(info.tail).slice(-1500) } : {}),
+    at: new Date().toISOString(),
+  };
   fs.appendFileSync(FILE(dir), `${JSON.stringify(rec)}\n`);
   return rec;
 }
@@ -55,4 +77,4 @@ function closeTask(dir, taskId, phase = null, status = 'resolved') {
   return closed;
 }
 
-module.exports = { list, open, add, close, closeTask };
+module.exports = { list, open, add, markRetried, close, closeTask };

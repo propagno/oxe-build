@@ -14,6 +14,8 @@
 
 const fs = require('fs');
 const path = require('path');
+const specCheck = require('./oxe-spec-check.cjs');
+const criteriaIds = require('./oxe-criteria-ids.cjs');
 
 const BEGIN = '<!-- oxe:dossier:begin -->';
 const END = '<!-- oxe:dossier:end -->';
@@ -37,12 +39,16 @@ function dateOf(iso) {
   return iso ? String(iso).slice(0, 16).replace('T', ' ') : '—';
 }
 
-/** Seção `## Título` de um markdown (até o próximo `## `). */
+/** Seção `## Título` ou `### Título` de um markdown (até o próximo heading de nível igual ou superior). */
 function section(markdown, title) {
   const text = String(markdown || '');
-  const re = new RegExp(`^##\\s+${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^\\n]*\\n([\\s\\S]*?)(?=^##\\s|(?![\\s\\S]))`, 'im');
-  const m = re.exec(text);
-  return m ? m[1].trim() : '';
+  const escaped = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const open = new RegExp(`^(#{2,3})\\s+${escaped}[^\\n]*\\n`, 'im').exec(text);
+  if (!open) return '';
+  const level = open[1].length;
+  const rest = text.slice(open.index + open[0].length);
+  const stop = new RegExp(`^#{1,${level}}\\s`, 'm').exec(rest);
+  return (stop ? rest.slice(0, stop.index) : rest).trim();
 }
 
 /** Linhas `- **D-NN ...` / `D-NN:` da SPEC como decisões. */
@@ -74,7 +80,7 @@ function taskJournal(plan, events, checkResults) {
   const testsByCriterion = new Map();
   // Só os checks de aceite congelado contam (check-a* repete os mesmos testes pelo comando da tarefa).
   for (const r of checkResults || []) {
-    const m = /^check-accept-(a\d+)$/i.exec(r.check_id || '');
+    const m = /^check-accept-(a\d+(?:\.\d+)?|g\d+)$/i.exec(r.check_id || '');
     if (m) testsByCriterion.set(m[1].toUpperCase(), (testsByCriterion.get(m[1].toUpperCase()) || 0) + (r.tests_executed || 0));
   }
   return [...byTask.values()].map((entry) => {
@@ -98,33 +104,43 @@ function globMatch(file, pattern) {
 
 function architectureDrift(pack, plan, changes, hashFile, options = {}) {
   const norm = (p) => String(p).replace(/\\/g, '/');
+  const pathOf = (p) => (p == null ? '' : norm(typeof p === 'string' ? p : p.path != null ? p.path : p));
   const contracted = new Map();
-  // O contrato é o pack (exact_paths) mais os arquivos declarados nas tarefas do plano.
+  // O contrato é o pack (exact_paths / edited_paths / removed_paths) mais os arquivos declarados nas tarefas do plano.
   for (const t of pack && Array.isArray(pack.tasks) ? pack.tasks : []) {
-    for (const p of Array.isArray(t.exact_paths) ? t.exact_paths : []) contracted.set(norm(p), String(t.id || t.task_id));
+    const tid = String(t.id || t.task_id);
+    for (const list of [t.exact_paths, t.edited_paths, t.removed_paths]) {
+      for (const p of Array.isArray(list) ? list : []) { const np = pathOf(p); if (np) contracted.set(np, tid); }
+    }
   }
   for (const t of (plan && plan.tasks) || []) {
-    for (const p of t.files || []) if (!contracted.has(norm(p))) contracted.set(norm(p), t.id);
+    for (const list of [t.files, t.edited_paths, t.removed_paths]) {
+      for (const p of Array.isArray(list) ? list : []) { const np = pathOf(p); if (np && !contracted.has(np)) contracted.set(np, t.id); }
+    }
   }
   const frozen = new Map();
   for (const a of (plan && plan.acceptanceTests) || []) {
-    for (const f of a.files || []) frozen.set(norm(typeof f === 'string' ? f : f.path), typeof f === 'string' ? null : f.sha256 || null);
+    for (const f of a.files || []) frozen.set(pathOf(f), typeof f === 'string' ? null : f.sha256 || null);
   }
-  const touched = new Map((changes || []).map((c) => [norm(c.path), c.status]));
+  const touched = new Map((changes || []).map((c) => [pathOf(c.path != null ? c.path : c), c.status]));
   const candidates = [...touched.keys()].filter((p) => !contracted.has(p) && !frozen.has(p) && !p.startsWith('.oxe/'));
   // OXB-080: frozen tests the planner committed ahead of time for a LATER phase (added/modified under the acceptance
   // test directory, not part of this plan) are "parked", not drift; an audited waiver (--accept-drift) covers the rest.
   const parkedGlobs = Array.isArray(options.parkedGlobs) ? options.parkedGlobs : [];
   const waivedGlobs = Array.isArray(options.waivedGlobs) ? options.waivedGlobs : [];
-  const parked = candidates.filter((p) => touched.get(p) !== 'D' && parkedGlobs.some((g) => globMatch(p, g)));
-  const waived = candidates.filter((p) => !parked.includes(p) && waivedGlobs.some((g) => globMatch(p, g)));
-  const outside = candidates.filter((p) => !parked.includes(p) && !waived.includes(p));
+  // Bench B33: the ADRs / published docs the OXE itself writes (decision add, docs publish) are not drift.
+  const generatedGlobs = Array.isArray(options.generatedGlobs) ? options.generatedGlobs : [];
+  const generated = candidates.filter((p) => touched.get(p) !== 'D' && generatedGlobs.some((g) => globMatch(p, g)));
+  const parked = candidates.filter((p) => !generated.includes(p) && touched.get(p) !== 'D' && parkedGlobs.some((g) => globMatch(p, g)));
+  const waived = candidates.filter((p) => !generated.includes(p) && !parked.includes(p) && waivedGlobs.some((g) => globMatch(p, g)));
+  const outside = candidates.filter((p) => !generated.includes(p) && !parked.includes(p) && !waived.includes(p));
   const untouched = [...contracted.keys()].filter((p) => !touched.has(p));
   // Aceite "alterado" = hash atual diferente do congelado no compile (não "aparece no diff": o planner o commita).
+  // the verify's rule: bytes, LF or CRLF form (OxeSpace 14/11, core.autocrlf), when the caller gives it
   const frozenChanged = [...frozen.entries()]
-    .filter(([p, sha]) => sha && typeof hashFile === 'function' && hashFile(p) !== sha)
+    .filter(([p, sha]) => sha && (typeof options.fileMatches === 'function' ? !options.fileMatches(p, sha) : typeof hashFile === 'function' && hashFile(p) !== sha))
     .map(([p]) => p);
-  return { contracted, touched, outside, untouched, frozenChanged, parked, waived };
+  return { contracted, touched, outside, untouched, frozenChanged, parked, waived, generated };
 }
 
 function handoffFilled(humanText) {
@@ -145,13 +161,20 @@ function buildDossier(input) {
   const run = input.run || {};
   const checks = Array.isArray(run.verification_check_results) ? run.verification_check_results : [];
   const checkById = new Map(checks.map((c) => [c.check_id, c]));
-  const criteria = [];
-  for (const m of String(input.specText || '').matchAll(/^\|\s*(A\d+)\s*\|\s*([^|]+?)\s*\|\s*([^|]*?)\s*\|\s*$/gm)) criteria.push({ id: m[1], text: m[2], how: m[3] });
-  const inPhase = (id) => !(phase.acceptance && phase.acceptance.length) || phase.acceptance.includes(id);
+  const parsedSpecCriteria = specCheck.criteria(input.specText || '').list;
+  const criteria = parsedSpecCriteria.length
+    ? parsedSpecCriteria.map((c) => ({ id: c.id, text: c.text, how: c.verify || '' }))
+    : [...String(input.specText || '').matchAll(/^\|\s*\*?\*?(A\d+(?:\.\d+)?|G\d+)\*?\*?\s*\|\s*([^|]+?)\s*\|\s*([^|]*?)\s*\|\s*$/gm)].map((m) => ({ id: m[1].toUpperCase(), text: m[2].trim(), how: m[3].trim() }));
+  const acceptSet = new Set(phase.acceptance || []);
+  const testedCriteria = new Set((plan.acceptanceTests || []).map((a) => a && a.criterion).filter(Boolean));
+  const inPhase = (id) => !acceptSet.size
+    || acceptSet.has(id)
+    || acceptSet.has(criteriaIds.parentOf(id))
+    || (criteriaIds.isGlobal(id) && testedCriteria.has(id));
   const phaseCriteria = criteria.filter((c) => inPhase(c.id));
   const decisions = [...decisionsFromSpec(input.specText), ...(input.decisions || [])];
   const journal = taskJournal(plan, input.events || [], checks);
-  const drift = architectureDrift(input.pack, plan, input.changes, input.hashFile, { parkedGlobs: input.parkedGlobs, waivedGlobs: input.waivedGlobs });
+  const drift = architectureDrift(input.pack, plan, input.changes, input.hashFile, { parkedGlobs: input.parkedGlobs, waivedGlobs: input.waivedGlobs, generatedGlobs: input.generatedGlobs, fileMatches: input.fileMatches });
   const signoffs = input.signoffs || [];
 
   // --- techspec: critério → teste congelado → prova → resultado
@@ -162,8 +185,17 @@ function buildDossier(input) {
     const accept = (plan.acceptanceTests || []).find((a) => a.criterion === c.id);
     const acceptCheck = checkById.get(`check-accept-${c.id.toLowerCase()}`);
     const criterionCheck = checkById.get(`check-${c.id.toLowerCase()}`);
-    const isManual = criterionCheck && criterionCheck.status === 'skip' && criterionCheck.skip_reason === 'needs_structured_check';
-    const signed = signoffs.find((s) => (s.criteria || []).includes(c.id));
+    // R36: closed --by-ci (no phase verify), a criterion with no frozen test and no verify result has nothing on CI
+    // proving it — it needs a sign-off (or --defer-signoff), like a manual one
+    // lean bench L2: a criterion whose "Como verificar" asks for a human look (manual, UAT, sign-off, in the browser)
+    // needs the sign-off even when a frozen test covers part of it. A19 ("teste manual + checagem de assets") closed
+    // its phase on the asset test alone, with nobody having opened the app.
+    const declaredManual = /(^|[^a-zà-ú])(manual|manualmente|uat|sign-?off|navegador|browser|humano|humana)([^a-zà-ú]|$)/i.test(String(c.how || ''));
+    const isManual = (criterionCheck && criterionCheck.status === 'skip' && criterionCheck.skip_reason === 'needs_structured_check')
+      || declaredManual
+      || Boolean(input.byCi && !accept && !acceptCheck && !criterionCheck);
+    // round 9: a sign-off of this phase (or one with no phase), the criterion in any case
+    const signed = signoffs.find((s) => (!phase.id || phase.id === 'run' || !s.phase || s.phase === phase.id) && (s.criteria || []).map((x) => String(x).toUpperCase()).includes(c.id));
     let result = acceptCheck ? `${acceptCheck.status}${acceptCheck.tests_executed ? ` (${acceptCheck.tests_executed} testes)` : ''}` : criterionCheck ? criterionCheck.status : 'não verificado';
     if (acceptCheck && acceptCheck.error) result += ` — ${acceptCheck.error}`;
     if (acceptCheck && /proof_not_executed/.test(acceptCheck.error || '')) proofIssues.push(`${c.id}: ${acceptCheck.error}`);
@@ -196,10 +228,10 @@ function buildDossier(input) {
     section(input.specText, 'Riscos') || '—',
     '',
     '## Fora de escopo',
-    section(input.specText, 'Fora de escopo') || '—',
+    section(input.specText, 'Fora de escopo') || section(input.specText, 'Fora do escopo') || '—',
   ].filter((l) => l !== null).join('\n');
 
-  const contractRows = [...drift.contracted.entries()].map(([p, task]) => [p, task, drift.touched.has(p) ? (drift.touched.get(p) === 'A' || drift.touched.get(p) === '??' ? 'Novo' : 'Editado') : 'não tocado']);
+  const contractRows = [...drift.contracted.entries()].map(([p, task]) => [p, task, drift.touched.has(p) ? (drift.touched.get(p) === 'A' || drift.touched.get(p) === '??' ? 'Novo' : drift.touched.get(p) === 'D' ? 'Removido' : 'Editado') : 'não tocado']);
   files['architecture.md'] = [
     `# Arquitetura — ${phase.id} · ${phase.title}`,
     '',
@@ -228,7 +260,7 @@ function buildDossier(input) {
   ].join('\n');
 
   const diaryBlocks = journal.map((j) => {
-    const lines = [`### ${j.task.id} — ${j.task.title} [${j.status}]`, `- **Arquivos:** ${(j.task.files || []).map((f) => `\`${f}\``).join(', ') || '—'}`];
+    const lines = [`### ${j.task.id} — ${j.task.title} [${j.status}]`, `- **Arquivos:** ${(j.task.files || []).map((f) => `\`${typeof f === 'string' ? f : f.path}\``).join(', ') || '—'}`];
     j.attempts.forEach((a, index) => {
       const tools = Object.entries(a.tools).map(([k, v]) => `${k}×${v}`).join(', ');
       // Numeração sequencial: execuções retomadas (recover) reiniciam o contador do runtime.

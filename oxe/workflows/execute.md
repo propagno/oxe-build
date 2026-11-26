@@ -31,19 +31,19 @@ Ao receber qualquer argumento, verificar flags antes de iniciar o fluxo principa
 </flags_processing>
 
 <execution_modes>
-**Modo Solo (padrão):** seguir `PLAN.md` do escopo resolvido da sessão onda a onda sem `plan-agents.json`. O agente implementa diretamente cada tarefa Tn da onda atual, roda a verificação e avança. Não exige nenhum artefato além do PLAN.md.
+**Modo Solo (padrão):** seguir **`PLAN.json`** (fonte primária executada pelo runtime) e **`PLAN.md`** (visão legível) do escopo resolvido da sessão onda a onda sem `plan-agents.json`. O agente implementa diretamente cada tarefa Tn da onda atual, roda a verificação e avança. Testes em `acceptance_tests` congelados no compile **são imutáveis** pelo executor (qualquer ajuste exige CR + `oxe-cc plan amend-test`).
 
 **Modo com Agentes (extensão):** quando existe `plan-agents.json` válido no escopo resolvido (schema 2+, lifecycle ativo, runId alinhado ao STATE), adotar roles e personas por agente conforme o blueprint.
 
 **Seleção de execução (redução de requisições):** quando o plano tem 2+ ondas, o usuário escolhe entre Completo (1 sessão), Por onda (N sessões) ou Por tarefa (N tarefas). A escolha é feita **uma vez** no início.
 
-Se existir apenas **`QUICK.md`** no escopo resolvido: tratar passos numerados como onda única (modo sempre Completo).
+Se existir apenas **`QUICK.md`** no escopo resolvido: tratar passos numerados como onda única (modo sempre Completo), usando `oxe-cc quick commit` / `oxe-cc quick done` para gerar commits com trailer `OXE-Quick`.
 </execution_modes>
 
 <modo_solo>
-## Modo Solo — Execução direta do PLAN.md
+## Modo Solo — Execução direta do PLAN.json / PLAN.md
 
-O modo padrão. Funciona sem `plan-agents.json`. O agente lê PLAN.md, segue as tarefas Tn na ordem das ondas, implementa e verifica.
+O modo padrão. Funciona sem `plan-agents.json`. O agente lê `PLAN.json` e `PLAN.md`, segue as tarefas Tn na ordem das ondas, implementa e verifica. Sempre que `oxe-cc runtime` estiver disponível, usar `oxe-cc runtime execute` (ou `oxe-cc runtime commit-task T<n>` para trabalho já pronto na árvore) para que todo commit leve os trailers `OXE-Task` / `OXE-Quick` exigidos por `oxe-cc ship check-origin <#PR>` no `/oxe-ship`.
 
 **Checklist de onda (solo):**
 ```markdown
@@ -62,7 +62,7 @@ O modo padrão. Funciona sem `plan-agents.json`. O agente lê PLAN.md, segue as 
 
 **Argumento direto:** se o foco/argumento recebido já for `A`, `B` ou `C` (sozinho), usar diretamente como seleção de modo sem apresentar o menu.
 
-**Quando aplicar:** ao início do execute, se PLAN.md tiver **2 ou mais ondas**. Apresentar UMA VEZ e armazenar a escolha em STATE.md para não perguntar novamente nas rodadas seguintes.
+**Quando aplicar:** ao início do execute, se `PLAN.json` / `PLAN.md` tiver **2 ou mais ondas**. Apresentar UMA VEZ e armazenar a escolha em STATE.md para não perguntar novamente nas rodadas seguintes.
 
 **Não aplicar** quando: QUICK.md (sempre Completo), PLAN.md com 1 onda (executar diretamente).
 
@@ -124,7 +124,7 @@ Quando o comando `**Verificar:**` de uma tarefa `Tn` falha, **não parar silenci
 
 **Context pack prioritário:** antes de abrir o conjunto amplo de artefatos, resolver `.oxe/context/packs/execute.md` e `.oxe/context/packs/execute.json` como entrada principal do passo. Se o pack estiver fresco/coerente, usar `read_order` e `selected_artifacts` para limitar o reconhecimento inicial à onda/tarefa atual. Se estiver stale, ausente ou com lacunas críticas, fazer fallback explícito para leitura direta e registrar isso no runtime ou no resumo da execução.
 
-**Artefatos racionais obrigatórios:** quando a execução vier de `PLAN.md`, ler antes da primeira mutação:
+**Artefatos racionais obrigatórios:** quando a execução vier de `PLAN.json` / `PLAN.md`, ler antes da primeira mutação:
 - `IMPLEMENTATION-PACK.md` / `IMPLEMENTATION-PACK.json`
 - `REFERENCE-ANCHORS.md`
 - `FIXTURE-PACK.md` / `FIXTURE-PACK.json`
@@ -138,10 +138,11 @@ O `execute` é **pack-first**, não apenas `plan-first`. Esses artefatos existem
 **Runtime operacional:** usar `EXECUTION-RUNTIME.md` do escopo resolvido como artefato tático da execução. Ele deve refletir agentes ativos, onda atual, handoffs, evidências, retries, checkpoints pendentes e tarefas bloqueadas. O `PLAN.md` continua estratégico; o runtime regista a operação do ciclo.
 
 **Runtime enterprise como caminho padrão:** quando `oxe-cc runtime` estiver disponível no ambiente, preferir o caminho formal deste passo:
-- executar `oxe-cc runtime compile --dir <projeto>` antes da primeira mutação para materializar `compiled_graph`, `canonical_state` e `verification_suite`;
-- tratar `ACTIVE-RUN.json` e `.oxe/runs/<run_id>.json` como fonte operacional primária da onda/tarefa atual;
+- executar `oxe-cc runtime compile --dir <projeto>` antes da primeira mutação para materializar `compiled_graph`, `canonical_state` e `verification_suite` (congelando `acceptance_tests` de `PLAN.json`, que não podem ser editados pelo executor);
+- executar as tarefas via `oxe-cc runtime execute --dir <projeto>` (com `--checkpoint-commits` quando aplicável) ou fechar trabalho já na árvore com `oxe-cc runtime commit-task T<n>` — todo commit precisa do trailer `OXE-Task` (ou `OXE-Quick` via `oxe-cc quick`) para passar em `oxe-cc ship check-origin <#PR>`;
+- tratar `ACTIVE-RUN.json`, `PLAN.json` e `.oxe/runs/<run_id>.json` como fonte operacional primária da onda/tarefa atual;
 - executar `oxe-cc runtime project --dir <projeto>` ao fim de cada onda ou bloco concluído para reprojetar `PLAN.md`, `STATE.md`, `VERIFY.md`, `RUN-SUMMARY.md`, `COMMIT-SUMMARY.md` e `PROMOTION-SUMMARY.md`.
-Se o runtime não estiver compilado, falhar por indisponibilidade do pacote ou não puder ser executado no ambiente atual, declarar `fallback legado` explicitamente antes de seguir apenas com os artefatos markdown.
+O `runtime compile` é **obrigatório**, não opcional: rode-o antes de dizer qualquer coisa sobre fallback. O `fallback legado` só vale citando a saída de erro do `oxe-cc runtime compile` (ou `oxe-cc: command not found`); "preferir" não autoriza pular o compile. Mesmo no fallback, **cada tarefa termina com `oxe-cc runtime commit-task T<n>`** (roda o verify da tarefa, commita com o trailer `OXE-Task` e marca o PLAN.json) — sem isso o run fica `running` e a fase não fecha. Sem escolha explícita do usuário, o modo é o **B (por onda)**.
 
 **Checkpoints de aprovação:** usar `CHECKPOINTS.md` do escopo resolvido para gates humanos explícitos. Estados válidos: `pending_approval`, `approved`, `rejected`, `overridden`. Se houver checkpoint pendente antes de uma onda de risco, side effect externo ou fecho sensível, a execução deve pausar até resolução explícita.
 
@@ -178,7 +179,7 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
 
 **Se PLAN.md não existir mas QUICK.md existir:** seguir QUICK.md — passos = onda única, sempre Modo Completo.
 
-**Se nem PLAN nem QUICK existir:** recomendar `oxe:plan` ou `oxe:quick` primeiro.
+**Se nem PLAN nem QUICK existir:** recomendar `/oxe-plan` ou `/oxe-quick` primeiro.
 
 **Legado / brownfield:** entregáveis podem ser só documentação. Ver **`oxe/workflows/references/legacy-brownfield.md`**.
 
@@ -186,7 +187,7 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
 </context>
 
 <process>
-1. Ler **`.oxe/STATE.md`** global para resolver `active_session`, depois ler **`PLAN.md`** (se existir) e **`QUICK.md`** do escopo resolvido.
+1. Ler **`.oxe/STATE.md`** global para resolver `active_session`, depois ler **`PLAN.json`** (fonte primária executada pelo runtime) e **`PLAN.md`** (se existirem) ou **`QUICK.md`** do escopo resolvido.
 1a. Resolver o context pack `execute` primeiro:
    - ler `.oxe/context/packs/execute.md|json` (ou `oxe-cc context inspect --workflow execute --json`);
    - se o pack estiver fresco e coerente, usá-lo como mapa primário para o reconhecimento inicial da onda/tarefa;
@@ -210,10 +211,10 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
    - se houver checkpoint `pending_approval` que se aplique à onda atual, **não avançar**;
    - inicializar ou atualizar o runtime com onda atual, status, agentes ativos, handoffs e evidências esperadas.
 3a. **Caminho padrão do runtime enterprise:** se `oxe-cc runtime` estiver disponível:
-   - executar ou solicitar `oxe-cc runtime compile --dir <projeto>` antes da primeira mutação;
+   - executar `oxe-cc runtime compile --dir <projeto>` antes da primeira mutação (obrigatório; o compile também congela os `acceptance_tests` — sem ele a trava contra editar teste congelado não existe);
    - se compilar com sucesso, tratar `ACTIVE-RUN.json`, `.oxe/runs/<run_id>.json`, `compiled_graph` e `canonical_state` como estado operacional primário da execução;
    - se existir gate operacional além dos checkpoints markdown, consultar `oxe-cc runtime gates list --dir <projeto>` antes da onda de mutação;
-   - se falhar apenas por indisponibilidade do runtime, registrar `fallback legado` e continuar com o fluxo markdown.
+   - se falhar apenas por indisponibilidade do runtime, registrar `fallback legado` **com a saída do erro** e continuar com o fluxo markdown, fechando cada tarefa com `oxe-cc runtime commit-task T<n>` (ou `oxe-cc plan done T<n> --commit <sha>` com o commit `OXE-Task: T<n>`).
 4. Verificar **`OBSERVATIONS.md`** do escopo resolvido antes de iniciar cada onda:
    - Se houver obs com `Status: pendente` e `Severidade: blocking`: **não avançar** para nenhuma tarefa da onda — apresentar ao usuário o bloqueio com contexto da onda e opções A/B/C de resolução
    - Se houver obs com `Status: pendente` e `Severidade: adjustment`: incorporar como restrição nas tarefas afetadas desta onda antes de executar
@@ -247,12 +248,15 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
    - [ ] Comando Verificar de cada tarefa executado (ou agendado)
    ```
 10a. Quando o runtime enterprise estiver ativo, executar ou solicitar `oxe-cc runtime project --dir <projeto>` após cada onda ou bloco concluído para projetar os markdowns derivados a partir do estado canónico, em vez de depender só de edição manual.
+10b. **ALM via MCP** (`alm.transport: "mcp"`): ao fim de cada onda, `oxe-cc alm queue` — execute as operações com as ferramentas MCP da sessão e confirme cada uma com `oxe-cc alm ack <id> [--key …]` (ver `references/product-docs-alm.md`).
 11. Atualizar **`.oxe/STATE.md`** global com progresso resumido e, com sessão ativa, escrever o detalhe operacional em `execution/STATE.md`.
 11a. Se o runtime enterprise estiver ativo, preferir o `STATE.md`, `PLAN.md`, `VERIFY.md` e summaries projetados por `runtime project` como superfície oficial; complementar manualmente apenas o que o projection engine ainda não cobrir.
 12. Atualizar ou criar `CHECKPOINTS.md` quando surgir gate humano explícito; refletir o status resumido no `STATE.md` global (`checkpoint_status`) e no runtime (`runtime_status`).
 13. Marcar OBS incorporadas como `incorporada → execute (data)` em `OBSERVATIONS.md` do escopo resolvido.
 14. Se a execução parar por hipótese crítica não verificada, conflito estrutural ou falta de evidência operacional, terminar com bloqueio explícito e um único próximo passo. Se o bloqueio tiver vindo de pack stale/incompleto, dizer isso explicitamente.
 </process>
+
+**Ao terminar:** o **Próximo passo** de `oxe-cc status --json` (ver `references/next-step-footer.md`).
 
 <success_criteria>
 - [ ] Modo de execução foi selecionado (ou herdado do STATE) antes de implementar.

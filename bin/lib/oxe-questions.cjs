@@ -20,6 +20,17 @@ const FILE = (programDir) => path.join(programDir, 'questions.ndjson');
 const STOP = new Set(['a', 'o', 'as', 'os', 'de', 'da', 'do', 'das', 'dos', 'e', 'ou', 'em', 'no', 'na', 'um', 'uma', 'que', 'para', 'por', 'com', 'se', 'the', 'of', 'to', 'and', 'or', 'in', 'is', 'should', 'deve', 'qual', 'which', 'what', 'how', 'como']);
 const terms = (s) => new Set(String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').split(/[^a-z0-9_]+/).filter((w) => w.length > 2 && !STOP.has(w)));
 const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+const normPlain = (s) => String(s || '').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ');
+
+function containsPhrase(haystack, phrase) {
+  const h = normPlain(haystack);
+  const p = normPlain(phrase);
+  if (!h || !p) return false;
+  const esc = p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pre = /^[a-z0-9_]/.test(p) ? '(?<![a-z0-9_])' : '';
+  const suf = /[a-z0-9_]$/.test(p) ? '(?![a-z0-9_])' : '';
+  return new RegExp(`${pre}${esc}${suf}`).test(h);
+}
 
 function list(programDir) {
   let raw = '';
@@ -47,14 +58,14 @@ function nextId(existing) {
 
 /** The decision that answers the question: names one option and shares ≥ 2 terms (or 1 when the question is short). */
 function fromDecisions(q, ds) {
-  const qt = terms(q.question);
-  for (const d of ds.filter((x) => x && x.status !== 'revoked' && x.status !== 'superseded')) {
+  const qt = terms(q && q.question);
+  if (!qt.size) return null;
+  for (const d of (ds || []).filter((x) => x && x.status !== 'revoked' && x.status !== 'superseded')) {
     const body = `${d.title || ''} ${d.text || ''}`;
     const bt = terms(body);
     const shared = [...qt].filter((w) => bt.has(w)).length;
     if (shared < Math.min(2, qt.size)) continue;
-    const lower = norm(body);
-    const hits = (q.options || []).filter((o) => o && lower.includes(norm(o)));
+    const hits = ((q && q.options) || []).filter((o) => o && containsPhrase(body, o));
     if (hits.length === 1) return { answer: hits[0], source: d.id };
   }
   return null;
@@ -72,21 +83,22 @@ function resolve(programDir, q, options = {}) {
     append(programDir, { kind: 'answer', id, answer: byDecision.answer, by: `decision:${byDecision.source}`, decision: byDecision.source, at });
     return { ...byDecision, provisional: false, id };
   }
-  const interrupt = (options.interruptOn || []).map((t) => String(t).toLowerCase());
+  const interrupt = (options.interruptOn || []).map((t) => String(t || '').trim().toLowerCase()).filter(Boolean);
   const qt = terms(q.question);
-  const forced = interrupt.find((t) => qt.has(t) || norm(q.question).includes(t));
+  const forced = interrupt.find((t) => qt.has(t) || containsPhrase(q.question, t));
   const pending = existing.find((x) => norm(x.question) === norm(q.question) && x.status === 'waiting');
-  if (q.blocking || forced || !q.default) {
+  const def = String(q.default ?? '').trim();
+  if (q.blocking || forced || !def) {
     if (pending) return { wait: true, id: pending.id };
     const id = nextId(existing);
     append(programDir, { kind: 'question', id, ...q, run_id: options.runId || null, at, status: 'waiting', why: q.blocking ? 'blocking' : forced ? `interrupt_on:${forced}` : 'sem default' });
     return { wait: true, id };
   }
   const id = nextId(existing);
-  const d = decisions.add(programDir, { title: `${q.question} → ${q.default}`, text: `Provisória: o executor seguiu o default sem resposta nos artefatos. Opções: ${(q.options || []).join(' | ')}`, phase: options.phase || null, by: 'executor (provisória)' });
+  const d = decisions.add(programDir, { title: `${q.question} → ${def}`, text: `Provisória: o executor seguiu o default sem resposta nos artefatos. Opções: ${(q.options || []).join(' | ')}`, phase: options.phase || null, by: 'executor (provisória)' });
   append(programDir, { kind: 'question', id, ...q, run_id: options.runId || null, at, status: 'answered' });
-  append(programDir, { kind: 'answer', id, answer: q.default, by: 'executor:default', decision: d.id, provisional: true, at });
-  return { answer: q.default, source: d.id, provisional: true, id };
+  append(programDir, { kind: 'answer', id, answer: def, by: 'executor:default', decision: d.id, provisional: true, at });
+  return { answer: def, source: d.id, provisional: true, id };
 }
 
 function answer(programDir, id, text, by, phase) {

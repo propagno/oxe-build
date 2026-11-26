@@ -6,7 +6,16 @@ export interface ContainerOptions {
     extraEnv?: Record<string, string>;
     /** Gracefully fall back to git_worktree if Docker is unavailable */
     fallback?: boolean;
+    /** Network isolation mode inside the container (default 'none'). */
+    networkMode?: 'none' | 'bridge';
+    /** Mount control-plane folders (.oxe, .github/workflows) read-only inside the container (default true). */
+    readOnlyControlPlane?: boolean;
+    /** Optional resource limits (e.g. '2g', '2'). */
+    memoryLimit?: string;
+    cpus?: string;
 }
+/** Build hardened `docker run` arguments with network isolation, control-plane read-only mounts, and resource caps. */
+export declare function buildDockerRunArgs(projectRoot: string, opts: ContainerOptions): string[];
 export declare class EphemeralContainerManager implements WorkspaceManager {
     private readonly projectRoot;
     private readonly opts;

@@ -4,6 +4,725 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.22.0] — 2026-11-26
+
+Reúne o que foi feito depois da tag pública `v1.21.2` de 11/11 (parte disso foi registrada no desenvolvimento com o rótulo 1.21.2): jornada guiada, correções do uso real no OXESpace (`v1.5.2`–`v1.6.1`) e dos benches, perfil `lean`, desambiguação executável, força dos testes congelados, e o pacote completo de estabilidade/CI rápido/governança de release (`OXB-G01`..`OXB-G17`) com rastreabilidade de artefatos OXE no `alm refine`.
+
+### Estabilidade, corte de retrabalho de CI e governança de release (`OXB-G01`..`OXB-G17`, 26/11)
+
+Implementados 17 itens de backlog levantados nos ciclos reais OXESpace `v1.6.0` e `v1.6.1`, documentados com ADRs (`docs/adr/D-1..D-4`) e cobertos por `tests/oxe-1230-lote1-stability.test.cjs`, `tests/oxe-1230-lote2-ci-rework.test.cjs`, `tests/oxe-1230-lote3-release-governance.test.cjs` e `tests/oxe-1230-alm-traceability.test.cjs`:
+
+- **Lote 1 — Estabilidade imediata (`OXB-G01`, `G02`, `G03+G15`, `G12`):**
+  - `ship check-origin` e `oxe-quick.mirrorDirOf({ readOnly: true })` estritamente read-only: 0 escritas em `.git/oxe/quick` em runners CI read-only (`OXB-G01`).
+  - Sanitização centralizada de variáveis de ambiente (`bin/lib/oxe-env-sanitize.cjs`, chaves `envSanitize` e `stripEnvPrefixes`) removendo por padrão `OXESPACE_*`, `AI_MEMORY_*` e `NODE_TEST_CONTEXT` antes de subprocessos (`OXB-G02`).
+  - `oxe-cc worktree link-node-modules` e `worktree.linkNodeModules` com validação obrigatória de SHA-256 normalizado em LF do `package-lock.json` e integridade dos pacotes top-level antes de criar junction/symlink (`OXB-G03`, `OXB-G15`).
+  - `oxe-cc gc-worktrees --merged` (dry-run padrão, `--apply` para remover) protegendo worktree principal, corrente, `locked` e `dirty` e desfazendo junctions antes da remoção (`OXB-G12`).
+- **Lote 2 — Corte de retrabalho de CI (`OXB-G09`, `G16`, `G10`, `G13`, `G14`, `G06`, `G07`):**
+  - `oxe-cc preflight` (<5 s) executando `preflight.checks`, gatilhos por glob `preflight.triggers` (`OXB-G09`, `G10`), integração automática no hook `pre-push` (`OXB-G16`), detector estático `--e2e-impact` cruzando `data-testid` e `locales/*.json` removidos contra `e2e/**` e `e2e/acceptance/**` (`OXB-G13`) e alerta de risco CSS em seletores de `src/design/targets/*.json` (`OXB-G14`).
+  - `inspectRequiredCommitStatuses` em `bin/lib/oxe-ship-pr.cjs` lendo explicitamente o commit status `marca/conformidade` e reprovando o veredito quando `enforced divergences > 0` mesmo com job verde (`OXB-G14`).
+  - `oxe-cc sync` detectando colisões de migrações numéricas SQLite e ratchets declarados (`lint.ratchets`) com auto-bump determinístico (`--dry-run` padrão, `--apply` + `--verify`, `OXB-G06`).
+  - Classificação de falhas transitórias de infraestrutura (`github_5xx`, `network_transient`, `runner_timeout`, `perf_spike`) e retry seletivo com backoff exponencial no merge train sem perder posição na fila (`OXB-G07`).
+- **Lote 3 — Governança de release & resiliência (`OXB-G04`, `G05`, `G08`, `G17`, `G11`):**
+  - `oxe-cc runtime autoresume reconcile` reconciliando leases de PID órfão, locks expirados e checkpoints commitados no git de forma idempotente (`OXB-G04`).
+  - `oxe-cc acceptance-audit` detectando drift de requisitos cortados/fora de escopo e imports relativos quebrados em `e2e/acceptance/**` e `tests/acceptance/**` (`OXB-G05`).
+  - `oxe-cc release-readiness --version X.Y.Z` e `oxe-cc release-finalize --version X.Y.Z` unificando conferência de board Jira, gates, assets multi-plataforma (Desktop + Android APK + `SHA256SUMS.txt`) e transição idempotente `Homologado → Lançado` (`OXB-G08`, `G17`).
+  - Suporte nativo a `OXE-Part-Of: KEY (k/N)` no merge de PRs (mantendo o card aberto até 100% das partes chegarem à `main`) e fechamento automático de Épicos quando todos os filhos estão homologados (`OXB-G11`).
+- **Rastreabilidade de artefatos OXE no `alm refine` e isenção CLI no `uiCardGaps`:**
+  - `oxe-alm-refine.cjs` descobre automaticamente `PRD.md` (headings e tabelas `| US-n |`), `SPEC.md`, `SYSTEM-DESIGN.md`, `GLOSSARY.md`, RFCs, ADRs e decisões, inclui `Arquitetura e fluxo` em `story` e avisa histórias sem rastreabilidade.
+  - `uiCardGaps` isenta épicos e repositórios CLI sem árvore de UI (`src/ui`, `src/design`, `src/components`, etc.) quando não há label visual/`area-marca`.
+
+### Custo e velocidade do caminho manual: `phase close`, verify curto e perfil `lean` (22/11)
+
+No bench Restitui, o OXE custou 9,5× e demorou 12,7× o braço sem OXE, e quase todo o sobrecusto estava em planejar e em fechar fases, não em escrever código. Estas mudanças cortam o que o CLI consegue gerar ou conferir sozinho e mantêm o que deu a qualidade: grill, testes de aceite congelados, detecção de adulteração, gates de fase e sign-off humano (`tests/oxe-lean-phase-close.test.cjs`).
+
+- **`oxe-cc phase close`** (igual a `oxe-cc program close --auto`): o fim da fase num comando, sem agente. Roda o `runtime verify`; verde, commita as tarefas pendentes do `PLAN.json` com `OXE-Task` e marca `done` (trabalho já commitado sem trailer é marcado no HEAD verificado); gera o rascunho do handoff do dossiê; roda o `program close` e lista de uma vez o que falta. Saída 0 (fechada), 1 (falhou, com o motivo e o que fazer) ou 2 (só faltam sign-offs humanos). O `/oxe-ship --local` passa a rodar só esse comando.
+- **O verify é da árvore que ele rodou.** O `runtime verify` grava `verification_tree` (os arquivos em disco na hora). Um `commit-task` feito depois com exatamente esses arquivos não torna o veredito velho: a ordem verify → commit-task → `program close` deixa de pedir um segundo verify.
+- **Correção: o commit avaliado pelo verify era descartado ao gravar o estado do run** (`verification_head` não passava pelo `writeRunState`). A checagem `stale_verdict` do `program close` nunca disparava, e uma mudança de código commitada depois do verify fechava a fase sem verificação. Agora dispara.
+- **`oxe-cc status --json --full`** devolve o run inteiro (a opção era ignorada e a saída vinha sempre enxuta).
+- **`/oxe-verify` — caminho curto por padrão:** com o runtime disponível, sem flags e sem `verification_depth: "thorough"`, o verify é o `oxe-cc runtime verify --json` e uma tela de resultado. A reauditoria do plano, a nova execução dos comandos, a calibração, o rascunho de commit e a retro a cada verify verde ficam para o caminho completo.
+- **`/oxe-quick` — caminho curto:** `oxe-cc quick <KEY> "…"` → implementar → `oxe-cc quick commit --all` → `oxe-cc quick done --verify`. O contrato do quick deixa de exigir SPEC.
+- **`/oxe-ship --defect` — via rápida para defeito pequeno** (critério existente sem mudança de texto, poucos arquivos de uma fase, nenhum contrato público): CR, teste que reproduz (vermelho primeiro), correção e `oxe-cc quick done --verify` na mesma conversa, sem `/oxe-plan --replan`.
+- **Perfil `lean`** (`"profile": "lean"` ou `"plan_ceremony": "lean"`; opt-in, o padrão não muda): o plano são duas coisas escritas à mão — os testes de aceite congelados e um arquivo de papel (`.oxe/plan/<Fn>.role.json`). O `oxe-cc plan build` gera `PLAN.json`, `PLAN.md` e o pack, e o `oxe-cc plan lint` é o gate. `REFERENCE-ANCHORS`, `FIXTURE-PACK` e a autoavaliação do plano passam a ser opcionais (presentes, são validados como sempre).
+- **Variantes enxutas dos workflows** em `oxe/workflows/lean/` (`plan.md`, 5 KB contra 45 KB; `execute.md`, que leva a fase do plano ao `phase close` numa sessão). No perfil `lean`, os wrappers de `/oxe-plan` e `/oxe-execute` apontam para elas e o `oxe-cc workflow path <slug>` devolve a variante (`--full` pede a completa). Há também `lean/spec.md`: fatos do material sem pergunta, um bloco de perguntas, um playback, uma aprovação.
+- **Guarda de origem (hook `Stop` do Claude Code):** `oxe-cc guards install --claude-guards` instala também o `bin/lib/oxe-origin-guard.cjs`. Com programa no projeto, código de produto alterado sem pertencer a uma tarefa aberta do plano ou a um quick aberto recusa o encerramento da sessão uma vez, com os dois caminhos para dar origem (quick, ou CR + quick). `--no-origin-guard` instala sem ela. No bench, três de três mudanças de escopo foram implementadas direto na conversa com a regra só no texto; com a guarda, a mesma mudança terminou com CR, quick, commit com trailers e suíte verificada (`tests/oxe-lean-origin-guard.test.cjs`).
+- **Correção: a coluna "Como verificar" da SPEC é lida pelo cabeçalho.** Com `| ID | Critério | Risco | Como verificar |`, o risco ("P2") era lido como a forma de verificar. Um critério declarado manual não era visto como manual e a fase fechava sem sign-off. Consequência: critérios com "manual", "UAT" ou "navegador" nessa coluna passam a pedir o sign-off, e comandos entre crases nela passam a virar checks.
+- **`phase close` com critério manual:** com o automático verde e só o humano faltando, o comando commita as tarefas, lista os sign-offs e sai com 2.
+- **Perfil `lean`: `plan build` recusa código de produto alterado e sem commit** no working tree (`--allow-dirty` libera). A fase não é planejada em cima de trabalho sem origem.
+- **Drift:** as pastas onde ficam os testes congelados do plano (e `test/acceptance/**`) não contam como desvio de arquitetura.
+- **Desambiguação executável:** `oxe-cc grill ask --case "<cenário> => <resultado de a> | <de b>" [--need "<cenário> => <necessário>"]` mostra cada leitura como comportamento e recusa uma recomendada que não atende ao que o papel precisa. A resposta vira exemplo com ID (`Q-4.1b`): o `spec check` exige um critério que o cite e o `plan lint`, um teste congelado que o traga.
+- **Correção: responder o grill com a letra da opção** (que o CLI oferecia) escolhe a opção; antes gravava a letra como texto da resposta.
+- **`oxe-cc plan mutate [A1,A2]`:** força dos testes congelados por critério, com mutantes nos arquivos das tarefas (mede também teste de caixa-preta), numa cópia temporária da árvore. P0 cujo teste não detecta nada sai com 1; não medido sai com 2. No perfil `lean`, substitui a implementação descartável do plano.
+
+### Achados do bench OXE × Restitui: o caminho manual fecha a fase (22/11)
+
+O bench rodou a trilha principal à mão (`/oxe` → spec → plan → execute → verify → ship), sem `runtime execute`. Os achados confirmados no código foram corrigidos (`tests/oxe-bench-fixes.test.cjs`).
+
+- **A fase anda no caminho manual (B27, B32, B34, B44).** `runtime verify`, `runtime commit-task` e `plan done` avançam a fase de `planning` para `executing` e `verifying` quando o `PLAN.json` declara a fase ativa. O próximo passo sugere verify quando todas as tarefas estão done e `program close` quando o verify está verde. Isso desfaz o laço verify ↔ ship.
+- **O verify explica o run `running` (B35).** Com o verify verde e tarefas sem commit, o `runtime verify` e o `status` nomeiam as tarefas e o `runtime commit-task T<n>`.
+- **`plan done` exige evidência (B16).** A tarefa precisa de um commit com `OXE-Task`, ou de `--commit <sha>` existente, ou de `--force --reason "…"`, que fica registrado.
+- **Códigos de saída honestos (B15, B43).** O `runtime verify` sai com 0 quando passa, 1 quando falha (inclusive regressão ou gate vermelho) e 2 quando bloqueia. O `runtime compile` de um grafo vazio sai com 1 e diz por quê.
+- **Regressão sem falso vermelho (B42, B41).** O `npm test` inteiro deixa de entrar na regressão congelada quando o critério tem um check próprio. A suíte inteira vermelha junto com os testes da fase atual é reportada à parte. A CLI imprime o motivo de cada regressão.
+- **Decisões do agente (B11, B40).** Sem `--by`, o autor é `agente`, e não mais `usuário`. `decision add --proposed` cria a decisão como proposta, o `plan lint` bloqueia tarefa que cita decisão só proposta, e `decision confirm D-… --by <quem>` confirma.
+- **Grill visível (B05, B06).** O `grill ask` imprime a pergunta, as opções e a recomendada para o agente repetir. O `grill confirm` exige `--playback "…"`, o resumo que o usuário confirmou.
+- **Install sem `..oxe/` (B01).** A regex que reescrevia os caminhos casava dentro de `.oxe/workflows/`. O `--claude` sozinho instala só `.claude/`, sem `.copilot/` (B03).
+- **Versão do `npx` (B21, B22).** Os wrappers pedem `npx oxe-cc@<versão do projeto>`, e a CLI avisa quando é mais velha que o `.oxe/oxe-version.json`. O `plan.schema.json` aceita os mesmos ids de decisão que o código (`D-F1-1`).
+- **Artefatos mais leves (B17, B30).** O `status --json` traz o resumo do run (`--full` para tudo): no bench foram 627 KB. O `VERIFY.md` tem uma linha por check, em vez do TAP inteiro.
+- **Emendas visíveis ao verify (B25, B29).** O `VERIFY.md` lista as emendas de aceite (CR, hashes e autor), e o `verify.md` manda consultá-las antes de acusar adulteração. Sem trava do compile, o hash anterior vem do git.
+- **Ferramentas que travavam o fluxo.** Os ADRs e os docs publicados pelo OXE não contam como `architecture_drift` (B33). O `spec add criterion` ignora as tabelas de Proibições e Bordas (B49). O `--accept-drift` sem glob é recusado (B46). O `ship check-origin` sem remote usa a `main` local ou explica como passar o intervalo (B31).
+- **Workflows.**
+  - `/oxe` começa pelo `oxe-cc status --json` e não sugere `scan` (B04).
+  - O execute exige o `runtime compile` e fecha cada tarefa com `commit-task` (B20, B45).
+  - O ship `--local` comita por tarefa e fecha a fase (B31, B34).
+  - Um CR com programa registra a mudança e para, e a SPEC emendada é reaprovada pelo humano (B48).
+  - O plan valida os testes congelados contra uma referência descartável com mutações (B18).
+  - Os fatos do brief entram em lote no grill (B08).
+- **Achados finais do bench (B52–B65).**
+  - **Verify mais rápido (B55).** Dentro de uma rodada, cada comando idêntico (mesma pasta e mesmo timeout) roda uma vez só. É o caso do `npm test` repetido na regressão de cada fase fechada. Cada check continua sendo julgado pelos próprios critérios (congelados, `proves`, relatório do runner) sobre essa saída e fica marcado `reused_run`. Uma nova tentativa por timeout do runner roda de novo de verdade. `OXE_VERIFY_NO_REUSE=1` desliga.
+  - **NFR de tempo fora do aceite congelado (B52).** O `plan lint` avisa quando um teste de aceite afirma um limite de tempo de parede (p95, ms). A referência do plan manda declarar esse critério em `.oxe/program/nfr.json` (OXB-144: amostras, mediana e gate da fase).
+  - **`/oxe-quick` é workflow (B57).** O wrapper manda abrir o quick pelo CLI antes de qualquer edição e commitar por `oxe-cc quick commit`, nunca por `git commit` direto.
+  - **`/oxe-ship --defect` (B58).** O defeito exige rodar a suíte antes de afirmar cobertura, e o replan de um defeito pequeno cobre só o delta: teste que reproduz, depois correção.
+  - **Fase reaberta é anunciada (B60).** O próximo passo começa por "⚠ F4 foi REABERTA por CR-… — avise o usuário" e traz o campo `alert`.
+  - **`status --json` enxuto (B65).** Na cópia do app do bench, caiu de 1,1–1,7 MB para 110 KB (B17).
+  - O `runtime feedback` de defeito aponta o `plan amend-test` quando o defeito está no teste congelado (B23).
+- **C28-9: 404 do Jira com credencial recusada.** O Jira responde 404 a todo card quando a chamada é anônima. Depois de um 404, o ALM consulta `/rest/api/3/myself`; se vier 401, a mensagem diz que a credencial foi recusada. Quando o valor da variável neste processo difere da variável de usuário (token renovado depois que o terminal abriu), ela nomeia a variável, nunca o valor, e manda reabrir o terminal.
+- **C30: `runtime feedback --dry-run` não grava (P1).** Antes ele criava o CR de verdade. Agora mostra o CR, a rota e se a fase seria reaberta, sem tocar em `changes.ndjson`, `PROGRAM.json`, `PLAN.json`, eventos ou `STATE.md`. Em `resolve`/`withdraw`, ele só diz o que aconteceria.
+- **C30: liberar um teste congelado não reabre uma fase fechada (P2).** Um CR `constraint` numa fase fechada (o caminho do `plan amend-test`) agora é uma mudança pós-close (`post_close: true`): a fase segue fechada e a cobertura do close continua valendo. Antes, a fase voltava para `planning`, e o novo close recusava a cobertura que o close original tinha aceitado. Código que precisa mudar continua sendo `defect`, e esse reabre a fase.
+- **C30: `program phase restore-close Fn --from-history --by <papel> --reason "…" [--dry-run]`.** Devolve o close a uma fase que um CR sem mudança de código reabriu (caso da F6 do 152code, antes do C30). Restaura `status`, `closed_at` e `closed_commit` a partir do último close do histórico, e grava a restauração no histórico, em `changes.ndjson` e no evento `PhaseCloseRestored`. É recusado quando um CR `defect` ou `spec_gap` não retirado da fase chegou depois daquele close, ou quando o commit do close não existe. Não é preciso editar o `PROGRAM.json` à mão.
+
+### Lote OXB-C31: promote, `--mode wave` e orçamento (152perf, 22/11)
+
+- **C31-2 (P1): a emenda do planejador num teste não congelado vai junto.** O commit `OXE-Plan` que congelou os testes da T2 também emendou `tests/agent-state.test.ts`, que não é congelado. Como o promote nunca faz cherry-pick do commit do planejador, o PR #1050 nasceria vermelho. Agora, quando esse commit mexe nos testes congelados da própria tarefa, os testes não congelados que ele emendou vão no PR como arquivos. Se o mesmo commit também congela testes de outra tarefa, ou se outra tarefa também mudou o arquivo, o promote avisa que a emenda fica de fora.
+- **C31-3 (P2): `runtime execute --mode wave` para no fim da onda.** Antes o `--mode` era aceito e ignorado, e o run seguia para a onda 2. Agora `--mode wave` equivale a `--wave <primeira onda com tarefa pendente>`, e `--mode full|all` roda todas as ondas pendentes. Qualquer outro valor é erro.
+- **C31-4 (P3): `--budget-add-usd X` e `--budget-add-turns N`.** O `--budget-usd` continua sendo o teto acumulado do run. As opções novas põem o teto em "o que já foi gasto + X", e a mensagem de orçamento esgotado passa a sugerir `--budget-add-usd`. Combinar a forma absoluta e a relativa da mesma unidade é recusado.
+- **C31-5 (P2): o `quick promote` confere a origem contra `origin/<base>`.** Antes ele usava a `main` local, que estava 4245 commits atrás nas worktrees do programa, e recusou 84 commits que o PR nem levava (OXE-386, #1059). Agora faz como o `runtime promote` (OXB-157): o intervalo começa em `origin/<base>` quando ela existe, o aviso diz quantos commits a base local está atrás, e o PR continua apontando para `<base>`.
+
+### Lote OXB-C28: recusa de política, verify remoto e ferramentas do planejador (21/11, noite)
+
+- **C28-1: recusa falsa da política.**
+  - Quando o gatilho veio de saídas de ferramenta de turnos anteriores, e não do pack, a tarefa ganha **uma** nova tentativa automática, limpa e com contexto novo.
+  - O evento sai como `RetryScheduled` com o motivo `policy_auto_retry`.
+  - `execute.policy_auto_retry: false` desliga a nova tentativa. Uma recusa disparada pelo prompt continua pedindo `--retry-policy-once`.
+  - Uma tarefa adiada agora conta como progresso do run: o run segue com as tarefas que não dependem dela, em vez de abortar com `no_progress_timeout`.
+- **C28-2: segmentos remotos do verify numa rodada só.**
+  - Segmentos `… remote-verify … -- <cmd>` consecutivos, com o mesmo runner, rodam como **um** job remoto (`<runner> -- "echo ===OXE-SEG-1=== && cmd1 && …"`).
+  - Os marcadores no log remoto dizem qual segmento falhou, e `failed_segment` aponta o segmento original.
+  - Não entra na rodada única um comando com aspas, `$`, crase, `\`, `%` ou `!`, nem o caminho `gradle152`.
+  - Com `all_segments` o comportamento não muda: cada segmento continua rodando sozinho.
+- **C28-3:** o `spec freeze` passa a ver os títulos de `test.each([...])('…')`, no filtro `-t` e na detecção do `A<n>`.
+- **C28-4:** com `spec freeze --from <sha> --paths <arquivo>`, um teste que já existia no ref também é congelado. Um glob continua valendo só para o diff do ref, exceto quando o diff não tem nenhum arquivo sob ele.
+- **C28-5:** `plan pack fix T<n> --symbol <arquivo>#<nome> --add [--signature …] [--internal | --member-of …]` acrescenta ao pack um símbolo de um arquivo do escopo da tarefa, com o contrato correspondente e o registro em `fixes`.
+- **C28-6:** o `refine lint` não trata mais como card de geometria de UI um card de comportamento que só cita `src/components/` e não traz nada visual (medida, token, CSS, tema, densidade, BRD-n). `area-marca` e os rótulos visuais continuam valendo.
+- **C28-7:** o `plan amend-test` emenda o PLAN.json do programa dono do teste congelado.
+  - O dono é o que estiver em `--program <nome>`, ou o único irmão cujo `acceptance_tests` lista o arquivo.
+  - O hash vem do arquivo da árvore atual. Não é preciso reabrir o worktree do dono.
+- **C28-8:** o ensaio do `alm intake` (sem `--apply`) termina com "nada gravado — rode de novo com --apply".
+- **C28-9:** no início do quick, o comentário e a mudança de estado do card são escritas independentes: a falha de uma não impede a outra. Um HTTP 404 agora nomeia o método e o caminho da chamada que falhou. A causa do 404 do Q-20261121-df4b ainda não foi reproduzida.
+
+### Achados do 1.5.2 de ponta a ponta: OXB-C23..C27 (21/11)
+
+- **C25:** `plan build` grava `ready: true` (e `critical_gaps: []`) quando as próprias checagens passam. Um pack sem `ready` vira a lacuna `implementation_pack:ready missing`, nunca um `not_ready` com a lista vazia. Para packs antigos, `oxe-cc plan pack ready --by <papel>` marca o pack só quando não resta outra lacuna crítica.
+- **C26:** `runtime execute --dry-run` (e o novo `--preflight-only`) roda só o preflight e não inicia nada. Sai com 1 quando o execute recusaria.
+- **C27-1:** `scope_insufficient` exige que a falha passe por um arquivo fora do escopo, citado na pilha ou na saída do agente; um import não basta. Um defeito de fixture é tentado de novo e, se a falha se repetir, vira `verify_suspect`.
+- **C27-2:** `plan lint --precheck-e2e` roda cada congelado e2e novo uma vez contra o HEAD com o stub:
+  - vermelho na montagem (launch, conexão, módulo, hook) é erro;
+  - vermelho num seletor antes de qualquer asserção é aviso, ou erro com `lint.precheck_e2e_selector: "error"`.
+- **C27-3:** o commit único dos congelados do planejador fica fora do PR de cada tarefa. Os congelados da tarefa vão como arquivos.
+- **C23-1:** um quick que mexe nos arquivos da tarefa e fica fora da janela do cartão é citado no promote, nunca descartado em silêncio.
+- **C23-2:** um teste do escopo que outra tarefa mudou por quick não é copiado da ponta do programa.
+- **C24:**
+  - `budget_usd` do papel chega ao PLAN.json, e `plan task edit Tn --budget-usd N`;
+  - `plan pack fix Tn --symbol arq#nome --signature "…"`;
+  - `swept` vale em qualquer tarefa.
+- **C27-5:** `alm refine import` usa o programa do `config.alm.program`, a não ser que um PLAN irmão cite o card numa tarefa, e nunca escolhe um programa fechado.
+- **C27-7:** o trailer `OXE-Plan: <programa>/<fase>` é aceito em commit só de testes do planejador.
+- **C27-8:** o `doctor` avisa quando o oxe-cc em uso roda de uma árvore com mudanças não commitadas no código.
+
+### Jornada guiada de ponta a ponta com os 7 comandos principais (21/11)
+
+- **Próximo passo** (`suggestNextStep`, `oxe-journey.cjs`):
+  - todas as tarefas feitas → `/oxe-verify`;
+  - verify verde → `/oxe-ship`, também sem programa. A retro roda dentro do verify e deixou de ser um passo. O ciclo sem programa fecha pelo `commit-record.json` (modo local) ou pelo PR → CI/merge → deploy (modo PR), sem `program close`;
+  - depois do `init-oxe` → `/oxe-spec`, e não `/oxe`;
+  - SPEC aprovada com ROADMAP de 2+ fases → `oxe-cc runtime program init`. Sem grill, passa antes por `spec check --fast` / `spec approve`;
+  - plano pronto → `/oxe-execute`. O dashboard só aparece com `review.plan_required`;
+  - com o check verde, o `cursorCmd` do spec-approve vira `spec approve`;
+  - um CR ou defeito aberto depois do programa fechado → `/oxe-plan --replan`;
+  - RFC global aceito ou em rascunho conta. O rascunho só bloqueia com `rfc.required`;
+  - o grill com risco P0/P1 sugere `oxe-cc rfc new`.
+- **Quick:**
+  - `quick done` fecha o QUICK.md e o STATE (`quick_done`);
+  - no modo local, a quick fechada é o ciclo entregue;
+  - no modo PR, o promote só é sugerido fora da base e o ciclo espera CI/merge/deploy.
+  - O `quick promote` passa o intervalo certo ao check-origin.
+- **`status --json` e `--journey`:**
+  - o `status --json` ganha `next`, alias de `nextStep`;
+  - o `status --journey` considera a sessão ativa e mapeia `next`, `program-init` e `rfc`.
+- **Sessões:**
+  - `session create|switch|list` grava `**active_session:**` e mantém `.oxe/SESSIONS.md`;
+  - id livre vira `sNNN-<slug>`; id de card fica como está;
+  - `--session <id>` solto resolve para `sessions/<id>`.
+- **Workflows:**
+  - o rodapé único lê `nextStep`/`cursorCmd`/`reason`;
+  - a Fase 5 do `spec.md` tem um próximo passo só;
+  - o `/oxe-ship` pergunta o modo de entrega uma vez (`delivery.mode`) e só roda `program close` com programa;
+  - o roteador `/oxe` e o README mostram os 7 comandos;
+  - os fallbacks sem comandos legados;
+  - o `quick.md` ganha o rodapé.
+- **OXB-C20/C21** (dogfooding de 42 PRs): grill `--card` com ledger próprio, que nunca publica em `docs/adr/`. Também entram:
+  - quick `promote`/`--from-card`/`list`/`--no-alm`;
+  - `status --json` compacto;
+  - `runtime compile --json`;
+  - VERIFY.md da sessão;
+  - `plan amend-test` com os hashes reais;
+  - `plan lint` com `proves`.
+  - O spec freeze ignora títulos de `describe`.
+- **Correções:**
+  - `file_size`/`verify_file_size` entram nas chaves conhecidas do doctor;
+  - o cabeçalho do `runtime` volta ao stderr em `--json`;
+  - `--otel` é modo JSON;
+  - o `dry-run` do ALM não toca a rede.
+- **Testes:** `tests/oxe-1212-journey-e2e.test.cjs` (com programa, sem programa e quick, até a entrega), `oxe-1212-journey-next-step.test.cjs`, `oxe-1212-review-2111.test.cjs`, `oxb-c20-*` e `oxb-c21-*`.
+
+### Skeleton (`plan skeleton`) sem erro de sintaxe em TS/JS e checagem `checkStubSyntax`
+
+- `oxe-plan-skeleton.cjs` preserva o corpo já declarado em `interface`/`class`, gera `export const X: T = undefined as unknown as T;` em TS (`export const X = undefined;` em JS), extrai o nome certo em funções genéricas (`parse<T>(`) e constantes sem duplicar símbolos, e expõe `checkStubSyntax(file, text)` (`vm.Script` / `node --check` em CJS/JS/MJS e `ts.transpileModule` só de sintaxe quando o projeto tem `typescript`, caindo para aviso sem `typescript`).
+- `oxe-verify-dryrun.cjs` reconhece os stubs TS/JS gerados pelo skeleton (`Error: TODO T<n>` na saída e `throw new Error('TODO T<n>: …')` no corpo) como `missing_target`, e `oxe-stub-check.cjs` resolve `nameOf(signature)` no nível `exists` quando a entrada do pack traz só `signature`.
+
+### Retomada automática do execute (G24, OXE-143)
+
+- **Lease do execute:** todo `runtime execute` grava `EXECUTE-LEASE.json` com o pid, os argumentos sem segredo e o estado. Um fim limpo fecha o lease e Ctrl+C o fecha como `stopped`. Um reinício ou um kill o deixam aberto, e isso passa a ser visível: `runtime autoresume status` mostra o estado, a decisão e a próxima tarefa.
+- **Retoma sozinho:**
+  - `runtime execute --supervise` relança o execute que cai no meio do run (kill por memória);
+  - `runtime autoresume install` põe `autoresume run` no logon: no Windows, um `.cmd` na pasta Inicializar, sem admin; nos outros sistemas, a linha `@reboot` impressa para o crontab.
+- **Onde recomeça:** a retomada usa os mesmos argumentos e começa na próxima tarefa não concluída. As tarefas concluídas antes do corte já estão done no PLAN.json e não são pagas de novo.
+- **Nunca retoma:**
+  - uma fase pausada (`runtime pause`, pausa de cota ou de ambiente, checkpoint esperando aprovação);
+  - um lease fechado ou `stopped`;
+  - `autoresume.enabled: false`;
+  - um laço de queda (`max_restarts` em `window_hours`);
+  - memória abaixo de `min_free_mb`: padrão 2560, ou `parallel.min_free_mb` quando definido; espera até `wait_memory_minutes` e desiste dizendo por quê.
+- **Eventos:** `AutoResumed` e `AutoResumeSkipped`.
+- **Teste:** `tests/oxe-1212-autoresume.test.cjs`. O CA-1 é um reinício simulado num programa de teste: o execute é morto em T2 com SIGKILL e o `autoresume run` o retoma em T2 sem chamar o executor para T1.
+
+### P0 da revisão externa: contenção de caminho e adapter http (15/11)
+
+- **Contenção por links (P0-2):** o `resolveWithin` exige que o caminho REAL (links resolvidos) fique dentro da raiz real. Isso vale também para um arquivo novo, pelo ancestral existente mais próximo. O `isProtected` compara os caminhos reais. Antes, um caminho por uma junction ou por um symlink, como os de `node_modules` que o próprio runtime cria nas worktrees, escapava da pasta.
+- **Eventos e argumentos (P0-2):**
+  - `tool_call`, `tool_denied` e `tool_result` levam o número real da tentativa. Antes saíam com 0 fixo.
+  - Argumentos que não são um objeto JSON válido viram `invalid_tool_arguments` explícito para o modelo. Antes viravam `{}` em silêncio.
+- **Adapter http (P0-1):**
+  - Todo status ≥ 400 é erro classificado: 429 e cota são `quota`, contexto longo é `context`, o resto é `env`. Vem com dica: credencial; endpoint inexistente, para usar `--adapter claude` ou um proxy OpenAI-compatível; erro transitório do provedor. Antes, um 401, 404 ou 500 terminava a tentativa como "sem chamada de ferramenta" em silêncio.
+  - O `usage` do stream é lido (`stream_options.include_usage`). Um backend que recusa esse campo recebe uma chamada a mais, sem ele.
+- **Revisão cruzada (15/11):**
+  - Um link pendente (destino ainda inexistente) para fora do workspace é recusado. Antes, o `realPathOf` subia além dele e a escrita seguia o link para fora.
+  - No Windows e no macOS, a contenção e o `isProtected` comparam sem diferenciar maiúsculas.
+  - `glob` e `grep` não entram em links.
+  - No adapter http:
+    - recusa de política (`content_filter`, usage policy) é `policy`, sem retry;
+    - 401, 403 e 404 são `environment` e pausam o run em vez de pagar outra tentativa;
+    - os tokens (`input`, `output`, `reasoning`) vão para o `executor_usage`;
+    - o preflight avisa quando o http aponta para api.anthropic.com.
+  - Argumentos só com espaços valem `{}`, e o `invalid_tool_arguments` também emite `tool_result`.
+  - O `readRunState` não perde o ACTIVE-RUN quando o run não tem `updated_at`.
+
+### `state.json` separa os CRs de outras fases (OxeChat F3, 15/11)
+
+- O status do run vem do mais recente entre o `ACTIVE-RUN.json` e o `runs/<id>.json`, pelo `updated_at`: status, cursor e onda. Antes, o `state.json` mostrava "planned" para o mesmo run que o `ACTIVE-RUN` dava como pausado.
+- Sem `ACTIVE-RUN`, o ledger de orçamento (`oxe-run-x.budget.json`) nunca é lido como o run.
+- `open_crs` lista os CRs abertos da fase ativa e os sem fase. Os de outra fase, como uma emenda de critério de uma fase pendente, vão para `open_crs_other_phases` ({ id, phase }) e nunca aparecem como do run ativo. Antes, os CR-F4-1 e CR-F4-2 apareceram no estado da F3.
+
+### Recusa da política de uso não vira retry (OxeChat F3 T7, 15/11)
+
+- **Recusa de política:** um "safeguards flagged" / "usage policy" do modelo passa a ser `failure_class: policy`. O scheduler bloqueia a tarefa sem nova tentativa automática, e a saída aponta o `--print-prompt` para achar o trecho que dispara a recusa.
+- **Antes:** era lida como falha de ambiente e retentada com o mesmo prompt, que seria recusado de novo. Na T7 do OxeChat F3, a primeira tentativa custou US$ 5,02 até a recusa.
+
+### Precheck: veredito parcial em arquivo (OxeSpace 15/11, OxeQuery polish)
+
+- O precheck grava o veredito até ali em `.oxe/precheck-last.json` depois de **cada** entrada: `finished`, `done/total`, achados e detalhes. Também mostra uma linha de progresso por entrada (`precheck 3/20: A7 — ok`). Antes, 20 runs remotos (1 h) e o processo encerrado no fim não deixavam veredito nenhum.
+- A linha inicial diz que um remote-verify roda 1 vez, mesmo com `--precheck-runs 2`, e onde fica o veredito parcial.
+- Revisão cruzada:
+  - O arquivo fica ao lado do PLAN.json da sessão.
+  - O precheck padrão de um `plan lint` comum grava `precheck-auto-last.json`, sem sobrescrever o parcial de um `--precheck-tests` de uma hora.
+  - A gravação é atômica (tmp + rename).
+  - O cache das entradas já aprovadas é gravado mesmo quando o processo morre no meio.
+  - Cada suíte também ganha uma linha de progresso.
+
+### G40: e2e congelado que age antes do app ficar pronto; checks de integração no checkpoint (OxeSpace 15/11)
+
+- **G40:** em cada e2e congelado do plano, de tarefa pendente, a primeira interação depois de abrir o app (`launchApp`, `goto`, `resizeWindow`…) precisa vir depois de uma espera de prontidão (`waitFor`, `toBeVisible`, `waitForLoadState`… ou um helper do repo em `lint.e2e_ready_helpers`). Sai como aviso, com `arquivo:linha`. Caso real: o PR #863 apertou Ctrl+Shift+U uns 50 ms antes de a shell montar os atalhos.
+- **Checkpoint com os checks de integração do promote:** o checkpoint roda os mesmos checks que o promote (`check-file-size`, `notices:check`) na árvore do commit. Uma tarefa nunca passa no checkpoint para depois falhar no promote. Desliga com `checkpoint_integration_checks: false`. Caso real: a T2 do OxeQuery polish passou de 1000 linhas no `index.ts`.
+- **A mensagem do promote:** num check de integração vermelho, ela mostra o fim da saída (o arquivo culpado) e diz que a branch local fica e é refeita no próximo promote.
+- **G40b, rótulo de e2e contra o catálogo:** com `lint.ui_strings` (os JSON de strings do app), um e2e congelado que fixa `getByRole(papel, { name: /Regex/ })` sensível a maiúsculas, que não casa nenhuma string do catálogo mas casaria ignorando maiúsculas, é nomeado com a string real e a correção `/…/i`. Caso real (#862): `/Comfortable/` contra "Use comfortable density".
+- **G41, Paparazzi/layoutlib:** um teste congelado Paparazzi que troca locale ou fontScale pelo `createConfigurationContext`, ou à mão, é nomeado com `arquivo:linha` e com a correção: um `DeviceConfig` na regra, ou uma classe por locale. No layoutlib, o `createConfigurationContext` devolve o próprio contexto. Caso real: a T13 do Celular F4, com cerca de US$ 23 em três tentativas.
+- **Trace com programa:** o "critério v1 sem teste de aceite nem tarefa no plano" vale só para os critérios da fase ativa. Os de outra fase são julgados no close dela. Caso real: o close da OxeCode F5 acusava o A8 a A18, da F3 e da F4. A causa ali era uma cópia defasada do programa, que se resolve com o `runtime program adopt --from` das worktrees onde essas fases fecharam.
+- **Tarefa que divide arquivo com trabalho não commitado espera:** uma tarefa pendente cujos files coincidem com os de outra tarefa com checkpoint falho e ainda não commitada fica `blocked_by: waiting_shared_files: T14 (…)`, sem tentativa paga, até esse commit (`runtime commit-task T14`, ou `--together`). Caso real: no Celular F4, a T15 rodou sobre o trabalho não commitado da T14 no PairingFlow.kt, e os trechos ficaram inseparáveis.
+- **G42, guarda de containers:** um teste congelado que sobe container (`docker run`/`compose`, testcontainers) protegido só por `docker info`, sem checar o `OSType` nem `--platform`, é nomeado. Um `test.skip(cond)` sem motivo também. Caso real: no PR #867, o runner Windows tem Docker com containers Windows, e o `postgres:16-alpine` falhou em vez de pular.
+- **`runtime feedback`:** o `--reason` vale como resumo quando falta o `--summary`. O `feedback resolve|withdraw` diz de uma vez todas as flags que faltam.
+- **`runtime execute --wave N` sem nada a rodar:** quando todas as tarefas da onda já estão done, o comando sai 0 com "onda N: nada a rodar" e o evento `WaveNothingToRun`. Antes saía 1 com "Bloqueados: 18", listando tarefas de outras ondas, e um laço por onda parava ali.
+- **`spec amend --cr CR-n`:** um critério que o CR não citava passa a entrar nele, com o registro `kind: criteria`, em vez de abrir um CR novo. Caso real: A2 e A3 emendados sob o CR-01 abriram o CR-02 e o CR-03 sozinhos.
+
+### G39: teste existente que fixa o que uma tarefa estende (OxeSpace 15/11, OxeQuery polish T1, US$ 11,70)
+
+- **O check:** para cada caminho de membro que um teste congelado de uma tarefa pendente pede, e que o produto ainda não tem (`IPC_CHANNELS.agentActivity.changed`), o `plan lint` acusa os testes **fora** das entradas do plano que fixam o pai por igualdade exata (`expect(IPC_CHANNELS.agentActivity).toEqual({ list, detail, badge })`) sem ter essa folha. A mensagem nomeia `arquivo:linha` e diz que o teste precisa de um release antes da tarefa.
+- **O que não conta:** `toMatchObject` não fixa, e uma folha que o objeto fixado já tem não é conflito.
+- **Custo:** `git grep` em lote, menos de 0,5 s no repositório real.
+
+### G38 com filtro do vitest; `plan task fold`; contratos antecipados (OxeSpace 15/11, OxeCode F6 T44)
+
+- **G38 e o filtro do vitest:** o G38 lê cada argumento do verify como **filtro de substring** do vitest. `pu03-app-version.test.ts` também rodava o `pu03-app-version.test.tsx` da T59 (onda 33), e a T44 (onda 18) foi adiada depois de 3 tentativas. A mensagem nomeia o argumento que casa. Um comando estreitado por `-t`/`--testNamePattern` conta como rodando só os próprios casos. O G38 roda em todo `plan lint`, inclusive de plano já instalado.
+- **`plan task fold T<a> --into T<b> --cr CR-n --by --reason`:**
+  - move para a tarefa alvo os files, os critérios, os comandos de verify e o contrato do pack;
+  - religa os dependentes ao alvo, e as entradas congeladas passam a nomeá-lo;
+  - marca a tarefa original `merged_into` (done, nunca agendada) e fecha os adiamentos dela como `merged_into:T<b>`, então o close não a conta como adiamento aberto;
+  - fica registrada em `changes.ndjson` e no evento `PlanTaskFolded`.
+  - Revisão cruzada:
+    - o status fica no enum do schema (`done` + `merged_into`), e o `plan reopen` recusa uma tarefa fundida;
+    - um ciclo `S → X → T` é recusado sem gravar nada;
+    - as ondas dos dependentes religados ficam monotônicas;
+    - o pack herda o formato do contrato e as remoções e checks.
+- **`--retry-policy-once`:** a tentativa extra é limpa, sem o texto da recusa no prompt do modelo. Uma tarefa cuja tentativa extra já foi gasta no run (desde o último reopen) é bloqueada antes de qualquer chamada (`policy_retry_exhausted`), também num terceiro execute.
+- **Contratos antecipados** (Antigravity):
+  - o `plan lint` avisa sobre uma tarefa com arquivo gerado sem a fonte (nem nas dependências) e sem o teste do gerador no verify;
+  - o `generated_files` entra nas regras do repositório do prompt;
+  - o prompt da tarefa lista os `data-*`/`cmdk-*`/`aria-label` dos arquivos dela que algum teste lê, antes da tentativa 1.
+
+### `report failure-cost`: conserto por causa, razão explícita, horas de verify (OxeSpace 15/11)
+
+- O mapa `failure_cost.fixes` casa a causa como impressa e também pelas partes dela: "CR constraint (no_progress)" tenta `no_progress` e depois `constraint`, sem diferenciar maiúsculas. Cada causa mostra as chaves tentadas (`fix_keys`). Antes, todo "fix" saía null.
+- `discarded_share_pct` e `discarded_ratio` (0..1) ao lado do `discarded_share`, que continua igual por compatibilidade.
+- Uma parada depois de `VerificationStarted` é verify esperando a CI: vai para `verifying_hours`, separada das `stopped_hours`.
+- Revisão cruzada de `generated_files`, aria e espelho de quick:
+  - os leitores de `aria-label` precisam parecer uma consulta de nome acessível;
+  - o texto da chave vem do locale do commit pai quando a chave sai junto;
+  - uma regeneração depois de uma tarefa anterior mudar a fonte passa;
+  - uma fonte fora dos files é `scope_insufficient`;
+  - os registros de quick anteriores ao espelho entram nele uma vez (backfill);
+  - o `**/` respeita a fronteira de diretório.
+
+### Arquivo gerado e nomes acessíveis no checkpoint (OxeSpace 15/11, Celular F3 #856, OxeCode F5 T22)
+
+- **`generated_files`:** `[{ file, source, test?, generator? }]`. Um commit que muda um arquivo gerado sem mudar as fontes dele desfaz o checkpoint (`generated_file`), com "edite a fonte e rode o gerador". Caso real: 14 strings escritas direto no `strings.xml`, e o teste do gerador reprovou primeiro no CI do PR.
+- **Nomes acessíveis no check de DOM hooks:** um `aria-label` removido, estático ou por chave de i18n (`{ "locale": "…en….json" }` resolve a chave no texto), que some do produto e que o e2e lê por role + nome. Caso real: o `<nav>` "Primary navigation" e o botão "Clear search".
+- **Revisão cruzada:**
+  - Uma tarefa reprovada por `dom_hooks` ou `generated_file` não é re-commitada às cegas.
+  - A tentativa que volta recebe o motivo do checkpoint desfeito no prompt.
+  - CSS, docs e lockfiles não "mantêm" um hook.
+  - O `phase_suites` só pega suítes reais: sem helpers, e2e ou `parked-*`. Os guards nunca são cortados pelo `max_files`, e o `path.join` conta como citar o arquivo.
+
+### Verify da fase roda as suítes do repo que leem os arquivos dela (OxeSpace 15/11, OxeCode F5 → #854)
+
+- **`verify.phase_suites`:** opcional. Liga um gate implícito `phase-suites`, que roda:
+  - as suítes de aceite do repo (`include`, padrão `tests/acceptance/`) que importam um arquivo mudado pela fase ou o citam (um caminho de `readFileSync`, como o CSS do cr15);
+  - os `guards` do repo, sempre (a guarda estática de classes CSS).
+- **O caso real:** o verify da F5 passou 40/40, e o CI do PR reprovou três guardas que o verify nunca rodou.
+- **e2e/axe:** um `phase_gate` com `remote-verify`.
+
+### Marcação que os testes ainda leem (OxeSpace 15/11, OxeCode F6 T30 → #852)
+
+- **O check:** no checkpoint, sem rodar e2e. Um atributo `data-*` ou `cmdk-*` que o commit **remove** da marcação, que some do produto inteiro e que ainda é lido por um arquivo de e2e ou de teste, desfaz o checkpoint (`dom_hooks`). Os atributos e os leitores são nomeados.
+  - Um valor dinâmico (`data-value={`cmd-${id}`}`) é procurado pelo prefixo.
+  - O `data-testid` também é procurado via `getByTestId`.
+  - Um atributo mantido em outro componente, ou cujos leitores saem no mesmo commit, não conta.
+- **O caso real:** a T30 trocou o CommandMenu pela paleta e tirou o `[cmdk-root]`/`[cmdk-item][data-value=cmd-…]` que uns 30 specs e2e liam. A quebra só apareceu no CI do PR.
+- **Configuração:** `checkpoint_dom_hooks: "warn"` só avisa; `false` desliga.
+
+### Registros de quick espelhados no git (OxeSpace 15/11, worktrees t30 e F5)
+
+- **O problema:** registros sumiam do `.oxe/quick`, que não é versionado, de uma worktree (um `.oxe` recriado, uma pasta sincronizada). Depois disso, o `check-origin` recusava commits feitos pelo `quick commit`.
+- **O espelho:** todo registro também é gravado em `<git-common-dir>/oxe/quick/`, compartilhado por todas as worktrees do repositório e nunca tocado por um checkout.
+- **A leitura:** um registro ausente no local é lido do espelho e restaurado. O `quick list` e o `check-origin` enxergam os dois lugares.
+
+### Quick sem registro, trailer presente (OxeSpace 15/11, #854)
+
+- **O caso:** um commit feito por `quick commit` cujo registro local se perdeu. O commit é **anterior ao primeiro registro** que esta cópia guarda em `.oxe/quick`, e o id do quick não é posterior ao commit.
+- **O status:** o `ship check-origin` dá a esse commit um status próprio e auditado, `quick_unrecorded` ("registro ausente, trailer presente"). Ele aparece em todo relatório (`quick sem registro: …`, `quick_unrecorded[]`). Antes, isso exigia uma isenção manual.
+- **O que continua reprovando:** um commit depois do primeiro registro, um id datado depois do commit, ou a falta de qualquer registro de onde datar.
+- **Revisão cruzada do merge das isenções:** num `sha` duplicado vence a entrada versionada (ou a do `--config`), e o `authored` do mesmo autor nos dois arquivos vira uma regra só, com a união dos paths.
+
+### Isenção pontual não some atrás do `oxe.config.json` (OxeSpace 15/11, #854)
+
+- O `origin` do `oxe.config.json` versionado substituía o bloco `exempt` inteiro do `.oxe/config.json`, e uma isenção pontual (`exempt.commits`) sumia sem aviso. As regras continuam vencendo chave a chave. As **listas** de isenção (`commits` por sha, `paths`, `authors`, `authored`) agora se juntam, e uma lista que nenhum lado declara mantém o padrão.
+
+### Promote leva o teste re-congelado do escopo da tarefa (OxeSpace 15/11, OxeCode F6 T30)
+
+- **O que entra:** o `runtime promote` também leva, como arquivos da ponta do programa, os testes nos `files` da tarefa que diferem da base. Isso inclui um teste re-congelado pelo quick de um CR (o u83 do CR-F6-5). Antes, o PR levava o u83 antigo da main, que o código da T30 deixa vermelho.
+- **O que só é avisado:** um teste do verify que difere da base, mas não é da tarefa, não entra. O aviso o nomeia, com os commits que o mudaram, e fica em `not_carried_tests`.
+
+### Gates: sem embrulho duplo; CR do gate de CI resolvido pelo run verde (OxeSpace 15/11, Celular F3)
+
+- **`phase_gates_runner`:** um gate que já começa com o prefixo do runner, ou que roda o mesmo script dele (por exemplo `remote-verify -- node gradle152.mjs …`), não é embrulhado de novo. Antes, a CI rodava um caminho do Windows ("Cannot find module '/home/runner/…/C:/Users/…remote-verify.mjs'").
+- **`runtime ci --attach` com run verde:** resolve os CRs `constraint` abertos da fase que nasceram dos gates `kind: ci`. A resolução fica registrada como `ci_attach`. Antes, o CR ficava aberto sem caminho: o `--no-amendment` vale só para spec_gap, e o close passava mesmo assim. Um run vermelho, ou um CR de outro gate, não muda.
+
+### Teste que só fica verde com uma tarefa posterior (G38, OxeCode F6 T27)
+
+- **O `plan lint` acusa um verify que roda um teste de aceite que só uma tarefa pendente posterior torna verde:** o teste fica fora do alcance naquele ponto da ordem. "Teste de aceite" aqui é a entrada congelada da tarefa dona, ou um arquivo `acceptance/` no escopo dela.
+  - A tarefa dona roda na mesma onda ou depois, e não é dependência da tarefa que roda o teste.
+  - O padrão segue `lint.suite_impact`, e a mensagem diz como sair: tirar o teste do verify, ou depender da tarefa dona.
+  - Caso real: a T27 (onda 1) foi adiada depois de 3 tentativas (US$ 16,91) com o u83 da T30 (onda 3) no verify.
+- O G30 deixa de pedir no verify uma suíte de aceite que é de uma tarefa posterior.
+- **`runtime deferred retry [dir]`:** o "retry" virava a pasta do projeto ("Diretório não encontrado: …\\retry"), mesmo com `--dir`.
+
+### "A confirmar" só como marcador (OxeSpace 15/11, OXE-274)
+
+- O lint do refine e do intake, o needs-info, o grooming e o intake da SPEC contam "A confirmar" só como frase inteira, sem letra ou dígito colados; o "a" minúsculo entre palavras ("obrigando-o a confirmar a exclusão") é preposição, e `_A confirmar_` em itálico conta. Antes, "…, pa**ra confirmar** com segurança …" virava um item em aberto sem pergunta e reprovava o `alm intake`.
+
+### Registro de regressão com o hash re-congelado (OxeSpace 15/11, OxeChat F3)
+
+- **No `program close`:** o snapshot de regressão fixa cada teste congelado pelo conteúdo no fechamento, que é o que o gate acabou de aceitar. Antes copiava o hash da suíte compilada antes de um CR re-congelar o teste, e toda verificação posterior lia o teste re-congelado como `acceptance_tampered`. O hash anterior fica em `sha256_compiled`.
+- **`program regression repin Fn --criteria A<n> --by <papel> --reason "…" [--dry-run]`:** re-fixa os testes congelados de um critério de uma fase **fechada** no arquivo commitado.
+  - Recusa um arquivo com mudança não commitada ou não versionado, uma fase aberta e um critério sem teste. Quando recusa, nada é gravado.
+  - Grava `repins[]` (quem, por quê, de → para) e o evento `RegressionRepinned`.
+
+### Recusa de política: o gatilho provável e uma nova tentativa escolhida (OxeSpace 15/11, Celular F3 T9)
+
+- A falha `policy` diz o que o turno anterior acrescentou ao prompt: ferramenta, caminho e tamanho de cada resultado. Isso vai no texto e em `executor_usage.policy_trigger_candidates`. Uma recusa na primeira requisição aponta o prompt inicial.
+- **`runtime execute --retry-policy-once`:** cada tarefa ganha **uma** tentativa a mais depois de uma recusa de política, mesmo além do `max_retries`, e nunca uma segunda. É para um falso positivo do classificador, que já passou num retry simples (OxeChat F3 T7). O padrão continua sem retry automático.
+  - Num execute posterior do mesmo run, a tentativa 1 de uma tarefa já recusada **é** essa tentativa extra; não ganha uma segunda.
+  - A tentativa extra conta na cota de retries do run.
+  - A tentativa recusada guarda o seu log (`attempts/<tarefa>-<n>.log`).
+
+### `alm label --remove`; o refine tira o `needs-info` respondido (OxeSpace 15/11, OXE-189)
+
+- **`alm label <chave> --remove <rótulo>[,<rótulo>]`:** tira rótulos do card. Pode vir junto com o `--add`; um rótulo nos dois é recusado. Um rótulo que o card não tem é informado, não é erro.
+- **`alm refine apply` tira o `needs-info`:** quando o spec não tem mais nenhum "A confirmar" e o card ainda traz `needs-info`, o rótulo sai. Isso vale também com o spec inalterado. Antes, o apply só acrescentava o rótulo.
+
+### `alm supersede` não fecha como "Lançado"; `alm version none`; lint sem fase ativa (OxeSpace 15/11)
+
+- **`alm supersede` nunca escolhe um status de release:**
+  - Num fluxo cujo único status done é o de release ("Lançado"), um card substituído pareceria entregue na 1.5.2. Agora a simulação explica isso, e o `--apply` recusa sem gravar nada.
+  - `--close-to <status>` fecha num status nomeado, e `--no-close` só liga e comenta.
+  - `alm doctor` lista os status done e avisa quando só há o de release.
+- **`alm version <KEY> none`:** remove a versão de correção do card.
+- **Refine e help do ALM (OXE-166 a 170):**
+  - O lint de interface aceita como alvo aprovado um JSON em `src/design/targets/` e um link de artefato do claude.ai. Um card sem BRD declara "BRD: nenhum (função nova)".
+  - `refine apply --keep-status` grava a spec sem mover o card.
+  - Os CAs ainda sem critério da SPEC viram um aviso só, não um por CA.
+  - O `alm --help` lista `summary`, `supersede`, `pending` e as formas novas do `version`.
+  - A checagem "fechar sem entregar" do `alm doctor` é só informativa (`!`).
+- **`plan lint` sem fase ativa:** com o plano escrito antes do `program start`, o campo `phase` do PLAN.json define a fase. Antes, o lint cobrava do plano novo as emendas de todas as fases fechadas.
+
+### `spec freeze` escolhe a entrada pelo critério (OxeCode F4, CR-F4-6)
+
+- Com `--criteria`, o freeze atualiza a entrada desse critério. Se o arquivo só aparece na entrada de outro critério, cria uma entrada nova, com o próprio `sha256` e `hashes`. Sem `--criteria`, vale a primeira entrada que lista o arquivo, como antes.
+- Antes, o A17 e o A18 dividem o `oxe128-next-attention.test.tsx`, e um freeze com `--criteria A18` sobrescrevia a entrada do A17. O A18 ficava sem hash, e o lock não via mudança no arquivo para ele.
+
+### Teste congelado testado antes da tentativa paga (G36 parte 2, G30b parte 2) e pausa sem FAIL
+
+- **`plan lint --precheck-tests [--precheck-runs 2]`, FIRST para os testes de aceite:**
+  - Numa worktree temporária no HEAD, com os testes congelados copiados da árvore de trabalho e os stubs do pack (`plan skeleton`), cada teste de aceite de tarefa pendente roda N vezes. São três achados:
+    - **trava contra o stub** (`precheck_hang`, erro): act com fake timers, um await sem fim, um servidor que não fecha;
+    - **resultado diferente entre execuções** (`precheck_flaky`, erro);
+    - **passa sem a implementação** (`precheck_passes_on_stub`, aviso).
+  - Um comando via `remote-verify` roda uma vez só, com teto padrão de 30 min, e o estouro é aviso (`precheck_timeout_remote`), nunca travamento. A fila da CI conta no tempo de relógio, e antes três testes do OxeChat sessions deram falso `precheck_hang` aos 120 s. `--precheck-timeout <s>` define o teto. Os stubs e os testes copiados ficam na worktree temporária, que é onde o `remote-verify` tira o snapshot (`git add -A` do toplevel).
+  - O executor mata a árvore de processos no timeout. Um teste travado nunca fica vazado nem prende a worktree.
+  - Ativo por padrão no `plan lint` quando há testes congelados novos ou alterados em tarefas pendentes (`--no-precheck` ou `lint.precheck: false` desligam): grava o hash LF aprovado em `precheck-cache.json` para não repetir sem mudança no arquivo e pula comandos `remote-verify` com aviso no modo padrão (`--precheck-tests` ignora o cache e inclui o remoto).
+  - Antes, os três defeitos de teste do planner desta noite (T5, T6 e o CA-6 da T20) custaram cerca de US$ 50 em tentativas sobre código certo.
+- **G30b parte 2:** com `--precheck-tests`, as suítes achadas pelo G30 rodam uma vez no HEAD. Já vermelha ou travada antes da tarefa vira aviso nomeando a suíte, para o vermelho não ser lido como da tarefa. O conflito de uma regra da suíte com o CA só aparece com a implementação: o G30 põe essa suíte no verify, e ele surge na primeira tentativa.
+- **`oxe-cc alm supersede <ANTIGO> --by <NOVO>[,<NOVO>] [--comment "…"] [--apply]`:** fecha um card substituído por outros, como os 7 BRD que o refazer do OxeChat na 1.5.2 substitui. Só o escritor.
+  - Liga o antigo aos novos com o tipo de link do site: "supersedes", senão Duplicate, senão Relates.
+  - Comenta e leva o antigo a um status da categoria done, preferindo transições de cancelar ou substituir, com a resolution "Won't Do", "Superseded" ou "Duplicate" quando o fluxo a tem.
+  - A simulação só lê e mostra o tipo de link, a transição e a resolution que usaria.
+  - É idempotente: não repete link, não move card já done e não comenta de novo.
+- **`alm refine` mantém as seções que o card já tem:** um card escrito por `alm intake --from <spec>` já traz História, Critérios, RN e RT. Agora cada seção da descrição vai para a seção de mesmo nome; o texto antes da primeira seção vira o Contexto, quando não há um próprio. Antes, a coleta punha a descrição inteira em Contexto, cortada depois de umas 12 linhas (por volta do CA-3), zerava o resto para "A confirmar" e um `refine apply` sobrescreveria a spec real (OXE-166 a 169).
+- **`quick done --verify` no Windows:** com sintaxe POSIX (aspas simples, `$`, `export`) e o bash do Git instalado, o verify roda no bash. Antes, no cmd.exe, um `'…' && …` quebrava (exit 127).
+- **Tamanho dos workflows em LF:** a checagem do `doctor` conta os bytes em LF. Num checkout do Windows com `core.autocrlf`, o `plan.md` lia 45.155 bytes contra 44.594 no repositório e passava do limite suave.
+- **Pausa não marca os pendentes como bloqueados:** com o run pausado, as tarefas que não começaram ficam pendentes para a retomada. Antes, a pausa do OxeCode F4 depois da T17 marcou a T18 `upstream_wave_failed` e imprimiu FAIL.
+
+### Custo de falha medido, tentativa reaproveitada e fixtures das suítes (G30b, G36, relatório)
+
+- **`oxe-cc report failure-cost [--since <data>] [--gap-minutes 30] [--json]`:** o custo de falha medido nos eventos e nos CRs do projeto, sem estimativa.
+  - Mostra os US$ das tentativas descartadas por causa: o motivo do retry, a classe de falha do bloqueio ou o CR que nomeou a tarefa depois da tentativa, que é o diagnóstico. Uma tarefa concluída e refeita por CR também entra.
+  - Mostra as horas paradas: intervalos sem evento dentro de um run.
+  - Totais: descartado, gasto e a fração descartada. `failure_cost.fixes` liga uma causa ao seu conserto.
+  - Primeira medição, no OxeChat F2: US$ 44,03 descartados de US$ 61,22 (72%) e 2,4 h paradas.
+- **G36, `runtime retry T<n> --reuse-attempt [--run <id>]`:**
+  - Reaplica a tentativa revertida guardada em `.oxe/runs/<run>/attempts/<Tn>-failed/` (o patch e os arquivos novos), roda o verify da tarefa contra o teste corrigido e, se der verde, commita como checkpoint (`OXE-Task`/`OXE-Run`), sem turno de modelo.
+  - Se der vermelho, desfaz tudo e diz para seguir com uma tentativa normal. É recusado se não houver tentativa guardada ou se os arquivos dela estiverem sujos na árvore.
+  - Eventos: `AttemptReused` e `AttemptReuseFailed`.
+- **G30b, os dados que a suíte lê:** para cada suíte que importa um arquivo da tarefa, inclusive a que já está no verify, o `plan lint` avisa dos arquivos de dados que ela lê fora do `files` da tarefa: import de `.json`, `readFileSync`, `path.join` com literais. Antes, a baseline do guarda da T20 (`palette-commands.base.json`) custou 3 tentativas.
+
+### Teste re-congelado por CR não trava o close (OxeChat F2, 14/11)
+
+- **O lock de aceite do run aceita o re-freeze por CR:**
+  - Uma entrada com `resolves`, gravada pelo `spec freeze --cr`, usa o hash novo do arquivo, como já fazia com o `amended` do `plan amend-test`. O `spec freeze` grava `hashes[arquivo]` por arquivo.
+  - Antes, o close do OxeChat F2 dava `acceptance_changed` no teste do A6 re-congelado (CR-F2-8, v4), comparado contra o lock da primeira compilação.
+- **O dossiê compara o teste congelado com a regra do verify:** bytes, forma LF ou forma CRLF (`frozenFileMatches`, agora exportado pelo runtime).
+
+### Rodada de CR do Celular F3 (14/11)
+
+- **`plan task edit T<n>`:** edita a tarefa sem mexer à mão num PLAN.json em execução.
+  - Muda `--wave`, `--depends-on T1,T2|none`, `--remove-paths a,b` e `--notes "…"`, com `--by` e `--reason`.
+  - Recusa tarefa done, dependência inexistente, dependência da tarefa sobre si mesma, ciclo e a remoção de um teste congelado.
+  - Fica registrado na tarefa (`edits`), em `changes.ndjson` (`task_edit`) e no evento `PlanTaskEdited`.
+- **`spec freeze`:**
+  - `--proves-filter` e o `--tests` do Gradle valem para testes Kotlin/Java, sobre `pacote.Classe.método`; um `@DisplayName` herda o nome do método que anota.
+  - O re-freeze mantém os outros arquivos da entrada. Antes, o RenderedScreen.kt sumia do A7/A8/A9/A11.
+- **`runtime feedback`:** um critério de fase ainda não iniciada recebe a fase dona do critério, como no `spec amend`. Antes, a fase ficava "-".
+- **`spec add` e `spec amend`:** um `|` no texto vai escapado (`\|`), e a leitura da tabela respeita o `\|`. Antes, o `|` partia a linha e deixava uma célula a mais.
+- **`quick done --verify`:** texto com seta de prosa (`->`, `=>`) é recusado antes de rodar. No cmd.exe, ele virava redirecionamento e criava um arquivo solto.
+- **`quick` numa worktree sem bloco `alm`:** usa o ALM da worktree principal do clone e diz de onde veio. Antes, não gravava nada no card.
+
+### Teto de US$ antes da próxima tentativa e versão da spec emendada (OxeSpace 14/11)
+
+- **`--budget-usd` vale antes da próxima tentativa:** uma tentativa só começa se o que resta cobre o custo médio das últimas tentativas (até 10) registradas no ledger da fase. Sem histórico de custo, vale o teto puro. Antes, com US$ 59,69 de 60 gastos, a T21 do OxeCode F4 começou e terminou acima do teto.
+- **`alm refine apply` numera a spec emendada:** a versão segue o marcador do próprio card. Um sha diferente do aplicado vira `spec-vN+1`, no marcador e no rótulo. O `spec-v1` fica, porque significa "refinado" e é o que o ready gate lê. Antes, uma spec emendada voltava a ser rotulada `spec-v1` (OXE-134, OXE-89, OXE-87).
+
+### Card em desenvolvimento na hora e pedidos da sessão leitora (G27 e G21)
+
+- **G27, o card vai para `in_progress` quando a tarefa começa:** o `runtime execute` dispara a sincronização com o ALM no `TaskStarted`, e não só no fim do execute. Antes, o card ficava em "Pronto" a fase inteira.
+- **G21, a sessão leitora grava pedidos para o escritor:**
+  - Numa sessão que não é o escritor, o quick registra em `.oxe/alm/pending.ndjson` o comentário (a mini-spec, o fechamento) e o movimento para `in_progress`. Antes, só dizia "ALM só leitura", e o card ficava sem nada.
+  - O escritor lista com `oxe-cc alm pending` e aplica com `oxe-cc alm pending apply`. Os comentários vão em ordem, o movimento é só para frente e depois roda um `sync`. Um pedido aplicado nunca é reaplicado.
+  - A regra de só mover para frente do quick virou `moveForward`, a mesma usada no dreno.
+
+### Regressão congelada sem falso `acceptance_tampered` (OxeCode F3, 14/11)
+
+- **O verify compara o teste congelado sem depender do final de linha:** o arquivo bate quando os bytes, a forma LF ou a forma CRLF têm o hash congelado, a mesma regra do check do `commit-task`. Antes, a regressão das fases fechadas, com hashes gravados em LF, dava `acceptance_tampered` em 7 testes da F3 com `core.autocrlf`, embora nenhum diferisse da `origin/main`.
+
+### Saída grande do shell não derruba o run (P0, OxeChat F2, 14/11)
+
+- **`run_command` com saída limitada:**
+  - O executor guarda os primeiros e os últimos 64 KB da saída, com a contagem do que foi cortado, e para o comando que passa de 64 MB.
+  - Antes, um grep recursivo que seguiu a junction do `node_modules` imprimiu mais de 512 MB. O `Buffer.concat(...).toString()` lançou `ERR_STRING_TOO_LONG` e matou o run inteiro na T5.
+  - A descrição da ferramenta avisa o agente para excluir `node_modules`, `dist` e `.git` das buscas recursivas.
+- **`2>$null` no Windows não cria arquivo:**
+  - No Windows o `run_command` usa o cmd.exe. Um redirecionamento para `$null` (PowerShell) ou para `/dev/null` vai para `nul`, e a descrição da ferramenta diz qual é o shell.
+  - Antes, o T5 do OxeChat F2 criou um arquivo chamado `$null` na worktree.
+- **O checkpoint diz o que está rodando:**
+  - Antes de cada comando, o check e os testes relacionados do checkpoint escrevem no stderr o comando, o commit e o teto de tempo.
+  - O mesmo vale para a reconferência de um vermelho (no commit, na árvore do projeto e no commit pai).
+  - Antes, minutos de silêncio depois do `WorkItemCompleted` pareciam um travamento.
+- **Crash do runtime é retomável:** uma exceção não tratada marca o lease como `crashed`, e o `--supervise` e o `autoresume` o relançam, dentro do limite de laço de queda. Um run que termina `failed` continua não sendo retomado.
+
+### Pausa que segura, emenda do CR aberto e freeze (OxeChat F2, 14/11)
+
+- **`runtime pause` segura o execute em curso:** a pausa pedida de outro processo é lida antes de cada tarefa. A tarefa em curso termina, a próxima não começa, e o run termina `paused` com `RunPaused { reason: "requested" }`. Antes, a T3 terminou e a T4 começou mesmo com o run pausado. O autoresume nunca retoma esse run.
+  - A saída do `runtime pause` diz se o execute em curso vai ler a pausa. Um execute anterior a esta versão não lê; o aviso diz para pará-lo.
+- **`spec amend` usa o CR spec_gap aberto que pediu a emenda:** com `--cr CR-n`, ou sozinho quando há exatamente um CR aberto desse critério ainda sem emenda. Não abre CR novo e usa a versão que esse CR pediu, uma por CR. Antes, a emenda abria CRs novos e levava o critério a v3.
+- **`spec freeze --cr`:** diz que o CR segue aberto até o verify rodar o teste verde, como já era o desenho, e como fechá-lo antes.
+- **Re-freeze:** um `--command` explícito vence o comando já registrado.
+- **`spec freeze` respeita o filtro de nome do comando (OxeCode F4 T20):** o `proves` guarda só os testes que o comando da entrada seleciona.
+  - O filtro vem de `--proves-filter "<padrão>"` ou, sem ele, do `-t` / `--testNamePattern` / `--grep` do comando.
+  - O padrão é aplicado ao nome completo do teste, com os `describe` que o envolvem, como fazem o vitest e o jest; testes comentados ficam de fora.
+  - Um filtro que não seleciona nada é recusado.
+  - Antes, um arquivo dividido entre duas tarefas punha os 9 títulos na T20, e os 4 da outra tarefa nunca rodavam (`proof_not_executed`).
+  - O `freeze` também aceita `--by`.
+- **`quick commit <caminho apagado>`:** registra a remoção, ou não faz nada se o `git rm` já a registrou. Antes, recusava o caminho.
+- **`runtime promote` passa pelo hook de origem:** o commit dos testes congelados da tarefa leva `OXE-Task: Fn/Tn`, uma linha por tarefa promovida, mais o `OXE-Run` quando é conhecido. Os testes viajam no PR da tarefa. Antes, o hook commit-msg recusava esse commit e o branch ficava só com o cherry-pick.
+- **Um promote que falhou não trava o próximo:**
+  - A worktree do próprio promote, suja porque um passo falhou, é removida com força depois de o link do `node_modules` ser desfeito. Antes, o `worktree remove` sem força recusava, e a worktree ficava segurando o branch.
+  - A varredura das worktrees de promotes mortos roda antes de conferir o branch. Antes, o promote seguinte dizia "está em uso numa worktree" e pedia uma remoção à mão.
+- **Close sem o ensaio de rollback registra o risco (Celular F2):** `program close --no-rollback-check` exige `--by` e `--reason`, e grava `rollback_risk` no `changes.ndjson` e o evento `RollbackRiskAccepted`. A mensagem do gate mostra o comando completo. É o caso de uma fase com merges da main, que não revertem sem `-m`.
+- **`quick done` conta os commits de todos os branches (OXE-149):** a busca pelo trailer `OXE-Quick` passa a olhar os branches locais e remotos, além do HEAD, sem os commits de stash. Antes, quatro commits em dois branches contavam como um.
+
+### Suítes fora do verify, fase duplicada, junction e versão do card (G30 e OxeSpace, 14/11)
+
+- **G30, suítes que importam os arquivos da tarefa:** o `plan lint` lista, por tarefa não concluída, as suítes de teste existentes que importam algum arquivo de `files` e não estão nem no escopo, nem no verify, nem entre os testes de aceite da tarefa. A resolução de imports aceita os aliases do tsconfig.
+  - É aviso por padrão.
+  - Vira erro quando o texto da tarefa cita uma lista ou constante exportada (`export const NOME = [ … ]`, `{ … }`, literal, `Object.freeze`) que a suíte importa pelo nome, porque a suíte afirma sobre o que a tarefa vai mudar.
+  - `lint.suite_impact`: `"warn"` ou `"off"`.
+  - Nesta rodada, três refações pagas tiveram essa causa (CR-07, CR-08 e o terminal do Celular).
+- **`program phase add` idempotente:**
+  - o mesmo título logo depois de `--after` não grava nada e diz que a fase já existe;
+  - um título já usado por outra fase, ou um critério que outra fase já tem, é recusado sem gravar e indica o `program criterion move`.
+  - Antes, rodar duas vezes duplicava a fase e repetia o ROADMAP.
+  - O `--depends-on` agora é gravado na fase nova e segue a renumeração; uma fase que não existe é recusada. Antes, ele era aceito e ignorado.
+- **`checkpoint-ws` sem junction órfã:** um check morto no meio (reinício, kill) deixava a junction do `node_modules` dentro do `.oxe/`, e um `cp -r .oxe` a seguia por cerca de 118 mil arquivos. Agora, no início de cada check, as sobras com mais de 2 h perdem o link primeiro e depois saem. A pasta real das dependências nunca é tocada.
+- **`oxe-cc alm version <KEY> <versão> [--comment "…"] [--apply]`:** troca a versão de correção (fixVersion) de um card existente.
+  - Só o escritor pode usar, e sem `--apply` sob `require_apply` é uma simulação.
+  - Se o card já está nessa versão, nada é gravado.
+  - A versão precisa existir no projeto do Jira.
+  - Com `alm.transport: "mcp"`, o comando diz para usar a ferramenta do MCP.
+  - `oxe-cc alm summary <KEY> "<título>" [--comment "…"] [--apply]` troca o título de um card existente: só o escritor, simulação sem `--apply` sob `require_apply`, até 255 caracteres. É o caso do OXE-160, cujo refine estreitou o escopo enquanto o título ainda citava o diálogo removido.
+  - `alm version <KEY> …` chega ao comando: antes, o roteamento do `alm version ensure` o interceptava e respondia com o uso do ensure.
+
+### Prova de teste no Kotlin/Gradle e hooks sem esqueleto (Celular F2 e OxeChat F2, 14/11)
+
+- **`proves` com Gradle:**
+  - A linha do testlog do Gradle (`Class > method PASSED|FAILED|SKIPPED`) conta como nome de teste. Vale também com a duração e com o prefixo de job e timestamp do log da CI. Antes, os testes Kotlin que rodaram davam `proof_not_executed`.
+  - O anexo do JUnit XML também pega um wrapper com "gradle" no nome (`gradle152.mjs`).
+  - O lint não pede mais "reporter verbose" para gradle, gradlew e mvn.
+  - A saída do check vai até 32 MB; antes eram 2 MB, que cortavam um build Android.
+- **Hook nunca cria `.oxe/`:** o pre-push fica no `.git` comum e roda em toda worktree. O `runtime pre-push`, assim como o `runtime autoresume`, não faz mais o bootstrap do `.oxe/` num checkout que não tem um.
+- A mensagem de uso do `spec add` lista `--by` e `--reason`.
+
+### ALM: simulação que nunca grava, e escrita explícita (OXB-G12 a G15)
+- **`--dry-run` nunca grava no ALM, em nenhum comando (G13, P0):** antes, `alm refine apply --dry-run` aplicava de verdade.
+  - O transporte REST recusa POST, PUT, PATCH e DELETE em simulação; a consulta WIQL do Azure é a única leitura liberada.
+  - O apply simula: lê, roda o lint e diz o que gravaria e para onde moveria.
+  - Um teste por comando que escreve, com um Jira falso que falha em qualquer escrita: intake, version ensure, push, sync, move, comment, link, defect, refine --claim, refine apply, grill publish e trace publish.
+- **`alm.require_apply`:** com `true`, gravar exige `--apply`; sem ele, todo comando que escreve vira simulação.
+  - **Deprecação:** nesta versão o padrão continua `false`, mas uma escrita sem `--apply` avisa: "na próxima versão vai exigir --apply". Na próxima minor o padrão passa a `true`.
+  - Os workflows já passam `--apply` onde gravam.
+- **`refine --claim` diz o que fez (G14):** cada card mostra "→ movido para Em refinamento", "moveria para …" ou "não moveu: <motivo>". Antes, o claim movia o card e o CLI imprimia "só leitura".
+- **Comentário do grooming (G12):** os fatos ficam em "Fatos (fonte): N", cada um com a fonte, e as perguntas em "Perguntas: N (X respondida(s), Y em aberto)". Antes, os fatos eram contados como perguntas.
+- **`grill answer` (G15):** o eco mostra a fonte dada em `--source`, não "decisão do usuário".
+
+### Fechamento de fases, refine de interface e quick (depois do 4a7f39a)
+- **Falha de rede num gate:** quando a saída de um gate de fase tem assinatura de rede, o gate não abre CR (`GateInfraFailure`). Valem dial tcp/connectex, "forcibly closed", WSAE*, ECONNRESET/TIMEDOUT, TLS, DNS, HTTP 5xx e rate limit. O runtime classifica a falha como `env_setup`, não `deterministic`.
+- **`plan pack fix T<n> --symbol <arquivo>#<nome> --internal | --member-of <Classe> | --remove`:** corrige um símbolo do pack sem reabrir a tarefa. A correção fica em `fixes` e no evento PackSymbolFixed.
+- **G34:** um card de interface só passa do lint do refine com o BRD-n, o alvo aprovado e medidas nos CA, nos dois temas e nas duas densidades. Sem isso, o card fica needs-info, com a pergunta para a MARCA.
+- **G33:** `guards install` instala só os hooks do git. As guardas do Claude Code (PreToolUse) passam a exigir `--claude-guards`; o `install --guards` continua instalando-as.
+- **`spec freeze`:**
+  - lê os títulos com o leitor do plan lint, então escapes, `.each` e template literals saem iguais;
+  - refazer o freeze para o mesmo CR é idempotente.
+- **`quick`:**
+  - `quick cancel --reason [--evidence]` fecha o quick como abandonado, nunca como concluído. Comenta no card, sem movê-lo, e o próximo quick do card registra `follows`.
+  - Numa pasta sem ALM, o quick diz que nada foi gravado no card.
+- **`ship known-failure`:**
+  - `move <id> --item <KEY>` leva a falha para o card certo;
+  - `remove wt:KF-n` tira só aquela entrada;
+  - `--help`.
+- **`alm status <KEY>`** lê a coluna do card.
+- **`dry_verify.timeout_ms`** configura o timeout por comando.
+- **Orçamento esgotado:** a mensagem diz que o teto é o acumulado da fase.
+
+### Refazer por CR sem verde falso, e commit das tarefas (depois do 253492c)
+- **P0, verde falso:** uma tarefa reaberta por um CR aberto passa a rodar, no próprio verify (compile), os testes congelados que resolvem o CR, ligados por tarefa ou por critério.
+  - Ela nunca reaproveita o checkpoint de antes do CR. Uma tentativa que não mudou nada vira `empty_checkpoint`, com o CR no motivo.
+- **`runtime commit-task`:**
+  - commita uma tarefa marcada done sem commit, e o commit leva `OXE-CR` para cada CR aberto que a reabriu;
+  - `commit-task T11,T12 --together` faz um commit só para tarefas misturadas em arquivos compartilhados, com um `OXE-Task` por tarefa e esse commit como done_commit de cada uma.
+- **Commit por tarefa com a trava de origem:** se ela estiver ligada, o execute commita cada tarefa por padrão. Com `checkpoint_commits: false`, avisa no início.
+
+### Do uso real no OxeSpace (depois do 9389450)
+- **`origin.exempt.commits`:** isenção pontual por SHA completo, com `reason` e `by` obrigatórios. Toda isenção usada aparece no relatório, e uma entrada inválida faz o check-origin sair com 1.
+- **G23:** com `origin.since` por commit, os commits com data anterior à do commit de corte também contam como histórico. É o caso de uma branch longa aberta antes da regra.
+- **Dry-verify de tarefa reaberta:** roda o teste congelado que resolve o CR aberto, ligado por tarefa ou por critério. Uma tarefa reaberta com o teste do CR vermelho nunca sai "já verde".
+- A normalização do plano preserva o `task` de cada entrada de aceite.
+- **`spec freeze --task Tn`.**
+- **`runtime feedback resolve CR-n --no-amendment`:** um spec_gap que não emendou o critério, ou que foi retirado, não versiona o critério nem deixa os testes stale.
+- **`alm link --cr` / `--kind`:** o vínculo mantém o tipo e os campos do histórico e grava o CR; antes, o bug virava tarefa.
+- **Falha conhecida não é "bug sem CR"** no trace nem no gate do close.
+- **Preflight visual:** passa a ler só a prosa da SPEC, então um nome de arquivo ou um trecho de código não conta mais como entrada visual. Também aceita `not_applicable` no VISUAL-INPUTS.json.
+- **`spec add requirement`:** lê requisitos em bullets (`- R1 (CODE-8): …`), e o `--before` acha o cabeçalho pelo prefixo.
+- **`program start`** de uma fase inexistente aponta o `program phase add`.
+
+### Simulação local, corte da trava e guarda-chuva (depois do e421105)
+- **P0: `quick --dry-run` não grava nada local:** nenhum registro, QUICK.md, evento nem commit, e não roda a verificação. A regra do G13 passa a valer também para as escritas locais.
+- **G19, corte e config versionada:** `origin.since` aceita um commit ou uma data, e o que é anterior ao corte vira histórico. O `oxe.config.json` versionado vence o `.oxe/config.json`; `--config <arquivo>` aponta outro. O `check-origin` roda sem `.oxe/`.
+- **G20:** `origin.exempt.authored` isenta um autor só nos caminhos dele, por exemplo o bot que regrava as goldens.
+- **Guarda-chuva:** `alm label <chave> --add <rótulo>` e `alm link <chave> --relates <chave,…>`, os dois com `--apply` e sem repetir. `alm.ref_label: "plain"` gera o rótulo do intake como `ref-<id>`.
+- **`grill start` aceita os tipos do ALM** (story, task, bug, epic, spike). Com `--card` e sem `--type`, usa o tipo do card.
+- **`grill mark --late <etapa>`:** marca um fato que o grooming não achou e que apareceu depois, no planejamento ou na execução. O `grill report` mostra a profundidade do grill.
+- **`alm intake --dry-run` sem credencial** confere o arquivo offline, com o lint do refine.
+- **Gates internos do oxe-build** (stub-check e os demais scripts do pacote) rodam sempre locais. O `phase_gates_runner` remoto só envolve os comandos do repositório.
+
+### Origem dos commits, quick com registro e CI por PR (G5, G8, G9, G11)
+- **`oxe-cc quick <KEY> "<objetivo>"` (G9):** o quick vira comando, com um registro verificável em `.oxe/quick/<id>.json` e a minispec no QUICK.md.
+  - `quick commit -m "…"` faz o commit com os trailers `OXE-Quick` e `OXE-Card`, para o commit à mão não virar o buraco da trava.
+  - `quick done --verify "<cmd>"` roda a verificação e fecha com os commits achados pelo trailer.
+  - Com ALM, o card recebe a minispec e vai para "em desenvolvimento", só de uma coluna anterior, nunca para trás. No `done`, o card recebe os commits e a verificação.
+- **Trava de origem (G11):** `oxe-cc ship check-origin [<#PR>|<a..b>]` exige que todo commit venha do `runtime execute` (`OXE-Task`) ou de um quick registrado (`OXE-Quick`, mais `OXE-Card` com ALM).
+  - As isenções ficam só em `origin.exempt`: merges, autores (bots do trem e da release) e caminhos (`.oxe/`, `docs/releases/`).
+  - O `guards install` instala o hook `commit-msg`. Com um quick aberto, o hook acrescenta os trailers; sem quick, recusa o commit (`origin.commit_msg`).
+- **CI por PR, por card e do repositório (G5/G8):** `ship status --pr <n> | --card <KEY> | --repo` dá o veredito de PRs fora de fase, com os rótulos do trem.
+  - Um número passado ao comando é PR, nunca pasta.
+  - `--comment --apply` põe o veredito no PR, num comentário "CI (OXE)" atualizado no lugar.
+- **Falhas conhecidas do repositório:** ficam em `<git common dir>/oxe/`, compartilhadas por todas as worktrees, e expiram no merge do PR do conserto (`ship known-failure prune`).
+- **`ship --help`** e a ajuda geral passam a listar `ship`, `quick` e `workflow`.
+- **`oxe-cc workflow path <slug>`:** os comandos `/oxe-*` caem para os workflows do pacote instalado quando o repositório não tem `.oxe/workflows`. O `doctor` avisa e dá a correção (`install --oxe-only .`).
+
+### Jornada SDLC guiada e grill na spec
+- **Grill (`oxe-cc grill …`, padrão do `/oxe-spec`):** a descoberta da spec virou uma árvore de decisões (problema → personas → escopo → fluxos → regras/glossário → bordas → NFR → integrações → rollout → métricas → riscos), percorrida uma pergunta por vez, cada uma com a resposta recomendada e o porquê.
+  - O que o código responde vira fato com fonte e não é perguntado.
+  - Uma resposta que muda reabre as perguntas e os ramos que dependiam dela.
+  - Contradição bloqueia até ser resolvida. "Não sei" vira suposição explícita.
+  - O tipo da demanda define quais ramos são obrigatórios.
+  - O estado (`.oxe/grill/grill.ndjson` + `GRILL.md`) é retomável entre sessões.
+  - O `grill close` só aceita sem pendência; ao fechar, grava `.oxe/GLOSSARY.md`, preservando o texto humano, e registra as decisões (as opções não escolhidas entram como alternativas recusadas), que viram ADRs.
+  - `--fast` mantém os blocos de perguntas de antes.
+- **`oxe-cc spec check` / `spec approve`:** o portão de qualidade do upstream checa:
+  - v1 R→A, Risco e Como verificar em todo critério, ids únicos;
+  - PRD;
+  - sinônimos proibidos do glossário;
+  - grill fechado e com as decisões no registro, e suposições na SPEC;
+  - RFC para P0/P1;
+  - critérios no ROADMAP.
+
+  A aprovação só acontece sobre um check verde e fica registrada (evento e `changes.ndjson`, com o hash da SPEC). Uma SPEC alterada depois da aprovação volta a pedir aprovação.
+- **Próximo passo guiado em toda a jornada:** o `suggestNextStep` agora cobre:
+  - grill aberto (com o próximo ramo), spec a aprovar;
+  - histórias e tarefas a enviar ao ALM, fila do MCP;
+  - RFC da fase em rascunho, ou exigido (`/oxe-discuss --rfc`);
+  - com `delivery.mode: "pr"`, a entrega depois do verify verde: PR → CI/merge → deploy anexado → close.
+
+  `oxe-cc status --journey` mostra o mapa das etapas 0 a 9, e `oxe-cc ship status` mostra PRs, merges (via `gh pr view`) e deploys. Todo workflow termina com o mesmo rodapé de próximo passo (`references/next-step-footer.md`).
+- **`/oxe-ship` virou "entregar":** PR com a chave do ALM → CI e merge → deploy anexado → docs → `program close` → ALM em "lançado", um passo verde por vez. O commit local ficou em `--local`, e `--defect` registra o defeito pós-deploy (item no ALM ligado à origem, mais um CR).
+- **`/oxe-discuss --rfc`, `/oxe-alm` e `references/change-management.md`:**
+  - `/oxe-discuss --rfc` decide a proposta técnica antes do plano, com as perguntas em aberto no estilo grill;
+  - `/oxe-alm` é o setup do bloco `alm` por perguntas, mais status, push, fila e defeitos;
+  - `change-management.md` diz qual comando usa cada mudança no meio do caminho, e o roteador `/oxe` encaminha os pedidos em linguagem natural.
+- **Verificação remota (`verify.remote`):**
+  - Os checks pesados (e2e, build empacotado, Android) rodam no CI do repositório no GitHub; os leves ficam locais. `where`/`remote_job` vão por check, critério, tarefa ou `verify.where`.
+  - O dispatch vai sem inputs (um input de publish, release ou deploy é recusado), reaproveita um run verde no mesmo commit e acha o run do dispatch pelo commit e pelo evento.
+  - Nunca empurra para main/master ou branch protegido, e nunca usa `--force`. Sem upstream, só com `--push`.
+  - Um job vermelho reprova o critério, com o link. GitHub indisponível ou tempo esgotado deixam o check como "não verificado", e a fase segue (`required: true` exige o remoto).
+  - O run vira evidência de CI da fase. `runtime verify --no-remote` roda tudo local.
+- **Da coordenação de ALM (13–14/11):**
+  - **Um escritor por programa** (`alm.writer` + `OXE_ALM_WRITER`): as demais sessões só leem e comentam (`oxe-cc alm comment`), e uma trava local recusa dois escritores na mesma máquina. Duas sessões tinham criado o mesmo lote, com 19 duplicados.
+  - **Versão-alvo por id** (`update.fixVersions[].set`): um PUT de `fields.fixVersions` voltava vazio. Agora ela é conferida e aplicada também em item adotado e em item criado sem ela.
+  - **Falhas conhecidas de CI** (`oxe-cc ship known-failure add|list|remove`): o `ship status` classifica o CI de cada PR. Uma falha cujo teste bate com uma falha conhecida de item aberto sugere `gh run rerun <id> --failed` em vez de regressão.
+  - **`verify.remote` mais leve:** espera por consultas curtas e retomáveis (estado em `remote-verify.json`, `detach`), trace da CI baixado quando um job falha, e `where: "both"` marca `ci_only`.
+  - **`verify.min_free_mb`:** abaixo do piso, nenhum check pesado roda na máquina.
+  - **`oxe-cc alm refine`** (pedido do usuário, 14/11): relê os cards do Jira para um spec guiado por tipo.
+    - História: Como/Quero/Para, critérios Dado/Quando/Então com o teste que prova cada um, regras de negócio e técnicas, fora de escopo e definição de pronto. Bug: reprodução, esperado × obtido, causa, critérios de correção e teste de regressão. Tarefa e épico têm modelos próprios.
+    - A coleta só lê: card, comentários, ligações, épico, PRs, commits e builds, design e código citado. O agente da sessão reescreve sem inventar: o que não tem fonte vira "A confirmar", com a pergunta. O `oxe-cc` não chama modelo pago.
+    - O lint reprova critério vago, critério sem teste, fora de escopo vazio e "A confirmar" sem pergunta.
+    - O `apply` é só do escritor: grava a descrição em ADF com títulos, guarda o texto original num comentário e aplica `spec-v1` (mais `needs-info`, com as perguntas comentadas). Nunca sobrescreve um card editado depois da coleta sem `--confirm-overwrite`.
+    - `alm.ready_gate`: sem `spec-v1`, o item não vai para "Em andamento".
+  - **12 etapas canônicas no ALM:** intake, grooming, refinement, ready, in_progress, review, verified, queued, integrated, staging, accepted e released, cada uma mapeada para a coluna do quadro em `alm.states`. Os nomes antigos continuam aceitos.
+    - O refine move as etapas dele: `--claim` leva para refinement; o `apply` leva para ready (sem perguntas) ou de volta para grooming (com needs-info).
+    - O ready gate vale antes de ready e de in_progress: exige `spec-v1` e nenhum `needs-info`.
+    - O teto padrão do lote do refine é 15 cards.
+  - **Ids de tarefa estáveis e reabertura explícita** (lição do F2 CR-36, que motivou um wrapper no OxeSpace):
+    - O `plan merge` sobre o PLAN.json atual mantém o id de cada tarefa pela chave (`rid`); a tarefa nova recebe o próximo id livre, e as concluídas continuam concluídas, com o commit. Antes, a numeração por profundidade deslocava ids, e o executor devolve trabalho interrompido pelo id.
+    - O `runtime feedback` só reabre tarefa com `--reopen`; sem ele, liga o CR às tarefas e mostra o comando.
+  - **`oxe-cc trace`:** o grafo de rastreabilidade. Cada referência vem do lado filho e o reverso é derivado. O comando lista os órfãos, cada um com a correção: história sem critério ou card, critério sem história ou teste, decisão sem âncora, CA ↔ A divergentes, CR de defeito sem bug e bug sem CR, tarefa citando decisão não vigente.
+    - `trace publish [--apply]` mantém um comentário "Documentos (OXE)" por card, atualizado no lugar: o link para o PRD, os critérios com a última evidência do verify, as decisões com o link do ADR (`alm.docs: { repo, branch }`) e os CRs.
+    - O ADR lista as histórias com a chave do card. O `alm defect --cr CR-n` liga o bug ao CR. O lint do refine confere os sinônimos proibidos do glossário.
+  - **Decisões com âncora:** o RFC aceito grava como critérios e histórias os A-n e US-n citados na Motivação e no Resumo, e a decisão do grill herda o `--affects` da pergunta. O ADR lista "Critérios" e "Histórias"; antes, os dois nasciam sem ligação.
+  - **CA ↔ A explícito:** o `oxe-cc alm refine import <KEY>` leva os critérios do card refinado para a SPEC: um A-n novo, citando a chave e com o teste e o risco do CA, e o `(A-n)` escrito de volta no CA. Um CA que já tem o seu A é conferido. O lint do refine passa a checar os dois lados. Uma fase executando ou fechada está congelada: com `--phase` dela, o import recusa e mostra o comando de CR; um CA que muda um A congelado vira proposta de CR com versão nova (`--amend-to`), nunca edição direta.
+  - **`alm.stories_source`:** com `"alm"`, o push nunca cria história nem épico; liga a US do PRD ao card citado na linha dela e lista as que faltam. Um item que cita a chave do card (`(OXE-20)`) é adotado pela chave, confirmada por GET, sem a busca por rótulo.
+  - **`oxe-cc alm metrics`:** tempo em cada coluna (mediana, p85), lead time, cycle time, vazão por semana ISO, quantidade em cada coluna agora, limites de WIP (`alm.wip`, só aviso) e o gargalo pela mediana. Uma coluna renomeada no quadro é contada pelo id. O relatório vai para `.oxe/alm/metrics.md`.
+  - **O ALM nunca recua um item:** antes de mover, o OXE lê o estado real e pula se outra ferramenta já o levou mais adiante (por exemplo, um workflow de jira-sync que move PR, trem, main e release). Com `track: ["in_progress"]`, o OXE só move A fazer → Em andamento.
+
+### Execução que não desperdiça nem esconde a causa (continuação)
+
+- `runtime.provider.name: "grok"` (ou `--adapter grok`) executa cada turno com `grok --prompt-file` / `--output-format json` / `--max-turns 1` / `--json-schema`. A denylist tira as tools do runtime (`read_file`, `grep`, `list_dir`) e as que o perfil plan ainda oferece (`search_tool`, `use_tool`, `todo_write`, `ask_user_question`, `enter_plan_mode`, `exit_plan_mode`, `send_feedback`, `image_to_video`, `reference_to_video`). Um envelope `max_turn_requests` que já traz o JSON da ponte é aceito (OXB-C15). As tools continuam no runtime. A credencial é o login do Grok ou `XAI_API_KEY`. Sem `--adapter` e sem chave, a detecção usa `claude`, depois `grok`, depois `antigravity`;
+
+### Programa, coordenação e release (continuação)
+
+- **doctor:** 44 chaves de `.oxe/config.json` que o runtime lê (`task_gates`, `execute`, `parallel`, `deps_strategy`, `checkpoint_check`…) eram chamadas de "não usadas pelo oxe-cc"; a lista agora é testada contra as chaves que o código lê.
+- **plan lint:** um arquivo que a tarefa cria, importado sem extensão pelo teste congelado (`files: [menu.tsx]`, `import '…/menu'`), está no escopo; os caminhos fora de `files` de um mesmo teste saem numa linha só; sem PLAN.md, o preflight já lista IMPLEMENTATION-PACK, REFERENCE-ANCHORS e FIXTURE-PACK na mesma rodada.
+- **verify:** um check que falha só pelo timeout do próprio runner ("Test timed out in 5000ms", sem asserção falhando) roda mais uma vez sozinho antes de contar; verde no rerun passa, e o VERIFY.md mostra os dois resultados. Se o timeout se repete, a falha é `timeout`, nunca `deterministic` ([HIGH]).
+- **program start/status:** uma fase em `planning` cujo PLAN.json já existe (da própria fase, com tarefas) aponta para `oxe-cc runtime execute`, ou para corrigir o plano quando o plan lint tem erros, em vez de `/oxe-plan`.
+- **plan lint:** o `HINT(html-fetch)` (app aberto em `file://`) só aparece num projeto com cara de app estático: um `index.html` e nenhum bundler, framework ou Electron no `package.json`.
+- **plan lint / execute:** um símbolo do IMPLEMENTATION-PACK num arquivo que existe e não o define vira aviso no `plan lint` (erro quando o arquivo está fora de `files` da tarefa). No execute, se o stub-check reprova só por símbolos que nem a base tinha e a tentativa não criou, a tarefa para na 1ª tentativa (`pack_symbol_missing`) com "o pack nomeia um símbolo que não existe", em vez de pagar retries que não podem passar.
+- **program close:** num branch com PR aberto (`gh pr list --head <branch>`), a fase fecha mas o commit não é feito. A mensagem diz o PR e o que fazer (commitar num branch separado, ou `--force-branch`). Antes, o close commitava no branch de um PR que já estava na fila do trem de merge.
+- **PRD:** o `/oxe-spec` passa a escrever `.oxe/PRD.md` (`oxe/templates/PRD.template.md`) acima da SPEC, com problema, personas, métricas (M-n) e histórias de usuário (US-n: Como / Quero / Para) ligadas aos R* e A*. O `oxe-cc prd lint`, também dentro do `plan lint`, acusa história sem critério, critério sem história, referência inexistente e métrica sem meta. São avisos; viram erro com `prd: { required: true }`.
+- **RFC:** proposta técnica antes do plano de uma fase de risco: `oxe-cc rfc new | accept | reject | list` (`.oxe/rfc/`, template `RFC.template.md`). O `accept` exige as perguntas em aberto respondidas e registra a decisão (ADR) com contexto, proposta, riscos e alternativas recusadas. O `plan lint` avisa fase com critério P0/P1 sem RFC aceito; com `rfc: { required: "risk" | "always" }` é erro.
+- **Documentos versionados:** `oxe-cc docs publish` copia PRD (com a chave do ALM de cada história), RFCs (com índice), ADRs e SYSTEM-DESIGN para `docs/`. Com `docs_publish: { "dir": "docs" }` configurado, o close da fase publica antes do commit e os documentos entram nele; sem essa chave, o close não escreve nenhum arquivo além dos que já escrevia. Sem decisões registradas, nenhum ADR é escrito. O `program init` cria o SYSTEM-DESIGN quando não existe, para o gate de design desatualizado valer desde a fase 1.
+- **ALM (Jira / Azure DevOps):** bloco `alm` no config, com credenciais só por variável de ambiente.
+  - `oxe-cc alm push` cria épico, histórias do PRD e uma tarefa por tarefa do plano. É idempotente pelo rótulo `ref-<programa>-<ref>`, adota um item existente pelo código antigo (`adopt_prefixes`) e aplica a versão-alvo por fase.
+  - `alm sync` move os itens por etapa pelo nome do estado: tarefa iniciada, PR aberto, promoção que falhou (volta com comentário), merge (via `gh pr view`) e deploy, com a versão lançada se `release_version: true`. `alm.track` limita as etapas que o OXE move.
+  - `alm move` serve para o trem ("Na fila"), `alm link` para a ligação manual e `alm defect` para o defeito depois do deploy, ligado à origem.
+  - `alm.transport: "mcp"` dispensa o token. Push, sync, move, defect e o sync automático decidem o que fazer e põem as operações na fila `.oxe/program/alm-mcp-queue.json`, na ordem:
+    - `ensure`, com a busca JQL ou WIQL a rodar antes de criar e o pai por `parent_ref` enquanto ele ainda está na fila;
+    - `transition`, em que o último estágio vence e os comentários se somam;
+    - `link` e `release_version`.
+  - O agente executa a fila com as ferramentas MCP da sessão e reporta cada operação com `alm ack <id> --key …` (ou `--error`), que grava o mesmo registro do modo REST. `alm queue` mostra a fila, o `runtime execute` avisa quando há operações pendentes, e `alm link` manual também resolve o `ensure`.
+  - A chave entra no título do PR, no assunto do commit de checkpoint e no nome do branch do promote.
+  - O registro local é a defesa contra duplicata, porque a busca do Jira por rótulo leva minutos para ver um item novo. A chave é gravada logo depois do POST, e a confirmação usa GET por chave. Com `ledger_guard: true`, um push sem registro se recusa a criar até um `--rebuild-ledger`, que refaz o registro pela busca sem criar nada.
+  - `--dry-run` só lê. Uma falha é tentada de novo com backoff, relida depois da escrita e, se persistir, fica pendente para o próximo sync, sem derrubar o comando do OXE.
+- **Correções do planejamento de uma fase real com chaves do Jira:**
+  - `spec add criterion` (e `spec amend`) escreve pelas colunas do cabeçalho. Na tabela `| ID | Critério | Risco | Como verificar |`, o verify ia para Risco e "Como verificar" ficava vazio. Agora `--risk` preenche a coluna Risco e é obrigatório quando ela existe, e uma coluna que o comando não preenche faz o comando falhar com o nome dela.
+  - `program phase edit --add-acceptance/--add-requirements` aceita uma fase em `planning` enquanto nenhuma tentativa rodou (só `program start`). Se a fase já tem plano, avisa para cobrir o critério e rodar o lint de novo. Depois da primeira tentativa, o caminho continua sendo o CR.
+  - OXB-030 ignora chaves de item do ALM (`OXE-104`, `CODE-8`, `AB#123`): o "104" de "(OXE-104)" deixou de ser tratado como status HTTP que o teste de aceite precisava exercitar.
+- **Decisões → ADRs:** um único registro de decisões (`.oxe/program/decisions.ndjson`) para os IDs do DISCUSS (D-NN) e das fases (D-F2-n), publicado como ADRs versionados em `docs/adr/` (um arquivo por decisão: status, contexto, decisão, alternativas recusadas, consequências, evidência; mais o índice `README.md`). Novos: `decision add --context/--consequences/--supersedes`, `decision status <id> active|superseded|retired --reason`, `decision import` (tabela do DISCUSS.md, mesmos IDs) e `decision publish [--out]`. Cada mudança republica os ADRs, preservando o texto escrito fora dos marcadores; `adr: false` desliga. O `plan lint` avisa tarefa que cita decisão substituída ou aposentada.
+
+---
+
 ## [1.21.2] — 2026-11-11
 
 Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-build, mais o roteiro de excelência e os backlogs de comparação aprovados pelo TECH LEAD. Cada item tem uma seção em `docs/oxespace-1.5/BACKLOG.md`, com a evidência e o teste que a reproduz (`tests/oxe-1212-*.test.cjs`). Para usar só a trilha recomendada, veja [docs/HAPPY-PATH.md](docs/HAPPY-PATH.md).

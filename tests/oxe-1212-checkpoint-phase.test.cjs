@@ -266,6 +266,89 @@ describe('OXB-170: a checkpoint holds only its own task\'s hunks', () => {
     assert.equal(fs.readFileSync(path.join(dir, 'a.txt'), 'utf8'), 'bad\n', 'work kept in the tree');
     assert.ok(!fs.existsSync(path.join(dir, '.oxe', 'checkpoint-ws')) || fs.readdirSync(path.join(dir, '.oxe', 'checkpoint-ws')).length === 0);
   });
+
+  it('--wave N with every task of the wave done: nothing to run, a success, no other wave listed (OxeSpace 15/11, OxeQuery polish wave 3)', async () => {
+    const plan = { schema_version: 1, tasks: [
+      { id: 'T1', title: 'A', wave: 1, files: ['a.txt'], verify: { commands: [ok] } },
+      { id: 'T3', title: 'C', wave: 3, files: ['c.txt'], verify: { commands: [ok] }, done: true },
+    ] };
+    const dir = project({ plan, files: { 'a.txt': 'a\n', 'c.txt': 'c\n' } });
+    let calls = 0;
+    const exec = { async execute() { calls += 1; return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } };
+    const res = await op.runRuntimeExecute(dir, null, { executor: exec, skipPreflight: true, wave: 3 });
+    assert.equal(res.nothing_to_run, true);
+    assert.equal(res.result.status, 'completed');
+    assert.deepEqual(res.result.blocked, []);
+    assert.match(res.result.reason, /onda 3: nada a rodar/);
+    assert.match(res.result.reason, /\(T3\)/, 'the done tasks of the wave are named');
+    assert.equal(calls, 0);
+    // R29: a wave the plan does not have, or not a number, is an error — never "nothing to run" with exit 0
+    await assert.rejects(op.runRuntimeExecute(dir, null, { executor: exec, skipPreflight: true, wave: 99 }), /onda 99 não existe no plano \(ondas: 1, 3\)/);
+    await assert.rejects(op.runRuntimeExecute(dir, null, { executor: exec, skipPreflight: true, wave: 'abc' }), /--wave abc/);
+    assert.equal(calls, 0);
+  });
+
+  it('the integration checks promote runs (check-file-size) run at the checkpoint too (OxeSpace 15/11, OxeQuery polish T2)', async () => {
+    const plan = { schema_version: 1, tasks: [{ id: 'T2', title: 'B', wave: 1, files: ['big.ts'], verify: { commands: [ok] } }] };
+    const sizeCheck = "import fs from 'fs';\nconst n = fs.readFileSync('big.ts', 'utf8').split('\\n').length; if (n > 5) { console.error('big.ts: ' + n + ' linhas (teto 5)'); process.exit(1); }\n";
+    const dir = project({ plan, files: { 'big.ts': 'a\n', 'scripts/check-file-size.mjs': sizeCheck }, config: { verify_file_size: false } });
+    const before = git(dir, 'rev-parse', 'HEAD').stdout.trim();
+    const exec = { async execute() { fs.writeFileSync(path.join(dir, 'big.ts'), 'a\nb\nc\nd\ne\nf\ng\n'); return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } };
+    const res = await op.runRuntimeExecute(dir, null, { executor: exec, skipPreflight: true, checkpointCommits: true });
+    assert.match(res.result.checkpoint_failed[0].reason, /check de integração vermelho .*check-file-size\.mjs.*o promote recusaria esta tarefa/s);
+    assert.match(res.result.checkpoint_failed[0].reason, /big\.ts: 8 linhas \(teto 5\)/);
+    assert.equal(git(dir, 'rev-parse', 'HEAD').stdout.trim(), before, 'commit undone');
+  });
+
+  it('R29: an integration check already red on the parent, for a file the task did not touch, does not hold the checkpoint', async () => {
+    const plan = { schema_version: 1, tasks: [{ id: 'T3', title: 'C', wave: 1, files: ['small.ts'], verify: { commands: [ok] } }] };
+    const sizeCheck = "import fs from 'fs';\nconst n = fs.readFileSync('legacy.ts', 'utf8').split('\\n').length; if (n > 5) { console.error('legacy.ts: ' + n + ' linhas (teto 5)'); process.exit(1); }\n";
+    const dir = project({ plan, files: { 'small.ts': 'a\n', 'legacy.ts': '1\n2\n3\n4\n5\n6\n7\n', 'scripts/check-file-size.mjs': sizeCheck } });
+    const before = git(dir, 'rev-parse', 'HEAD').stdout.trim();
+    const exec = { async execute() { fs.writeFileSync(path.join(dir, 'small.ts'), 'a\nb\n'); return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } };
+    const res = await op.runRuntimeExecute(dir, null, { executor: exec, skipPreflight: true, checkpointCommits: true });
+    assert.ok(!(res.result.checkpoint_failed || []).length, JSON.stringify(res.result.checkpoint_failed));
+    assert.notEqual(git(dir, 'rev-parse', 'HEAD').stdout.trim(), before, 'committed');
+    assert.equal(planOf(dir).tasks[0].done, true);
+  });
+
+  it('runtime pause holds a NEW execute (no attempt) until runtime resume (OxeSpace 15/11, OQ polish wave 8)', async () => {
+    const plan = { schema_version: 1, tasks: [{ id: 'T1', title: 'A', wave: 1, files: ['a.txt'], verify: { commands: [ok] } }] };
+    const dir = project({ plan, files: { 'a.txt': 'a\n' } });
+    let calls = 0;
+    const exec = { async execute() { calls += 1; return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } };
+    op.compileExecutionGraphFromArtifacts(dir, null, {});
+    op.applyRuntimeAction(dir, null, { action: 'pause', reason: 'janela de promoção' });
+    const res = await op.runRuntimeExecute(dir, null, { executor: exec, skipPreflight: true });
+    assert.equal(res.paused, true);
+    assert.equal(res.result.status, 'paused');
+    assert.match(res.result.reason, /runtime pause .*janela de promoção.*runtime resume/);
+    assert.equal(calls, 0, 'no attempt under the pause');
+    // R34: the CLI refuses before the lease, says why, exits non-zero (a wave loop stops)
+    const cliRes = require('child_process').spawnSync(process.execPath, [path.join(__dirname, '..', 'bin', 'oxe-cc.js'), 'runtime', 'execute', '--dir', dir], { cwd: dir, encoding: 'utf8', windowsHide: true, env: { ...process.env, NO_COLOR: '1' } });
+    assert.equal(cliRes.status, 1, cliRes.stdout + cliRes.stderr);
+    assert.match(cliRes.stderr, /PAUSADA: run pausado por runtime pause .*runtime resume/);
+    op.applyRuntimeAction(dir, null, { action: 'resume' });
+    const after = await op.runRuntimeExecute(dir, null, { executor: exec, skipPreflight: true });
+    assert.notEqual(after.paused, true);
+    assert.equal(calls, 1);
+  });
+
+  it('R32: a check script the task itself brings is not "already red on the parent" (MODULE_NOT_FOUND there)', async () => {
+    const plan = { schema_version: 1, tasks: [{ id: 'T4', title: 'D', wave: 1, files: ['small.ts', 'scripts/check-file-size.mjs'], verify: { commands: [ok] } }] };
+    const sizeCheck = "import fs from 'fs';\nconst n = fs.readFileSync('legacy.ts', 'utf8').split('\\n').length; if (n > 5) { console.error('arquivo grande: ' + n + ' linhas'); process.exit(1); }\n";
+    const dir = project({ plan, files: { 'small.ts': 'a\n', 'legacy.ts': '1\n2\n3\n4\n5\n6\n7\n' } });
+    const before = git(dir, 'rev-parse', 'HEAD').stdout.trim();
+    const exec = { async execute() {
+      fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'scripts', 'check-file-size.mjs'), sizeCheck);
+      fs.writeFileSync(path.join(dir, 'small.ts'), 'a\nb\n');
+      return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' };
+    } };
+    const res = await op.runRuntimeExecute(dir, null, { executor: exec, skipPreflight: true, checkpointCommits: true });
+    assert.match((res.result.checkpoint_failed || [])[0] ? res.result.checkpoint_failed[0].reason : '', /check de integração vermelho/);
+    assert.equal(git(dir, 'rev-parse', 'HEAD').stdout.trim(), before, 'commit undone');
+  });
 });
 
 describe('OXB-172: the checkpoint runs the tests related to the task\'s own changed files', () => {
@@ -621,5 +704,56 @@ describe('OXB-189: related tests — files only, no e2e, alone in one worker, gr
     const ev = op.readEvents(dir, null).find((e) => e.type === 'GateResolved' && e.payload.gate === 'checkpoint');
     assert.deepEqual(ev.payload.check.flaky_reds, [{ file: 'tests/unit/auto-approve-oxespace-reads.test.ts', first: 'red', rerun: 'red', project_tree: 'green', where: 'project_tree' }]);
     assert.equal(ev.payload.check.related_set_size, 29);
+  });
+});
+
+describe('OXB-C17 #1: commitTaskCheckpoint includes all dirty task.files from prior attempts/reopens', () => {
+  it('includes task.files already dirty before the current attempt (even when shared with an unstarted future task) so checkpoint_check passes', async () => {
+    const plan = {
+      schema_version: 1,
+      tasks: [
+        { id: 'T10', title: 'Request card', wave: 1, files: ['src/card.tsx', 'shared/locales/en/thread.json', 'shared/locales/pt-BR/thread.json'], verify: { commands: [ok] } },
+        { id: 'T11', title: 'Future wave', wave: 2, depends_on: ['T10'], files: ['shared/locales/en/thread.json', 'src/other.tsx'], verify: { commands: [ok] } },
+      ],
+    };
+    const dir = project({
+      plan,
+      files: {
+        'src/card.tsx': 'export const Card = () => "old";\n',
+        'shared/locales/en/thread.json': '{"old":true}\n',
+        'shared/locales/pt-BR/thread.json': '{"old":true}\n',
+        'src/other.tsx': 'export const Other = 1;\n',
+      },
+      config: {
+        checkpoint_check: 'node -e "const fs=require(\'fs\');const en=JSON.parse(fs.readFileSync(\'shared/locales/en/thread.json\',\'utf8\'));const pt=JSON.parse(fs.readFileSync(\'shared/locales/pt-BR/thread.json\',\'utf8\'));if(!en.allowMenu||!pt.allowMenu)process.exit(1)"',
+      },
+    });
+
+    // Simulate dirty leftovers in T10.files preserved from an earlier run / plan reopen
+    fs.writeFileSync(path.join(dir, 'shared', 'locales', 'en', 'thread.json'), '{"allowMenu":"Allow"}\n');
+    fs.writeFileSync(path.join(dir, 'shared', 'locales', 'pt-BR', 'thread.json'), '{"allowMenu":"Permitir"}\n');
+
+    // Current attempt only modifies src/card.tsx and does not touch the already-dirty locale files
+    const exec = {
+      async execute(node) {
+        if (node.id === 'T10') {
+          fs.writeFileSync(path.join(dir, 'src', 'card.tsx'), 'export const Card = () => "allowMenu";\n');
+        }
+        return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' };
+      },
+    };
+
+    const res = await op.runRuntimeExecute(dir, null, { executor: exec, skipPreflight: true, checkpointCommits: true, wave: 1 });
+    assert.equal(res.result.checkpoint_failed, undefined, JSON.stringify(res.result.checkpoint_failed));
+    const t10 = planOf(dir).tasks.find((t) => t.id === 'T10');
+    assert.equal(t10.done, true);
+    assert.ok(t10.done_commit);
+    const committedFiles = git(dir, 'show', '--name-only', '--format=', t10.done_commit).stdout.trim().split(/\r?\n/).sort();
+    assert.deepEqual(committedFiles, [
+      'shared/locales/en/thread.json',
+      'shared/locales/pt-BR/thread.json',
+      'src/card.tsx',
+    ]);
+    assert.equal(git(dir, 'status', '--porcelain').stdout.trim(), '');
   });
 });

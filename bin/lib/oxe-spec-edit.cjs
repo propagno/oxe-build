@@ -17,9 +17,13 @@ function eolOf(text) {
 function splitRow(line) {
   const trimmed = line.trim();
   if (!trimmed.startsWith('|')) return null;
-  const inner = trimmed.replace(/^\|/, '').replace(/\|$/, '');
-  return inner.split('|').map((cell) => cell.trim());
+  const inner = trimmed.replace(/^\|/, '').replace(/(?<!\\)\|$/, '');
+  // an escaped \| is part of the cell (GFM tables)
+  return inner.split(/(?<!\\)\|/).map((cell) => cell.trim());
 }
+
+/** A cell's text with its "|" escaped, so it never splits the row (OxeSpace 14/11, Celular F3). */
+const cellText = (s) => String(s).trim().replace(/(?<!\\)\|/g, '\\|');
 
 function joinRow(cells) {
   return `| ${cells.join(' | ')} |`;
@@ -45,7 +49,10 @@ function findTables(lines, headerTest) {
   return out;
 }
 
-const isCriteriaHeader = (h) => /^id$/i.test(h[0] || '') && /crit[ée]rio|criterion/i.test(h[1] || '');
+// Bench B49: the `## Proibições` table of `spec probe` (| ID | Critério | Não pode | Nível | Verify |) also matched and,
+// coming after the criteria table, was the one `spec add criterion` wrote to — it is not the acceptance criteria table.
+const isCriteriaHeader = (h) => /^id$/i.test(h[0] || '') && /crit[ée]rio|criterion/i.test(h[1] || '')
+  && !h.some((cell) => /n[ãa]o\s+pode|must\s+not|forbidden|^borda$|^edge$/i.test(String(cell || '').trim()));
 const isRequirementsHeader = (h) => /^r-?id$/i.test(h[0] || '') && /requisito|requirement/i.test(h[1] || '');
 
 function idsInTables(lines, tables, prefix) {
@@ -90,7 +97,8 @@ function criteriaIds(specText) {
 }
 
 // OXB-075: requirements written as bullets — `- **R10** — text (A1, A2)`, possibly with indented continuation lines.
-const REQ_BULLET_RE = /^(\s*)([-*])\s+\*\*(R\d+)\*\*\s*([—–:-])\s*/;
+// `- **R1** — …`, and also `- R1 (CODE-8): …` (OxeSpace 14/11: the OxeCode SPEC; R5 was refused as a gap after R0)
+const REQ_BULLET_RE = /^(\s*)([-*])\s+(?:\*\*)?(R\d+)(?:\*\*)?(?:\s*\([^)\n]*\))?\s*([—–:-])\s*/;
 
 /** Bullet requirements: ids, and the line after the last bullet's block (its indented continuation included). */
 function bulletRequirements(lines) {
@@ -99,22 +107,42 @@ function bulletRequirements(lines) {
   let indent = '';
   let marker = '-';
   let sep = '—';
+  let bold = true;
   for (let i = 0; i < lines.length; i += 1) {
     const m = REQ_BULLET_RE.exec(lines[i]);
     if (!m) continue;
     ids.push(m[3].toUpperCase());
     last = i;
     [, indent, marker, , sep] = m;
+    bold = /\*\*R\d+\*\*/.test(lines[i]);
   }
-  if (last < 0) return { ids, insertAt: -1, indent, marker, sep };
+  if (last < 0) return { ids, insertAt: -1, indent, marker, sep, bold };
   let end = last + 1;
   while (end < lines.length && lines[end].trim() && /^\s+/.test(lines[end]) && !REQ_BULLET_RE.test(lines[end])) end += 1;
-  return { ids, insertAt: end, indent, marker, sep };
+  return { ids, insertAt: end, indent, marker, sep, bold };
 }
 
 function requirementIds(specText) {
   const lines = String(specText || '').split(EOL_RE);
   return [...new Set([...idsInTables(lines, findTables(lines, isRequirementsHeader), 'R'), ...bulletRequirements(lines).ids])];
+}
+
+/**
+ * The column of each field in a criteria table, by its header: | ID | Critério | Risco | Como verificar | (the SPEC
+ * template) or | ID | Critério | Como verificar | (older SPECs). Writing by position put the verify under Risco.
+ */
+function criteriaColumns(header) {
+  const cols = { criterion: -1, risk: -1, verify: -1, unknown: [] };
+  header.forEach((h, i) => {
+    if (i === 0) return;
+    const name = h.replace(/\*/g, '').trim();
+    if (cols.criterion < 0 && /crit[ée]rio|criterion/i.test(name)) cols.criterion = i;
+    else if (cols.risk < 0 && /^(risco|risk)\b/i.test(name)) cols.risk = i;
+    else if (cols.verify < 0 && /verific|verify/i.test(name)) cols.verify = i;
+    else cols.unknown.push(name || `coluna ${i + 1}`);
+  });
+  if (cols.criterion < 0) cols.criterion = 1;
+  return cols;
 }
 
 /**
@@ -127,7 +155,7 @@ function amendCriterion(specText, id, change = {}) {
   const key = String(id || '').trim().toUpperCase();
   const tables = findTables(lines, isCriteriaHeader);
   if (!tables.length) throw new Error('SPEC sem tabela de critérios de aceite (| ID | Critério | Como verificar |)');
-  if (!change.text && !change.append && !change.verify) throw new Error('informe --text <novo critério>, --append <cláusula> ou --verify <como verificar>');
+  if (!change.text && !change.append && !change.verify && !change.risk) throw new Error('informe --text <novo critério>, --append <cláusula>, --verify <como verificar> ou --risk <risco>');
   for (const t of tables) {
     for (let i = t.firstRow; i <= t.lastRow; i += 1) {
       const cells = splitRow(lines[i]);
@@ -135,9 +163,13 @@ function amendCriterion(specText, id, change = {}) {
       const before = lines[i];
       const next = [...cells];
       while (next.length < t.header.length) next.push('');
-      if (change.text) next[1] = String(change.text).trim();
-      if (change.append) next[1] = `${next[1].replace(/[.;\s]+$/, '')}; ${String(change.append).trim()}`;
-      if (change.verify) next[2] = String(change.verify).trim();
+      const col = criteriaColumns(t.header);
+      if (change.verify && col.verify < 0) throw new Error('a tabela de critérios não tem coluna "Como verificar"');
+      if (change.risk && col.risk < 0) throw new Error('a tabela de critérios não tem coluna "Risco"');
+      if (change.text) next[col.criterion] = cellText(change.text);
+      if (change.append) next[col.criterion] = `${next[col.criterion].replace(/[.;\s]+$/, '')}; ${cellText(change.append)}`;
+      if (change.verify) next[col.verify] = cellText(change.verify);
+      if (change.risk) next[col.risk] = cellText(change.risk);
       lines[i] = joinRow(next);
       return { text: lines.join(eol), before, after: lines[i] };
     }
@@ -165,8 +197,17 @@ function addCriterion(specText, id, change = {}) {
     key = checkNewId(idsInTables(lines, tables, 'A'), id, 'A', change.allowGap);
   }
   const t = tables[tables.length - 1];
-  const cells = [key, String(change.text).trim(), String(change.verify).trim()];
-  while (cells.length < t.header.length) cells.push('');
+  // By the header's columns, never by position; a column the command cannot fill is an error, not an empty cell.
+  const col = criteriaColumns(t.header);
+  if (col.unknown.length) throw new Error(`a tabela de critérios tem coluna(s) que o comando não preenche: ${col.unknown.join(', ')} — adicione a linha à mão ou ajuste o cabeçalho`);
+  if (col.verify < 0) throw new Error('a tabela de critérios não tem coluna "Como verificar"');
+  if (col.risk >= 0 && !change.risk) throw new Error('a tabela de critérios tem a coluna Risco: informe --risk <P0|P1|P2|…>');
+  if (col.risk < 0 && change.risk) throw new Error('a tabela de critérios não tem coluna "Risco" — retire --risk');
+  const cells = t.header.map(() => '');
+  cells[0] = key;
+  cells[col.criterion] = cellText(change.text);
+  cells[col.verify] = cellText(change.verify);
+  if (col.risk >= 0) cells[col.risk] = cellText(change.risk);
   const row = joinRow(cells);
   lines.splice(t.lastRow + 1, 0, row);
   return { text: lines.join(eol), id: key, before: null, after: row };
@@ -188,7 +229,7 @@ function addRequirement(specText, id, change = {}) {
   const values = [key, String(change.text).trim(), change.version || 'v1', criteria || '—'];
   // OXB-075: the SPEC lists requirements as bullets → append a bullet in the same style, after the last one's block.
   if (!tables.length && bullets.insertAt >= 0) {
-    const row = `${bullets.indent}${bullets.marker} **${key}** ${bullets.sep} ${String(change.text).trim().replace(/\s*\.$/, '')}${criteria ? ` (${criteria})` : ''}`;
+    const row = `${bullets.indent}${bullets.marker} ${bullets.bold === false ? key : `**${key}**`}${bullets.sep === ':' ? ':' : ` ${bullets.sep}`} ${String(change.text).trim().replace(/\s*\.$/, '')}${criteria ? ` (${criteria})` : ''}`;
     lines.splice(bullets.insertAt, 0, row);
     return { text: lines.join(eol), id: key, before: null, after: row };
   }
@@ -201,7 +242,14 @@ function addRequirement(specText, id, change = {}) {
     return { text: lines.join(eol), id: key, before: null, after: row };
   }
   if (!change.before) throw new Error('SPEC sem tabela de requisitos (| R-ID | Requisito | …); use --before "<cabeçalho>" para criar uma');
-  const at = lines.findIndex((l) => l.trim() === String(change.before).trim());
+  // the heading exactly, or the one heading that starts with it ("### Fora do escopo" → "### Fora do escopo (não objetivos)")
+  const want = String(change.before).trim();
+  let at = lines.findIndex((l) => l.trim() === want);
+  if (at < 0) {
+    const pref = lines.map((l, i) => [l.trim(), i]).filter(([l]) => /^#{1,6}\s/.test(l) && l.toLowerCase().startsWith(want.toLowerCase()));
+    if (pref.length > 1) throw new Error(`--before "${want}" casa com ${pref.length} cabeçalhos: ${pref.map(([l]) => l).join(' · ')}`);
+    at = pref.length ? pref[0][1] : -1;
+  }
   if (at < 0) throw new Error(`cabeçalho não encontrado na SPEC: ${change.before}`);
   const row = joinRow(values);
   lines.splice(at, 0, '| R-ID | Requisito | Versão | Critério de aceite |', '|------|-----------|--------|--------------------|', row, '');
@@ -359,4 +407,5 @@ module.exports = {
   parseScopeFile,
   leftoverPhaseMentions,
   checkNewId,
+  splitRow,
 };

@@ -78,7 +78,7 @@ describe('OXB-171: frozen test needs vs the task scope', () => {
     const verify = 'node -e "console.error(\'FAIL tests/acceptance/f2/r4-removal.test.js > its IPC channel groups are gone\'); console.error(\'AssertionError: expected [ \\\'rtk\\\' ] to deeply equal []\'); process.exit(1)"';
     const dir = project({ tasks: [{ id: 'T8', title: 'R4', wave: 1, files: ['electron/main/rtk/remove.ts'], acceptance: ['A1'], verify: { commands: [verify] } }] });
     let calls = 0;
-    const executor = { async execute() { calls += 1; fs.writeFileSync(path.join(dir, 'electron', 'main', 'rtk', 'remove.ts'), 'export {};\n'); return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } };
+    const executor = { async execute() { calls += 1; fs.writeFileSync(path.join(dir, 'electron', 'main', 'rtk', 'remove.ts'), 'export {};\n'); return { success: true, failure_class: null, evidence: [], output: 'removi o rtk; os grupos de canais vêm de shared/types/ipc.ts', completed_by: 'finish_task' }; } };
     await op.runRuntimeExecute(dir, null, { executor, skipPreflight: true, maxRetries: 2 });
     assert.equal(calls, 1, 'no retry of a task that cannot pass');
     const events = op.readEvents(dir, null);
@@ -91,6 +91,40 @@ describe('OXB-171: frozen test needs vs the task scope', () => {
     assert.equal(blocked.payload.failure_class, 'scope_insufficient');
     const vc = events.find((e) => e.type === 'VerificationCompleted' && e.payload.failed_segment);
     assert.match(vc.payload.failed_segment.output_tail, /AssertionError/, 'failed_segment carries the output tail');
+  });
+
+  it('OXB-C27-1: an out-of-scope import alone is not scope_insufficient (a fixture defect is retried, then verify_suspect)', async () => {
+    const verify = 'node -e "console.error(\'FAIL tests/acceptance/f2/r4-removal.test.js > renders twice\'); console.error(\'AssertionError: expected 2 sections, got 4 (module state not reset)\'); process.exit(1)"';
+    const dir = project({ tasks: [{ id: 'T8', title: 'R4', wave: 1, files: ['electron/main/rtk/remove.ts'], acceptance: ['A1'], verify: { commands: [verify] } }] });
+    let calls = 0;
+    const executor = { async execute() { calls += 1; fs.writeFileSync(path.join(dir, 'electron', 'main', 'rtk', 'remove.ts'), `export const n = ${calls};\n`); return { success: true, failure_class: null, evidence: [], output: 'feito', completed_by: 'finish_task' }; } };
+    await op.runRuntimeExecute(dir, null, { executor, skipPreflight: true, maxRetries: 2 });
+    const events = op.readEvents(dir, null);
+    assert.ok(!events.some((e) => e.type === 'ScopeInsufficient'), 'no ScopeInsufficient without the file in the stack or the agent output');
+    assert.ok(calls >= 2, `retried (calls=${calls})`);
+    assert.ok(events.some((e) => e.type === 'VerifyCommandSuspect'), 'the repeated failure is a suspect verify');
+  });
+
+  it('a file the task creates, imported without extension, is in scope (files: menu.tsx, test imports …/menu)', () => {
+    const test = "import { menu } from '../../../src/components/Terminal/terminalContextMenu';\nimport { idx } from '../../../src/lib/newdir';\n";
+    const dir = project({
+      files: { 'tests/acceptance/f2/r4-removal.test.js': test },
+      tasks: [{ id: 'T8', title: 'menu', wave: 1, files: ['src/components/Terminal/terminalContextMenu.tsx', 'src/lib/newdir/index.ts'], acceptance: ['A1'], verify: { commands: ['node -e 0'] } }],
+    });
+    assert.deepEqual(testScope.scopeGaps(dir, JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8'))), {});
+    assert.ok(!op.runtimePlanLint(dir, null, {}).warnings.some((w) => /fora de files/.test(w)));
+    // owned by another task without the dependency: the gap names the declared path, so plan review finds its owner
+    const doc = { tasks: [
+      { id: 'T1', files: ['src/components/Terminal/terminalContextMenu.tsx', 'src/lib/newdir/index.ts'] },
+      { id: 'T8', files: ['electron/main/rtk/remove.ts'], acceptance: ['A1'] },
+    ], acceptance_tests: [{ criterion: 'A1', task: 'T8', files: ['tests/acceptance/f2/r4-removal.test.js'] }] };
+    assert.deepEqual(testScope.scopeGaps(dir, doc).T8.files.sort(), ['src/components/Terminal/terminalContextMenu.tsx', 'src/lib/newdir/index.ts']);
+  });
+
+  it('several out-of-scope imports of one test are one lint line', () => {
+    const msgs = testScope.scopeGapMessages({ T2: { files: [], tests: [], detail: ['a.ts', 'b.ts', 'c.ts'].map((p) => ({ test: 't.test.ts', path: p, kind: 'import' })) } });
+    assert.equal(msgs.length, 1);
+    assert.match(msgs[0], /^T2: o teste congelado t\.test\.ts importa a\.ts, b\.ts, c\.ts, fora de files/);
   });
 
   it('the agent saying the change is out of scope stops after attempt 1 too', async () => {

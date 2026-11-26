@@ -55,8 +55,8 @@ describe('oxe-retro-health', () => {
     assert.strictEqual(h.parseLastRetroDate(state), null);
   });
 
-  // P0.5 — suggestNextStep retorna retro após verify_complete sem LESSONS.md
-  test('suggestNextStep returns retro when verify_complete and LESSONS.md missing', () => {
+  // Jornada 1.21.2 (item 2): a retro é automática no /oxe-verify; verify verde sem programa → /oxe-ship
+  test('suggestNextStep returns ship (not retro) when verify_complete and LESSONS.md missing', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-retro-'));
     const oxe = path.join(dir, '.oxe');
     fs.mkdirSync(oxe, { recursive: true });
@@ -74,13 +74,13 @@ describe('oxe-retro-health', () => {
       'utf8'
     );
     fs.writeFileSync(path.join(oxe, 'VERIFY.md'), '# VERIFY\n\n## Gaps\n\nNenhum gap restante\n', 'utf8');
-    // LESSONS.md NÃO existe → deve sugerir retro
+    // LESSONS.md NÃO existe → mesmo assim o próximo passo é entregar
     const result = h.suggestNextStep(dir);
-    assert.strictEqual(result.step, 'retro', `esperado retro, recebeu ${result.step}: ${result.reason}`);
-    assert.strictEqual(result.cursorCmd, '/oxe-retro');
+    assert.strictEqual(result.step, 'ship', `esperado ship, recebeu ${result.step}: ${result.reason}`);
+    assert.strictEqual(result.cursorCmd, '/oxe-ship');
   });
 
-  test('suggestNextStep returns next when verify_complete and LESSONS.md exists with last_retro in STATE', () => {
+  test('suggestNextStep returns ship, then the closed cycle after the local commit, when verify_complete with LESSONS.md', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-retro-'));
     const oxe = path.join(dir, '.oxe');
     fs.mkdirSync(oxe, { recursive: true });
@@ -100,7 +100,13 @@ describe('oxe-retro-health', () => {
     // LESSONS.md existe
     fs.writeFileSync(path.join(oxe, 'LESSONS.md'), '# LESSONS\n\n### C-01\n', 'utf8');
     const result = h.suggestNextStep(dir);
-    assert.strictEqual(result.step, 'next', `esperado next, recebeu ${result.step}: ${result.reason}`);
+    assert.strictEqual(result.step, 'ship', `esperado ship, recebeu ${result.step}: ${result.reason}`);
+    // /oxe-ship --local grava .oxe/commit-record.json → ciclo fechado, próxima demanda
+    fs.writeFileSync(path.join(oxe, 'commit-record.json'), JSON.stringify({ sha: 'abc1234def', branch: 'main', verify: 'pass' }), 'utf8');
+    const closed = h.suggestNextStep(dir);
+    assert.strictEqual(closed.step, 'next', `esperado next, recebeu ${closed.step}: ${closed.reason}`);
+    assert.strictEqual(closed.cursorCmd, '/oxe-spec');
+    assert.strictEqual(closed.delivered, true);
   });
 
   // P1.3 — planAgentsWarnings detecta schema 1 legado

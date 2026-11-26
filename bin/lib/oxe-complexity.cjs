@@ -13,11 +13,12 @@ const { spawnSync } = require('child_process');
 
 const CODE_RE = /\.(c|m)?[jt]sx?$|\.(kt|kts|java)$/i;
 const TEST_RE = /(^|\/)(tests?|__tests__|specs?|e2e)\/|\.(test|spec)\.[^/]+$/i;
-const DECISION_RE = /\b(if|for|while|case|catch)\b|&&|\|\||\?\?|\?(?![.?:])/g;
+const DECISION_RE_JS = /\b(if|for|while|case|catch)\b|&&|\|\||\?\?|\?(?![.?:)\],;>])/g;
+const DECISION_RE_KT = /\b(if|for|while|when|catch)\b|&&|\|\||\?:/g;
 const START_RES = [
   /\bfunction\s*\*?\s*([A-Za-z_$][\w$]*)\s*\([^)]*\)[^{;]*\{/g,
   /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*(?::[^=]+)?=>\s*\{/g,
-  /^\s*(?:public|private|protected|static|async|override|suspend|\s)*\b(?!if\b|for\b|while\b|switch\b|catch\b|return\b)([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*(?::\s*[^{]+)?\{/gm,
+  /^\s*(?:public|private|protected|static|async|override|suspend|\s)*\b(?!if\b|for\b|while\b|switch\b|when\b|catch\b|return\b)([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*(?::\s*[^{]+)?\{/gm,
   /\bfun\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)[^{=]*\{/g,
 ];
 
@@ -27,8 +28,9 @@ function strip(text) {
 }
 
 /** { name, line, complexity } for each function body found. */
-function functionsOf(text) {
+function functionsOf(text, file = '') {
   const src = strip(text);
+  const decisionRe = /\.kts?$/i.test(String(file || '')) ? DECISION_RE_KT : DECISION_RE_JS;
   const found = new Map();
   for (const re of START_RES) {
     re.lastIndex = 0;
@@ -47,7 +49,7 @@ function functionsOf(text) {
       const key = `${m[1]}@${line}`;
       if (found.has(key)) continue;
       const body = src.slice(open, end + 1);
-      found.set(key, { name: m[1], line, complexity: 1 + (body.match(DECISION_RE) || []).length });
+      found.set(key, { name: m[1], line, complexity: 1 + (body.match(decisionRe) || []).length });
     }
   }
   // a nested function's decisions also count in its parent: fine for an alarm (the parent is what reads hard)
@@ -55,14 +57,14 @@ function functionsOf(text) {
 }
 
 function git(root, args) {
-  return spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+  return spawnSync('git', ['-c', 'core.quotepath=false', ...args], { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
 }
 
 function changedFiles(root, base) {
   const out = new Set();
-  for (const l of (git(root, ['diff', '--name-only', base, '--']).stdout || '').split(/\r?\n/)) if (l.trim()) out.add(l.trim());
-  for (const l of (git(root, ['ls-files', '--others', '--exclude-standard']).stdout || '').split(/\r?\n/)) if (l.trim()) out.add(l.trim());
-  return [...out].filter((f) => CODE_RE.test(f) && !TEST_RE.test(f) && fs.existsSync(path.join(root, f)));
+  for (const l of (git(root, ['diff', '--name-only', base, '--']).stdout || '').split(/\r?\n/)) if (l.trim()) out.add(l.trim().replace(/\\/g, '/'));
+  for (const l of (git(root, ['ls-files', '--others', '--exclude-standard']).stdout || '').split(/\r?\n/)) if (l.trim()) out.add(l.trim().replace(/\\/g, '/'));
+  return [...out].filter((f) => !f.startsWith('.oxe/') && CODE_RE.test(f) && !TEST_RE.test(f) && fs.existsSync(path.join(root, f)));
 }
 
 function settings(cfg) {
@@ -78,8 +80,9 @@ function complexityAlarms(root, base, cfg = {}) {
     let now = '';
     try { now = fs.readFileSync(path.join(root, file), 'utf8'); } catch { continue; }
     const beforeText = git(root, ['show', `${base}:${file}`]).stdout || '';
-    const before = new Map(functionsOf(beforeText).map((f) => [f.name, f.complexity]));
-    for (const f of functionsOf(now)) {
+    const before = new Map();
+    for (const f of functionsOf(beforeText, file)) before.set(f.name, Math.max(before.get(f.name) ?? 0, f.complexity));
+    for (const f of functionsOf(now, file)) {
       if (f.complexity <= s.max) continue;
       const prev = before.get(f.name);
       if (prev == null) alarms.push({ file, name: f.name, line: f.line, before: null, after: f.complexity, reason: 'nova acima do limite' });

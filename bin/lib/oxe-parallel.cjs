@@ -30,18 +30,49 @@ function readJson(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
 }
 
+function readMergedConfig(root) {
+  const base = readJson(path.join(root, 'oxe.config.json'));
+  const local = readJson(path.join(root, '.oxe', 'config.json'));
+  if (base && typeof base === 'object' && local && typeof local === 'object') return { ...base, ...local };
+  return local || base || {};
+}
+
+function isConfinedPath(root, relPath) {
+  const rel = String(relPath || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  if (!rel || path.isAbsolute(relPath) || /^[A-Za-z]:/.test(rel) || rel.split('/').includes('..')) return false;
+  const rootNorm = `${path.resolve(root).replace(/\\/g, '/').replace(/\/+$/, '')}/`;
+  const dstNorm = path.resolve(root, rel).replace(/\\/g, '/');
+  return process.platform === 'win32'
+    ? dstNorm.toLowerCase().startsWith(rootNorm.toLowerCase())
+    : dstNorm.startsWith(rootNorm);
+}
+
 function parallelConfig(projectRoot, options = {}) {
-  const config = readJson(path.join(projectRoot, '.oxe', 'config.json')) || {};
+  const config = readMergedConfig(projectRoot);
   const p = config.parallel && typeof config.parallel === 'object' ? config.parallel : {};
+  const wtLink = require('./oxe-worktree-deps.cjs').worktreeLinkConfig(projectRoot);
   const envMin = Number(process.env.OXE_EXECUTOR_MIN_FREE_MB) || 0;
+  const rawMax = Number(options.maxParallel) || Number(p.max) || 2;
+  const rawMin = Number(p.min_free_mb) || envMin || 0;
+  const strategy = typeof config.deps_strategy === 'string'
+    ? config.deps_strategy
+    : (wtLink.enabled ? 'link' : null);
+  const from = typeof config.deps_link_from === 'string' && config.deps_link_from.trim()
+    ? path.resolve(projectRoot, config.deps_link_from.trim())
+    : wtLink.from;
   return {
     projectRoot,
-    maxParallel: Math.max(1, Number(options.maxParallel) || Number(p.max) || 2),
-    minFreeMb: Number(p.min_free_mb) || envMin || 0,
+    maxParallel: Math.max(1, Number.isFinite(rawMax) ? Math.floor(rawMax) : 2),
+    minFreeMb: Number.isFinite(rawMin) && rawMin > 0 ? rawMin : 0,
     deps: {
-      strategy: typeof config.deps_strategy === 'string' ? config.deps_strategy : null,
-      from: typeof config.deps_link_from === 'string' && config.deps_link_from.trim() ? path.resolve(projectRoot, config.deps_link_from.trim()) : null,
-      protected: (Array.isArray(config.deps_protected) ? config.deps_protected : []).map((p2) => path.resolve(projectRoot, String(p2))),
+      strategy,
+      from,
+      validateLockfile: wtLink.validateLockfile,
+      validatePackages: wtLink.validatePackages,
+      protected: [...new Set([
+        ...(Array.isArray(config.deps_protected) ? config.deps_protected : []).map((p2) => path.resolve(projectRoot, String(p2))),
+        ...wtLink.protected,
+      ])],
     },
   };
 }
@@ -100,14 +131,14 @@ function parallelPreconditions(projectRoot, cfg, input) {
   return errors;
 }
 
-function childEnv() {
+function childEnv(projectRoot = null) {
   try {
     const runtime = require('../../lib/runtime/index.js');
-    if (typeof runtime.childProcessEnv === 'function') return runtime.childProcessEnv(process.env);
+    if (typeof runtime.childProcessEnv === 'function') {
+      return require('./oxe-env-sanitize.cjs').sanitizeEnv(runtime.childProcessEnv(process.env), projectRoot).env;
+    }
   } catch { /* fallback */ }
-  const env = { ...process.env };
-  delete env.NODE_TEST_CONTEXT;
-  return env;
+  return require('./oxe-env-sanitize.cjs').sanitizeEnv(process.env, projectRoot).env;
 }
 
 /** Prepares a fresh worktree's dependencies. Throws (the lease is disposed) when the result is not usable. */
@@ -118,7 +149,20 @@ function prepareDeps(cfg, root) {
   if (!strategy || strategy === 'none') return;
   const target = path.join(root, 'node_modules');
   if (strategy === 'link') {
+    // OXB-G03 + OXB-G15: validate SHA-256 package-lock.json hash & package integrity before creating the junction.
+    const wtDeps = require('./oxe-worktree-deps.cjs');
+    const check = wtDeps.validateNodeModulesJunction(cfg.deps.from, root, {
+      validateLockfile: cfg.deps.validateLockfile !== false,
+      validatePackages: cfg.deps.validatePackages !== false,
+    });
+    if (!check.ok) {
+      throw new Error(`deps_strategy link bloqueado (OXB-G15): ${check.errors.join('; ')}`);
+    }
     // A directory junction on Windows, a dir symlink elsewhere; removed by unlinkExternalLinks before any dispose.
+    try {
+      const existing = fs.lstatSync(target);
+      if (existing.isSymbolicLink()) fs.unlinkSync(target);
+    } catch { /* target absent */ }
     fs.symlinkSync(path.join(cfg.deps.from, 'node_modules'), target, process.platform === 'win32' ? 'junction' : 'dir');
     return;
   }
@@ -127,7 +171,7 @@ function prepareDeps(cfg, root) {
     return;
   }
   if (strategy === 'ci') {
-    const res = spawnSync('npm ci --no-audit --no-fund', { cwd: root, shell: true, encoding: 'utf8', windowsHide: true, env: childEnv(), timeout: 900_000, maxBuffer: 8 * 1024 * 1024 });
+    const res = spawnSync('npm ci --no-audit --no-fund', { cwd: root, shell: true, encoding: 'utf8', windowsHide: true, env: childEnv(cfg.projectRoot || root), timeout: 900_000, maxBuffer: 8 * 1024 * 1024 });
     if (res.status !== 0) throw new Error(`deps_strategy ci: npm ci falhou na worktree: ${String(res.stderr || res.stdout || '').trim().split(/\r?\n/).slice(-3).join(' · ')}`);
     // OXB-039: present after the install, and the project's native check.
     const env = require('./oxe-project-env.cjs');
@@ -158,11 +202,18 @@ function createParallelOptions(runtime, projectRoot, cfg, helpers) {
         return { ok: false, files: [], outside: outside.map((c) => c.path), error: 'a tarefa mudou package.json/lockfile com node_modules compartilhado (deps_strategy link)' };
       }
       for (const change of files) {
+        if (!isConfinedPath(lease.root_path, change.path) || !isConfinedPath(projectRoot, change.path)) {
+          return { ok: false, files: [], outside: [...outside.map((c) => c.path), change.path], error: `caminho fora do workspace recusado na integração: ${change.path}` };
+        }
         const src = path.join(lease.root_path, change.path);
         const dst = path.join(projectRoot, change.path);
         if (change.status === 'D' || !fs.existsSync(src)) {
           fs.rmSync(dst, { force: true });
         } else {
+          const st = fs.lstatSync(src);
+          if (st.isSymbolicLink()) {
+            return { ok: false, files: [], outside: [...outside.map((c) => c.path), change.path], error: `symlink recusado na integração paralela: ${change.path}` };
+          }
           fs.mkdirSync(path.dirname(dst), { recursive: true });
           fs.copyFileSync(src, dst);
         }
@@ -171,6 +222,7 @@ function createParallelOptions(runtime, projectRoot, cfg, helpers) {
     },
     discard: (files) => {
       for (const file of files) {
+        if (!isConfinedPath(projectRoot, file)) continue;
         const inHead = spawnSync('git', ['cat-file', '-e', `HEAD:${file}`], { cwd: projectRoot, windowsHide: true }).status === 0;
         if (inHead) spawnSync('git', ['checkout', 'HEAD', '--', file], { cwd: projectRoot, windowsHide: true });
         else fs.rmSync(path.join(projectRoot, file), { force: true });

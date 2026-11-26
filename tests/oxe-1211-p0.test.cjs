@@ -255,7 +255,7 @@ describe('OXB-054: 1ª tentativa por tarefa, em todas as execuções da run', ()
 });
 
 describe('retrabalho: reabrir tarefas done (o execute nunca refaz done por conta própria)', () => {
-  it('um CR defect reabre as tarefas impactadas; plan reopen reabre à mão', () => {
+  it('um CR defect reabre as tarefas impactadas só com --reopen (sem ele, liga e não reabre); plan reopen reabre à mão', () => {
     const plan = {
       schema_version: 1,
       tasks: [
@@ -264,7 +264,13 @@ describe('retrabalho: reabrir tarefas done (o execute nunca refaz done por conta
       ],
     };
     const dir = project({ plan, criteria: '| A1 | a | manual |\n| A2 | b | manual |' });
-    const out = op.runtimeFeedback(dir, null, { class: 'defect', summary: 'a interface de A1 está errada', criteria: 'A1', by: 'review' });
+    // 1.21.2: a task done with its commit is never reopened in silence
+    const linked = op.runtimeFeedback(dir, null, { class: 'defect', summary: 'a interface de A1 está errada', criteria: 'A1', by: 'review' });
+    assert.deepEqual(linked.reopened_tasks, []);
+    assert.deepEqual(linked.linked_tasks, ['T1']);
+    assert.match(linked.reopen_hint, /--tasks T1 --reopen/);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8')).tasks[0].done, true);
+    const out = op.runtimeFeedback(dir, null, { class: 'defect', summary: 'a interface de A1 está errada (de novo)', criteria: 'A1', by: 'review', reopen: true });
     assert.deepEqual(out.reopened_tasks, ['T1']);
     const doc = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8'));
     assert.equal(doc.tasks[0].done, false);

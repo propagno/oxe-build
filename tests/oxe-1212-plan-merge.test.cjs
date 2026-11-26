@@ -97,3 +97,24 @@ describe('OXB-086: plan merge of per-role plans', () => {
     assert.match(JSON.parse(r.stdout).errors.join('\n'), /sem "rid"/);
   });
 });
+
+describe('plan merge: stable ids over the current PLAN.json (F2 CR-36)', () => {
+  it('a CR task that lands in the middle of the chain takes the next free id; no existing id moves; done tasks stay done', () => {
+    const first = mergeRolePlans([{ file: 'backend.json', doc: BACKEND }, { file: 'frontend.json', doc: FRONTEND }]);
+    const before = Object.fromEntries(first.plan.tasks.map((t) => [t.rid, t.id]));
+    // R3 done with its commit; a CR adds R4, which every later task now depends on (depth puts it mid-chain)
+    const current = { ...first.plan, tasks: first.plan.tasks.map((t) => (t.rid === 'R3' ? { ...t, done: true, done_commit: 'abc123' } : t)) };
+    const cr = { role: 'backend', tasks: [{ rid: 'R4', id: 'R4', title: 'CR-36: corrigir a base', files: ['electron/main/base.ts'], depends_on: ['R3'], verify: { commands: ['vitest run tests/acceptance/r4.test.ts'] }, acceptance: ['A13'] },
+      { ...BACKEND.tasks[1], depends_on: ['R3', 'R4'] }, BACKEND.tasks[0]] };
+    const again = mergeRolePlans([{ file: 'backend.json', doc: cr }, { file: 'frontend.json', doc: FRONTEND }], { existing: current });
+    const after = Object.fromEntries(again.plan.tasks.map((t) => [t.rid, t.id]));
+    for (const [rid, id] of Object.entries(before)) assert.equal(after[rid], id, `${rid} kept ${id}`);
+    const maxBefore = Math.max(...Object.values(before).map((id) => Number(id.slice(1))));
+    assert.equal(after.R4, `T${maxBefore + 1}`, 'the new task takes the next free id');
+    const r3 = again.plan.tasks.find((t) => t.rid === 'R3');
+    assert.equal(r3.done, true);
+    assert.equal(r3.done_commit, 'abc123');
+    const r5 = again.plan.tasks.find((t) => t.rid === 'R5');
+    assert.ok(r5.depends_on.includes(after.R4), 'the order comes from depends_on, not from the id');
+  });
+});

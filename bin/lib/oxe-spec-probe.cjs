@@ -32,11 +32,27 @@ const PROHIBITIONS = [
   { key: 'erro cru', text: 'mostrar erro técnico cru, sem tradução, ao usuário', re: /\b(erro|falha|mensagem|aviso|tela|ui)\w*/i },
 ];
 
+function stripNoise(text) {
+  return String(text || '')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/^(?:```|~~~)[^\n]*\n[\s\S]*?^(?:```|~~~)\s*$/gm, ' ');
+}
+
+function splitCells(line) {
+  const t = line.trim();
+  if (!t.startsWith('|')) return null;
+  return t.replace(/^\|/, '').replace(/(?<!\\)\|$/, '').split(/(?<!\\)\|/).map((c) => c.replace(/\\\|/g, '|').trim());
+}
+
+const escCell = (s) => String(s || '').replace(/(?<!\\)\|/g, '\\|');
+
 function criteriaOf(specText) {
   const out = [];
-  for (const line of String(specText || '').split(/\r?\n/)) {
-    const m = /^\|\s*(A\d+)\s*\|([^|]*)\|/.exec(line);
-    if (m) out.push({ id: m[1], text: m[2].trim() });
+  for (const line of stripNoise(specText).split(/\r?\n/)) {
+    const cells = splitCells(line);
+    if (!cells || cells.length < 2) continue;
+    const id = (cells[0] || '').replace(/\*/g, '').trim().toUpperCase();
+    if (/^A\d+(?:\.\d+)?$/.test(id)) out.push({ id, text: cells[1] });
   }
   return out;
 }
@@ -49,13 +65,13 @@ function probe(criterion) {
 }
 
 function parseSection(specText, title) {
-  const lines = String(specText || '').split(/\r?\n/);
-  const start = lines.findIndex((l) => new RegExp(`^##\\s+${title}\\s*$`, 'i').test(l));
+  const lines = stripNoise(specText).split(/\r?\n/);
+  const start = lines.findIndex((l) => new RegExp(`^##\\s+${title}\\s*$`, 'i').test(l.trim()));
   if (start < 0) return [];
   const rows = [];
-  for (let i = start + 1; i < lines.length && !/^##\s/.test(lines[i]); i += 1) {
-    const cells = lines[i].split('|').slice(1, -1).map((c) => c.trim());
-    if (cells.length >= 4 && !/^-+$/.test(cells[0]) && cells[0] !== 'ID') rows.push(cells);
+  for (let i = start + 1; i < lines.length && !/^##\s/.test(lines[i].trim()); i += 1) {
+    const cells = splitCells(lines[i]);
+    if (cells && cells.length >= 4 && !/^:?-{2,}:?$/.test(cells[0]) && !/^id$/i.test(cells[0].replace(/\*/g, ''))) rows.push(cells);
   }
   return rows;
 }
@@ -69,6 +85,7 @@ function readProhibitions(specText) {
 
 /** Appends `## Bordas` / `## Proibições` for the criteria that have none yet (existing rows are kept untouched). */
 function writeProbe(specText, ids) {
+  const eol = /\r\n/.test(String(specText || '')) ? '\r\n' : '\n';
   const crit = criteriaOf(specText).filter((c) => !ids || !ids.length || ids.includes(c.id));
   const haveEdges = new Set(readEdges(specText).map((e) => e.criterion));
   const haveNo = new Set(readProhibitions(specText).map((p) => p.criterion));
@@ -81,14 +98,14 @@ function writeProbe(specText, ids) {
     if (!haveEdges.has(c.id)) newEdges.push(...p.edges);
     if (!haveNo.has(c.id)) for (const x of p.prohibitions) { n += 1; newNo.push({ ...x, id: `N${n}` }); }
   }
-  let out = String(specText || '').replace(/\s*$/, '\n');
+  let out = String(specText || '').replace(/\r\n/g, '\n').replace(/\s*$/, '\n');
   const addRows = (title, header, rows, fmt) => {
     if (!rows.length) return;
     if (new RegExp(`^##\\s+${title}\\s*$`, 'im').test(out)) {
       const lines = out.split('\n');
-      const start = lines.findIndex((l) => new RegExp(`^##\\s+${title}\\s*$`, 'i').test(l));
+      const start = lines.findIndex((l) => new RegExp(`^##\\s+${title}\\s*$`, 'i').test(l.trim()));
       let end = start + 1;
-      while (end < lines.length && !/^##\s/.test(lines[end])) end += 1;
+      while (end < lines.length && !/^##\s/.test(lines[end].trim())) end += 1;
       while (end > start + 1 && !lines[end - 1].trim()) end -= 1;
       lines.splice(end, 0, ...rows.map(fmt));
       out = lines.join('\n');
@@ -96,8 +113,9 @@ function writeProbe(specText, ids) {
       out += `\n## ${title.replace('Proibi[cç][oõ]es', 'Proibições')}\n\n${header}\n${rows.map(fmt).join('\n')}\n`;
     }
   };
-  addRows('Bordas', '| ID | Critério | Borda | Status | Motivo / verify |\n|---|---|---|---|---|', newEdges, (e) => `| ${e.id} | ${e.criterion} | ${e.edge}: ${e.question} | aberta | |`);
-  addRows('Proibi[cç][oõ]es', '| ID | Critério | Não pode | Nível | Verify |\n|---|---|---|---|---|', newNo, (x) => `| ${x.id} | ${x.criterion} | ${x.text} | julgamento | |`);
+  addRows('Bordas', '| ID | Critério | Borda | Status | Motivo / verify |\n|---|---|---|---|---|', newEdges, (e) => `| ${e.id} | ${e.criterion} | ${escCell(`${e.edge}: ${e.question}`)} | aberta | |`);
+  addRows('Proibi[cç][oõ]es', '| ID | Critério | Não pode | Nível | Verify |\n|---|---|---|---|---|', newNo, (x) => `| ${x.id} | ${x.criterion} | ${escCell(x.text)} | julgamento | |`);
+  if (eol === '\r\n') out = out.replace(/\n/g, '\r\n');
   return { text: out, edges: newEdges, prohibitions: newNo };
 }
 
@@ -109,7 +127,8 @@ function lintProbe(specText, doc) {
   for (const e of readEdges(specText)) {
     if (!['coberta', 'descartada', 'prova_extra', 'aberta'].includes(e.status)) errors.push(`${e.id}: status "${e.status}" inválido (coberta | descartada | prova_extra | aberta)`);
     if (e.status === 'descartada' && String(e.note).trim().length < 5) errors.push(`${e.id}: borda descartada sem motivo`);
-    if (e.status === 'aberta' && !assumptions.includes(e.id)) warnings.push(`${e.id}: borda aberta sem suposição no plano (\"assumptions\": [\"${e.id}: …\"])`);
+    const idRe = new RegExp(`(?<![A-Za-z0-9.])${String(e.id).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![0-9])`);
+    if (e.status === 'aberta' && !idRe.test(assumptions)) warnings.push(`${e.id}: borda aberta sem suposição no plano ("assumptions": ["${e.id}: …"])`);
   }
   for (const p of readProhibitions(specText)) if (!['teste', 'julgamento'].includes(p.level)) errors.push(`${p.id}: nível "${p.level}" inválido (teste | julgamento)`);
   return { errors, warnings };

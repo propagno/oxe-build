@@ -42,6 +42,16 @@ describe('OXB-090: amendment checks only for the active phase criteria', () => {
     assert.ok(!lint.errors.some((e) => /^A8@v2|^A10@v2/.test(e)));
   });
 
+  it('with no active phase, the plan\'s own phase field scopes the amendments (OxeSpace 15/11, OxeChat)', () => {
+    const dir = project();
+    const prog = path.join(dir, '.oxe', 'program', 'PROGRAM.json');
+    fs.writeFileSync(prog, JSON.stringify({ ...JSON.parse(fs.readFileSync(prog, 'utf8')), active_phase: null }));
+    const pj = path.join(dir, '.oxe', 'PLAN.json');
+    fs.writeFileSync(pj, JSON.stringify({ ...JSON.parse(fs.readFileSync(pj, 'utf8')), phase: 'F2' }));
+    const lint = op.runtimePlanLint(dir, null, { preflight: false });
+    assert.ok(!lint.errors.some((e) => /^A8@v2|^A10@v2/.test(e)), lint.errors.join('\n'));
+  });
+
   it('program status reports an amendment to a closed phase after its close ("reaberto?")', () => {
     const dir = project();
     const st = op.runtimeProgramStatus(dir, null);

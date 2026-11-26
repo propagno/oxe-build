@@ -23,8 +23,10 @@ export interface AntigravityCliAdapterOptions {
     /** Extra attempts when the reply is not the expected JSON (default 2). */
     parseRetries?: number;
     extraArgs?: string[];
-    /** Maximum prompt length passed directly via `-p <prompt>` before falling back to stdin (default 16_000 chars). */
+    /** Maximum prompt length passed directly via `-p <prompt>` before falling back to a workspace prompt file (default 16_000 chars). */
     maxArgvChars?: number;
+    /** Default workspace directory used when writing oversized prompt files and spawning `agy`. */
+    cwd?: string;
     /** Additional environment variable names allowed through `childProcessEnv` scrub. */
     allowEnv?: string[];
     /** Memory gate floor in MB before spawning `agy` (default `$OXE_EXECUTOR_MIN_FREE_MB` or 0). */
@@ -59,11 +61,10 @@ export interface ParsedAntigravityStream {
 /**
  * Parses NDJSON (`stream-json`) or single-JSON (`json`) stdout emitted by `agy -p`.
  * Supports:
- *  - `{ type: "init", conversation_id }`
- *  - `{ type: "step_update", state, message }`
- *  - `{ type: "tool_call" | "tool_use", name, arguments | input, id? }` or `{ tool_calls: [...] }`
- *  - `{ status: "SUCCESS" | "ERROR", response, structured_output?, error?, usage? }` (`agy` v1.5+)
- *  - `{ type: "result", is_error, subtype?, result, total_cost_usd?, usage? }`
+ *  - Real `agy --output-format stream-json` envelope (`{ event: "init"|"step_update"|"result"|"error"|"tool_call", "<event>": {...} }`)
+ *  - Legacy `{ type: "init"|"step_update"|"tool_call"|"tool_use"|"result"|"error", ... }`
+ *  - Single-object `--output-format json` (`{ conversation_id, status: "SUCCESS" | "ERROR", response, structured_output?, error?, usage? }`)
+ *  - Claude-compatible `{ type: "result", is_error, subtype?, result, total_cost_usd?, usage? }`
  */
 export declare function parseAntigravityEvents(stdout: string): ParsedAntigravityStream;
 export declare function agyFailure(input: {
@@ -80,9 +81,11 @@ export declare function buildAntigravityArgs(prompt: string, options?: {
     outputFormat?: 'stream-json' | 'json';
     extraArgs?: string[];
     maxArgvChars?: number;
+    promptFile?: string | null;
 }): {
     args: string[];
     stdinPrompt: string | null;
+    promptFile: string | null;
 };
 export declare class AntigravityCliAdapter implements ExecutorAdapter {
     private readonly options;

@@ -51,7 +51,11 @@ function listChanges(programDir) {
   const byId = new Map();
   for (const entry of readNdjson(changesFile(programDir))) {
     if (entry.kind === 'cr') byId.set(entry.id, { ...entry });
-    else if (entry.kind === 'status' && byId.has(entry.id)) Object.assign(byId.get(entry.id), { status: entry.status, resolution: entry.resolution || null, resolved_at: entry.at, resolved_by: entry.by || null });
+    else if (entry.kind === 'status' && byId.has(entry.id)) Object.assign(byId.get(entry.id), { status: entry.status, resolution: entry.resolution || null, resolved_at: entry.at, resolved_by: entry.by || null }, entry.no_amendment ? { no_amendment: true } : {});
+    // plan scope add: the files a CR added to a task's scope (who, why)
+    // spec amend --cr: a criterion amended under a CR that did not cite it yet joins that CR (who, why)
+    else if (entry.kind === 'criteria' && byId.has(entry.id)) { const cr = byId.get(entry.id); cr.criteria = [...new Set([...(cr.criteria || []), ...(entry.criteria || [])])]; }
+    else if (entry.kind === 'scope' && byId.has(entry.id)) { const cr = byId.get(entry.id); cr.scope_added = [...(cr.scope_added || []), { task: entry.task, paths: entry.paths || [], by: entry.by || null, reason: entry.reason || null, at: entry.at }]; }
   }
   return [...byId.values()];
 }
@@ -83,11 +87,14 @@ function idPrefixFor(program, phaseId) {
 function mergeChanges(ourDir, theirDir, options = {}) {
   const ours = readNdjson(changesFile(ourDir));
   const theirs = readNdjson(changesFile(theirDir));
-  const key = (r) => `${r.kind}|${r.id || ''}|${r.at || ''}|${r.status || r.action || ''}`;
+  // a CR's summary, a status's resolution, and a spec_edit's cr+criterion are part of their identity (R54):
+  // records written in the same millisecond for different CRs are not one, and non-CR records map through `renamed` first
+  const key = (r) => `${r.kind}|${r.id || ''}|${r.at || ''}|${r.status || r.action || ''}${r.kind === 'cr' ? `|${r.summary || ''}` : `|${r.cr || ''}|${r.criterion || ''}|${r.resolution || ''}`}`;
   const have = new Set();
   for (const r of ours) {
     have.add(key(r));
     if (r.origin_id) have.add(key({ ...r, id: r.origin_id }));
+    if (r.origin_cr) have.add(key({ ...r, cr: r.origin_cr }));
   }
   const crById = new Map(ours.filter((r) => r.kind === 'cr').map((r) => [r.id, r]));
   // a fork CR merged earlier under a new id: reuse the mapping
@@ -97,9 +104,9 @@ function mergeChanges(ourDir, theirDir, options = {}) {
   let merged = 0;
   for (const r of theirs) {
     if (r.kind === 'program_edit' && r.action === 'program_fork') continue; // the fork's own bookkeeping
-    if (have.has(key(r))) continue;
     let rec = { ...r };
     if (r.kind === 'cr') {
+      if (have.has(key(r))) continue;
       const taken = crById.get(r.id);
       if (taken && !(taken.at === r.at && taken.summary === r.summary)) {
         const id = nextId([...crById.values(), ...pending], r.phase || options.phase || 'X');
@@ -108,10 +115,16 @@ function mergeChanges(ourDir, theirDir, options = {}) {
       }
       crById.set(rec.id, rec);
       pending.push(rec);
-    } else if (r.id && renamed[r.id]) {
-      rec = { ...r, id: renamed[r.id], origin_id: r.id };
+    } else {
+      if (r.id && renamed[r.id]) rec = { ...rec, id: renamed[r.id], origin_id: r.id };
+      if (rec.cr && renamed[rec.cr]) rec = { ...rec, cr: renamed[rec.cr], origin_cr: rec.cr };
+      if (Array.isArray(rec.resolves)) rec.resolves = rec.resolves.map((x) => renamed[x] || x);
+      if (have.has(key(rec)) || (!rec.origin_id && !rec.origin_cr && have.has(key(r)))) continue;
     }
-    if (Array.isArray(rec.resolves)) rec.resolves = rec.resolves.map((x) => renamed[x] || x);
+    if (r.kind === 'cr') {
+      if (rec.cr && renamed[rec.cr]) rec = { ...rec, cr: renamed[rec.cr], origin_cr: rec.cr };
+      if (Array.isArray(rec.resolves)) rec.resolves = rec.resolves.map((x) => renamed[x] || x);
+    }
     appendNdjson(changesFile(ourDir), rec);
     have.add(key(rec));
     merged += 1;
@@ -144,6 +157,8 @@ function routeFor(cr, impacted) {
         'oxe-cc plan lint --dry-verify  (o teste novo tem que estar vermelho pelo motivo certo)',
         `delta-plan só das tarefas impactadas: ${impacted.join(', ') || '(nova tarefa)'} — as concluídas e verdes ficam`,
         'oxe-cc runtime compile && oxe-cc runtime execute && oxe-cc runtime verify',
+        // bench B23: when the defect is in the frozen test itself, the route is the audited amendment
+        `se o defeito está no próprio teste congelado (ele contradiz a SPEC ou uma decisão): corrija o teste e rode oxe-cc plan amend-test <arquivo> --reason ${cr.id} --by <papel> — não escreva teste novo`,
       ];
     case 'spec_gap':
       return [
@@ -154,6 +169,14 @@ function routeFor(cr, impacted) {
         `replan em modo merge das tarefas ${impacted.join(', ') || '(nenhuma ligada)'}`,
       ];
     case 'constraint':
+      if (cr.post_close) {
+        return [
+          `fase ${cr.phase} segue FECHADA: este CR é uma mudança pós-close (liberação de teste congelado), e a cobertura do close continua valendo`,
+          `oxe-cc plan amend-test <arquivo> --reason ${cr.id} --by <papel>  (emenda auditada do teste)`,
+          `feche o CR com evidência: oxe-cc runtime feedback resolve ${cr.id} --by <papel> --reason "<teste emendado e verde>"`,
+          'se o código também precisa mudar, é um defect (esse reabre a fase): oxe-cc runtime feedback --class defect …',
+        ];
+      }
       return [
         `registrar a regra em .oxe/config.json "policy_rules" (id, forbid regex, paths) — vira check no verify para não se repetir`,
         `teste de aceite com "resolves": ["${cr.id}"] que prova a regra cumprida`,
@@ -205,12 +228,17 @@ function recordChange(input) {
     // OXB-058: the SPEC edit this CR made (`spec amend`): the row before and after, for the audit trail.
     ...(input.specEdit ? { spec_edit: input.specEdit } : {}),
   };
-  appendNdjson(changesFile(programDir), cr);
+  // OXB-C30 P2: a constraint CR on a CLOSED phase (a frozen-test release, `plan amend-test`) is a post-close change: the
+  // phase stays closed. Reopening it sent 152code F6 back to planning, and the re-close then refused coverage that the
+  // 17/11 close had accepted. Code that must change is a defect (that one reopens).
+  const phaseNow = program && phaseId && Array.isArray(program.phases) ? program.phases.find((p) => p.id === phaseId) : null;
+  if (cls === 'constraint' && phaseNow && phaseNow.status === 'closed') cr.post_close = true;
+  if (!input.dryRun) appendNdjson(changesFile(programDir), cr);
   const impacted = impactedTasks(plan, criteria);
 
   let reopened = false;
   let nextProgram = program;
-  if (program && phaseId && REOPENING.has(cls)) {
+  if (program && phaseId && REOPENING.has(cls) && !cr.post_close) {
     const phase = program.phases.find((p) => p.id === phaseId);
     const busy = program.active_phase && program.active_phase !== phaseId
       && program.phases.some((p) => p.id === program.active_phase && p.status !== 'closed');
@@ -273,13 +301,31 @@ function reconcileChanges(programDir, phaseId, plan, checkResults, options = {})
  * amendment was additive, so nothing goes stale).
  * @returns {Map<string, { required: number, staleBelow: number, additive: boolean }>}
  */
+/**
+ * Cross-review 15/11 (R29): the version a CR set for each criterion it amended (`spec amend --cr` records it per
+ * criterion — a criterion attached to a CR may need a higher version than the CR's own amend_to).
+ * @returns {Map<string, number>} `${cr}\u0000${criterion}` -> version
+ */
+function amendedVersions(programDir) {
+  const out = new Map();
+  for (const r of readNdjson(changesFile(programDir))) {
+    if (!r || r.kind !== 'spec_edit' || r.action !== 'amend_criterion' || r.constraint_release || !r.cr || !r.id || !Number.isFinite(Number(r.version))) continue;
+    const k = `${r.cr}\u0000${r.id}`;
+    out.set(k, Math.max(out.get(k) || 0, Number(r.version)));
+  }
+  return out;
+}
+
 function amendmentRequirements(programDir) {
   const out = new Map();
+  const perCriterion = amendedVersions(programDir);
   for (const cr of listChanges(programDir)) {
     if (cr.class !== 'spec_gap') continue;
-    const version = cr.amend_to || 2;
+    // a spec_gap withdrawn, or resolved with no amendment (a scope gap), amended nothing: no new version
+    if (cr.status === 'withdrawn' || cr.no_amendment) continue;
     const additive = cr.amendment === 'additive';
     for (const a of cr.criteria || []) {
+      const version = Math.max(cr.amend_to || 2, perCriterion.get(`${cr.id}\u0000${a}`) || 0);
       const cur = out.get(a) || { required: 1, staleBelow: 1, additive: true, crs: [], last_at: null };
       cur.required = Math.max(cur.required, version);
       if (cr.id && !cur.crs.includes(cr.id)) cur.crs.push(cr.id);
@@ -295,9 +341,11 @@ function amendmentRequirements(programDir) {
 /** Emendas de SPEC (spec_gap): versão mínima exigida por critério. */
 function requiredVersions(programDir) {
   const out = new Map();
+  const perCriterion = amendedVersions(programDir);
   for (const cr of listChanges(programDir)) {
     if (cr.class !== 'spec_gap') continue;
-    for (const a of cr.criteria || []) out.set(a, Math.max(out.get(a) || 1, cr.amend_to || 2));
+    if (cr.status === 'withdrawn' || cr.no_amendment) continue;
+    for (const a of cr.criteria || []) out.set(a, Math.max(out.get(a) || 1, cr.amend_to || 2, perCriterion.get(`${cr.id}\u0000${a}`) || 0));
   }
   return out;
 }

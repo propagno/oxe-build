@@ -107,7 +107,7 @@ function gateCommand(gate, options = {}) {
   if (gate.kind === 'script') {
     const args = [quote(process.execPath), quote(__filename), '--script-gate', '--program-dir', quote(options.programDir || '.oxe/program'), '--module', quote(gate.module), '--gate-id', quote(gate.id)];
     if (options.phase) args.push('--phase', quote(options.phase));
-    if (gate.options) args.push('--options', quote(JSON.stringify(gate.options)));
+    if (gate.options) args.push('--options-b64', Buffer.from(JSON.stringify(gate.options), 'utf8').toString('base64'));
     return args.join(' ');
   }
   if (gate.kind === 'deploy') {
@@ -123,8 +123,35 @@ function gateCommand(gate, options = {}) {
     if (gate.repo) args.push('--repo', quote(gate.repo));
     return args.join(' ');
   }
-  const runner = gate.runner || options.defaultRunner || null;
-  return runner ? expandRunner(runner, gate.command) : gate.command;
+  // the oxe-build's own gates (stub-check and the other scripts of this package) run here: their path exists only
+  // on this machine, so a remote phase_gates_runner (heavy work on GitHub) broke them (OxeSpace 14/11, F2 close).
+  // An explicit gate.runner still applies.
+  const pkg = path.resolve(__dirname, '..', '..').replace(/\\/g, '/').toLowerCase();
+  const internal = String(gate.command || '').replace(/\\/g, '/').toLowerCase().includes(pkg);
+  const runner = gate.runner || (internal ? null : options.defaultRunner) || null;
+  return runner && !alreadyWrapped(runner, gate.command) ? expandRunner(runner, gate.command) : gate.command;
+}
+
+/**
+ * OxeSpace 15/11 (Celular F3 android-unit): a gate written as `node …/remote-verify.mjs -- node gradle152.mjs …` with the
+ * runner `node …/remote-verify.mjs -- {command}` was wrapped twice, and CI ran a Windows path. A command that already
+ * starts with the runner's own prefix — or runs the same script as the runner's first one — is not wrapped again.
+ */
+function alreadyWrapped(runner, command) {
+  const normalize = (s) => String(s || '').replace(/\\/g, '/').replace(/["']/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const prefix = normalize(expandRunner(String(runner).split('{command}')[0], ''));
+  const cmd = normalize(command);
+  if (!prefix) return false;
+  if (cmd.startsWith(prefix)) return true;
+  const SCRIPT_RE = /(?:^|\s)([^\s]+\.(?:[cm]?js|ts|sh|ps1|py))(?=\s|$)/g;
+  const scripts = (s) => [...s.matchAll(SCRIPT_RE)].map((m) => m[1]);
+  const runnerPath = scripts(prefix)[0];
+  if (!runnerPath) return false;
+  const base = runnerPath.split('/').pop();
+  // cross-review 15/11: any segment of a chain (`node prep.mjs && node …/remote-verify.mjs -- …`) counts; a generic name
+  // (index.js, run.js…) matches only by its full path, never by the basename alone
+  const generic = /^(index|run|main|cli|start|script)\.[cm]?[jt]s$/i.test(base);
+  return scripts(cmd).some((p) => (generic ? p === runnerPath : p.split('/').pop() === base));
 }
 
 /** Verification checks (same shape as the runtime's AcceptanceCheck) for the gates of one moment. */
@@ -197,10 +224,15 @@ function recordGateFailures(input) {
   const failing = (checkResults || []).filter((r) => /^gate-/.test(String(r.check_id || '')) && (r.status === 'fail' || r.status === 'error'));
   if (!failing.length) return { created, program };
   const open = changeLib.listChanges(programDir).filter((cr) => cr.status === 'open' && cr.gate);
+  const phaseId = (plan && plan.phase) || (program && program.active_phase) || null;
+  const infra = [];
   for (const result of failing) {
     const gateId = String(result.check_id).replace(/^gate-/, '');
-    if (open.some((cr) => cr.gate === gateId)) continue;
+    if (open.some((cr) => cr.gate === gateId && (!phaseId || !cr.phase || cr.phase === phaseId))) continue;
     const excerpt = firstErrorLines(result);
+    // a network failure (the runner, gh, the registry) says nothing about the code: infra, no CR (OxeSpace 14/11,
+    // gate-android-unit: "dial tcp … connectex" from gh in remote-verify, while the run itself passed)
+    if (isInfraFailure(result)) { infra.push({ gate: gateId, excerpt: excerpt ? excerpt.split('\n')[0].slice(0, 200) : null }); continue; }
     const out = changeLib.recordChange({
       programDir,
       program,
@@ -214,7 +246,14 @@ function recordGateFailures(input) {
     program = out.program || program;
     created.push(out.cr);
   }
-  return { created, program };
+  return { created, program, infra };
+}
+
+/** The output of a failed check carries a network / infrastructure signature (not a defect of the code). */
+const INFRA_RE = /\b(dial tcp|connectex|forcibly closed by the remote host|WSAE[A-Z]+|remote end hung up|early EOF|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|socket hang up|TLS handshake timeout|tls: |certificate has expired|getaddrinfo|i\/o timeout|connection (reset|refused|timed out)|A connection attempt failed|HTTP (502|503|504)|\b(502|503|504) (Bad Gateway|Service Unavailable|Gateway Time-?out)|rate limit exceeded|API rate limit)\b/i;
+function isInfraFailure(result) {
+  const text = [result && result.stderr, result && result.stdout, result && result.error, result && result.output, result && result.excerpt, result && result.message, result && result.evidence].filter(Boolean).join('\n');
+  return INFRA_RE.test(text);
 }
 
 /** Gates a plan could declare: package.json gate scripts and governance tests found in the repo. */
@@ -321,7 +360,7 @@ function ciRunStatus(record, options = {}) {
   const run = options.spawn || spawnSync;
   const args = ['run', 'view', String(record.run), '--json', 'status,conclusion,headSha,url'];
   if (record.repo) args.push('-R', record.repo);
-  const res = run('gh', args, { encoding: 'utf8', timeout: 30000 });
+  const res = run('gh', args, { encoding: 'utf8', timeout: 30000, windowsHide: true });
   if (!res || res.status !== 0) return { ok: false, state: 'unknown', message: `gh run view falhou: ${(res && (res.stderr || res.error)) || 'sem saída'}`.trim() };
   let data = null;
   try {
@@ -331,7 +370,9 @@ function ciRunStatus(record, options = {}) {
   }
   if (data.status !== 'completed') return { ok: false, state: 'pending', message: `run ${record.run} ainda ${data.status}`, data };
   if (data.conclusion !== 'success') return { ok: false, state: 'red', message: `run ${record.run} terminou ${data.conclusion}`, data };
-  if (record.head && data.headSha && !String(data.headSha).startsWith(record.head)) {
+  const recHead = record.head ? String(record.head).trim().toLowerCase() : '';
+  const runHead = data.headSha ? String(data.headSha).trim().toLowerCase() : '';
+  if (recHead && runHead && !runHead.startsWith(recHead) && !recHead.startsWith(runHead)) {
     return { ok: false, state: 'stale', message: `run ${record.run} cobre ${String(data.headSha).slice(0, 8)}, não a head ${record.head}`, data };
   }
   return { ok: true, state: 'green', message: `run ${record.run} verde (${data.url || ''})`.trim(), data };
@@ -446,8 +487,9 @@ function runDeployGateCli(argv) {
 function signoffGateStatus(programDir, phase, criteria) {
   let lines = [];
   try { lines = fs.readFileSync(path.join(programDir, 'signoffs.ndjson'), 'utf8').split(/\r?\n/).filter(Boolean); } catch { lines = []; }
-  const recs = lines.map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((s) => s && (!phase || s.phase === phase) && s.evidence);
-  const missing = criteria.filter((c) => !recs.some((s) => (s.criteria || []).includes(c)));
+  const recs = lines.map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((s) => s && (!phase || !s.phase || s.phase === phase) && s.evidence);
+  const signedCriteria = new Set(recs.flatMap((s) => (s.criteria || []).map((x) => String(x).trim().toUpperCase())));
+  const missing = criteria.filter((c) => !signedCriteria.has(String(c).trim().toUpperCase()));
   return missing.length ? { ok: false, message: `sign-off com evidência faltando para ${missing.join(', ')} na fase ${phase || ''} — oxe-cc runtime signoff --criteria ${missing.join(',')} --by <papel> --evidence …` } : { ok: true, message: `sign-off de ${criteria.join(', ')} presente` };
 }
 
@@ -460,7 +502,10 @@ async function runScriptGateCli(argv) {
   try { fn = require(mod); fn = typeof fn === 'function' ? fn : fn && (fn.default || fn.gate); } catch (err) { console.error(`gate ${get('--gate-id')}: não carregou ${mod}: ${err.message}`); return 1; }
   if (typeof fn !== 'function') { console.error(`gate ${get('--gate-id')}: ${mod} não exporta uma função (async (ctx) => ({ ok, message }))`); return 1; }
   try {
-    const out = await fn({ root, programDir, phase: get('--phase'), gate: { id: get('--gate-id'), options: get('--options') ? JSON.parse(get('--options')) : null } });
+    const rawB64 = get('--options-b64');
+    const rawJson = get('--options');
+    const parsedOptions = rawB64 ? JSON.parse(Buffer.from(rawB64, 'base64').toString('utf8')) : rawJson ? JSON.parse(rawJson) : null;
+    const out = await fn({ root, programDir, phase: get('--phase'), gate: { id: get('--gate-id'), options: parsedOptions } });
     (out && out.ok ? console.log : console.error)(String((out && out.message) || (out && out.ok ? 'ok' : 'reprovou')));
     return out && out.ok ? 0 : 1;
   } catch (err) { console.error(`gate ${get('--gate-id')}: ${err && err.message ? err.message : err}`); return 1; }
@@ -490,6 +535,7 @@ module.exports = {
   gateCommand,
   gateChecks,
   recordGateFailures,
+  isInfraFailure,
   detectGateCandidates,
   findGovernanceTests,
   lintPhaseGates,

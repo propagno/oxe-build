@@ -24,11 +24,17 @@ function copyRec(src, dst) {
 }
 
 function snapshot(projectRoot, toDir, name) {
-  if (!toDir || !name) throw new Error('use: oxe-cc program snapshot --to <pasta fora do repositório> --name <f2>');
-  const target = path.resolve(toDir, name, '.oxe');
+  const cleanName = typeof name === 'string' ? name.trim() : '';
+  if (!toDir || !cleanName) throw new Error('use: oxe-cc program snapshot --to <pasta fora do repositório> --name <f2>');
+  if (/[/\\]/.test(cleanName) || cleanName === '.' || cleanName === '..') {
+    throw new Error(`nome de snapshot inválido: ${cleanName}`);
+  }
+  const target = path.resolve(toDir, cleanName, '.oxe');
   const rel = path.relative(path.resolve(projectRoot), target);
-  if (!rel.startsWith('..')) throw new Error('o snapshot de um programa fica FORA do repositório (são os planos do projeto): use --to <pasta externa>');
+  const insideRepo = !rel || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel));
+  if (insideRepo) throw new Error('o snapshot de um programa fica FORA do repositório (são os planos do projeto): use --to <pasta externa>');
   const src = path.join(projectRoot, '.oxe');
+  fs.rmSync(target, { recursive: true, force: true });
   const copied = [];
   for (const n of KEEP) { const p = path.join(src, n); if (fs.existsSync(p)) { copyRec(p, path.join(target, n)); copied.push(n); } }
   return { dir: path.dirname(target), copied };
@@ -43,7 +49,7 @@ function measure(snapshotDir, op) {
     fs.writeFileSync(path.join(work, '.gitignore'), '.oxe/\n');
     git('init', '-q'); git('config', 'user.email', 'r@r'); git('config', 'user.name', 'r'); git('add', '-A'); git('commit', '-qm', 'snapshot', '--allow-empty');
     const step = (name, fn) => { try { return { step: name, ok: true, ...fn() }; } catch (err) { return { step: name, ok: false, error: String(err && err.message || err).split('\n')[0].slice(0, 300) }; } };
-    const lint = step('plan lint', () => { const r = op.runtimePlanLint(work, null, { preflight: false }); return { errors: r.errors.length, warnings: r.warnings.length }; });
+    const lint = step('plan lint', () => { const r = op.runtimePlanLint(work, null, { preflight: false, noPrecheck: true }); return { errors: r.errors.length, warnings: r.warnings.length }; });
     const compile = step('compile', () => { const r = op.compileExecutionGraphFromArtifacts(work, null); const n = r && r.graph && r.graph.nodes; return { nodes: n ? (typeof n.size === 'number' ? n.size : Object.keys(n).length) : 0, validation_errors: (r && r.validationErrors || []).length }; });
     let program = null;
     try { program = require('./oxe-program.cjs').readProgram(path.join(work, '.oxe', 'program')); } catch { program = null; }

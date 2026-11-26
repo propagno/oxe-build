@@ -618,11 +618,14 @@
     },
     "quick": {
       "reasoning_mode": "planning",
+      "blocking_conditions": [
+        "missing:state"
+      ],
       "required_artifacts": [
-        "state",
-        "spec"
+        "state"
       ],
       "optional_artifacts": [
+        "spec",
         "plan",
         "visual_inputs_md",
         "visual_inputs_json",
@@ -764,8 +767,7 @@
         "project_summary"
       ],
       "blocking_conditions": [
-        "missing:verify_without_override",
-        "missing:tracked_changes"
+        "missing:verify_without_override"
       ],
       "extraction_intent": "execution_input"
     },
@@ -1147,6 +1149,20 @@
         ]
       },
       "extraction_intent": "verification"
+    },
+    "alm": {
+      "reasoning_mode": "execution",
+      "question_policy": "explore_first",
+      "required_artifacts": [
+        "state"
+      ],
+      "optional_artifacts": [
+        "spec",
+        "plan",
+        "runtime",
+        "project_summary"
+      ],
+      "extraction_intent": "execution_input"
     }
   }
 }

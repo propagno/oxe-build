@@ -178,7 +178,7 @@ function startPhase(state, id) {
     const next = clone(state);
     const target = id ? findPhase(next, id) : nextOpenPhase(next);
     if (!target)
-        throw new ProgramTransitionError(id ? `fase inexistente: ${id}` : 'todas as fases estão fechadas');
+        throw new ProgramTransitionError(id ? `fase inexistente: ${id} (crie com oxe-cc program phase add --after <fase> --title "…" --by <papel>)` : 'todas as fases estão fechadas (nova fase: oxe-cc program phase add --after <fase> --title "…" --by <papel>)');
     if (target.status === 'closed')
         throw new ProgramTransitionError(`fase ${target.id} já está fechada`);
     const open = phaseDependencies(next, target).filter((p) => p.status !== 'closed');

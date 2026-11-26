@@ -186,9 +186,34 @@ function validatePlanJson(doc) {
  * `@Test void name()` (any modifiers, other annotations in between), with `@DisplayName("…")` when present. F10's
  * AttnUsageTest.kt was read as ONE test named "Notice" (a string literal in the body).
  */
+function blankCodeComments(text) {
+  const s = String(text || '');
+  let out = '';
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i];
+    if (ch === '"' || ch === "'" || ch === '`') {
+      let j = i + 1;
+      for (; j < s.length && s[j] !== ch; j += 1) if (s[j] === '\\') j += 1;
+      out += s.slice(i, j + 1);
+      i = j;
+    } else if (ch === '/' && s[i + 1] === '/') {
+      let j = s.indexOf('\n', i);
+      if (j < 0) j = s.length;
+      out += ' '.repeat(j - i);
+      i = j - 1;
+    } else if (ch === '/' && s[i + 1] === '*') {
+      let j = s.indexOf('*/', i + 2);
+      j = j < 0 ? s.length : j + 2;
+      out += s.slice(i, j).replace(/[^\n]/g, ' ');
+      i = j - 1;
+    } else out += ch;
+  }
+  return out;
+}
+
 function declaredJvmTestTitles(text) {
   const out = [];
-  const src = String(text || '');
+  const src = blankCodeComments(text);
   const re = /@(?:Test|ParameterizedTest|RepeatedTest|TestFactory)\b(?:\([^)]*\))?((?:\s*@[\w.]+(?:\((?:[^()"]|"(?:\\.|[^"\\])*")*\))?)*)\s*(?:(?:public|private|protected|internal|open|override|final|suspend|static)\s+)*(?:fun\s+(?:`([^`]+)`|([A-Za-z_$][\w$]*))|(?:[\w<>[\],.?]+\s+)?([A-Za-z_$][\w$]*)\s*\()/g;
   for (const m of src.matchAll(re)) {
     const name = m[2] || m[3] || m[4];
@@ -207,11 +232,18 @@ function declaredJvmTestTitles(text) {
  * without the case), and — when the table is a literal array of strings/numbers — every expanded name.
  */
 function eachTestTitles(text) {
-  const out = [];
-  const src = String(text || '');
-  const re = /\b(?:it|test|describe)(?:\.(?:only|skip|concurrent))?\.each\s*/g;
+  return eachTestGroups(text).flatMap((g) => g.titles);
+}
+
+/** OXB-C28-3: each it/test/describe.each call with its position and kind (a full test name needs the describe chain). */
+function eachTestGroups(text) {
+  const groups = [];
+  const src = blankCodeComments(text);
+  const re = /\b(it|test|describe)(?:\.(?:only|skip|concurrent))?\.each\s*/g;
   let m;
   while ((m = re.exec(src))) {
+    const out = [];
+    groups.push({ at: m.index, kind: m[1], titles: out });
     let i = m.index + m[0].length;
     let table = null;
     if (src[i] === '(') {
@@ -250,29 +282,78 @@ function eachTestTitles(text) {
       }
     }
   }
-  return out;
+  return groups.filter((g) => g.titles.length);
 }
 
-function declaredTestTitles(text, file) {
+function declaredTestTitles(text, file, opts = {}) {
   if (file && /\.(kt|kts|java|groovy|scala)$/i.test(String(file))) return declaredJvmTestTitles(text);
-  const out = eachTestTitles(text);
-  const re = /\b(?:it|test)(?:\.\w+)*\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g;
-  for (const m of String(text || '').matchAll(re)) {
+  const src = blankCodeComments(text);
+  const out = eachTestTitles(src);
+  const re = /\b(?:it|test)(?!\.(?:describe|suite|step|beforeEach|afterEach|beforeAll|afterAll|before|after|use|info|expect|extend|setTimeout|configure)\b)(?:\.\w+)*\s*\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g;
+  for (const m of src.matchAll(re)) {
+    if (m[1] === '`' && m[2].includes('${')) continue;
+    out.push(m[2].replace(/\\(['"`\\])/g, '$1'));
+  }
+  // OXB-C21 #3: `plan lint` proves may name a describe()/suite() title (aligned with `alm refine lint`), but only when
+  // asked: spec freeze builds `proves` from the it/test titles alone (a suite title is not a test that runs).
+  if (!opts.includeSuites) return out;
+  const suiteRe = /\b(?:(?:it|test)\.)?(?:describe|suite)(?:\.(?:only|skip|concurrent|sequential|serial|parallel))*\s*\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g;
+  for (const m of src.matchAll(suiteRe)) {
     if (m[1] === '`' && m[2].includes('${')) continue;
     out.push(m[2].replace(/\\(['"`\\])/g, '$1'));
   }
   return out;
 }
 
+/**
+ * OxeSpace 15/11 (R34): the criteria only `plan task supersede` tasks held (their `superseded.acceptance`), that no other
+ * task of the plan covers — exempt from coverage in plan lint, verify and trace, like a standing criterion.
+ */
+function supersededCriteria(doc) {
+  const tasks = (doc && Array.isArray(doc.tasks) ? doc.tasks : []).filter(Boolean);
+  const held = new Set(tasks.filter((t) => !t.superseded).flatMap((t) => [...(t.acceptance || []), ...(t.aceite || [])]));
+  return [...new Set(tasks.filter((t) => t.superseded).flatMap((t) => (t.superseded.acceptance || [])))].filter((a) => !held.has(a));
+}
+
 /** PLAN.json → mesmo formato de `sdk.parsePlan` (o graph compiler e o verify não mudam). */
 function planJsonToParsedPlan(doc) {
   const spikeLib = require('./oxe-spike.cjs');
+  // OxeSpace 15/11 (Celular F4): T14's checkpoint failed (its work stayed uncommitted in the tree); T15, independent in
+  // the plan but sharing PairingFlow.kt, ran on top of it and the hunks became inseparable. A pending task whose files
+  // overlap a task with UNCOMMITTED work (checkpoint_failed, not done) waits for that commit — no paid attempt.
+  const normF = (f) => String(typeof f === 'string' ? f : (f && f.path) || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  // an empty_checkpoint that left nothing in the tree (no leftover) holds no edits to wait on (cross-review 15/11)
+  const uncommitted = (doc.tasks || []).filter((t) => t && t.done !== true && t.status !== 'done' && t.checkpoint_failed
+    && !(t.checkpoint_failed.kind === 'empty_checkpoint' && !(Array.isArray(t.checkpoint_failed.leftover) && t.checkpoint_failed.leftover.length)));
+  // a directory in either scope covers the files under it (`app/pairing` × `app/pairing/PairingFlow.kt`)
+  const under = (a, b) => a === b || b.startsWith(`${a.replace(/\/+$/, '')}/`);
+  const sharedWait = (task) => {
+    if (!task || task.done === true || task.checkpoint_failed) return [];
+    const mine = [...new Set((task.files || []).map(normF).filter((f) => f && !f.includes('*')))];
+    const out = [];
+    for (const u of uncommitted) {
+      if (u.id === task.id) continue;
+      const shared = (u.files || []).map(normF).filter((f) => f && !f.includes('*') && mine.some((m) => under(m, f) || under(f, m)));
+      if (shared.length) out.push(`waiting_shared_files: ${u.id} (${shared.slice(0, 3).join(', ')}${shared.length > 3 ? ', …' : ''}) — commit ${u.id} first (runtime commit-task ${u.id}, or --together)`);
+    }
+    return out;
+  };
+  const scopeInsufficientFor = (task) => {
+    if (!task || !task.checkpoint_failed || task.checkpoint_failed.kind !== 'scope_insufficient') return [];
+    const reds = Array.isArray(task.checkpoint_failed.related_red) ? task.checkpoint_failed.related_red.map(normF).filter(Boolean) : [];
+    if (!reds.length) return ['scope_insufficient: (verifique o escopo)'];
+    const mine = (task.files || []).map(normF).filter(Boolean);
+    const unresolved = reds.filter((r) => !mine.some((m) => under(m, r)));
+    return unresolved.length ? [`scope_insufficient: ${unresolved.join(', ')}`] : [];
+  };
   const tasks = doc.tasks.map((task) => {
     const commands = task.verify && Array.isArray(task.verify.commands) ? task.verify.commands.map((c) => c.trim()).filter(Boolean) : [];
     // OXB-007: a spike writes only its report and is verified by it (question, answer, evidence).
     const spike = task.kind === 'spike';
     if (spike) commands.push(spikeLib.spikeVerifyCommand(task.id));
     const files = Array.isArray(task.files) && task.files.length ? [...task.files] : spike ? [spikeLib.spikeReportPath(task.id)] : [];
+    const scopeWaits = scopeInsufficientFor(task);
+    const blockedByList = [...externalRefs(task), ...scopeWaits, ...sharedWait(task)];
     return {
       id: task.id,
       title: task.title,
@@ -296,7 +377,7 @@ function planJsonToParsedPlan(doc) {
         ...(typeof task.question === 'string' ? { question: task.question } : {}),
         ...(task.gate ? { gate: task.gate } : {}),
         // OXB-172: a task whose related tests went red OUTSIDE its scope waits (a CR / a plan edit), never re-runs blind.
-        ...((externalRefs(task).length || (task.checkpoint_failed && task.checkpoint_failed.kind === 'scope_insufficient')) ? { blocked_by: [...externalRefs(task), ...(task.checkpoint_failed && task.checkpoint_failed.kind === 'scope_insufficient' ? [`scope_insufficient: ${(task.checkpoint_failed.related_red || []).join(', ')}`] : [])] } : {}),
+        ...(blockedByList.length ? { blocked_by: blockedByList } : {}),
         ...(taskPreconditions(task).length ? { waits_on: taskPreconditions(task) } : {}),
       },
     };
@@ -314,6 +395,9 @@ function planJsonToParsedPlan(doc) {
     command: entry.command.trim(),
     proves: Array.isArray(entry.proves) ? entry.proves.map((name) => String(name).trim()).filter(Boolean) : [],
     resolves: Array.isArray(entry.resolves) ? [...entry.resolves] : [],
+    // the task the test belongs to (bound by task; without it, by criterion) — kept, so the binding reaches the
+    // dry-verify and the executor (OxeSpace 14/11: a CR test bound by task was dropped here)
+    ...(typeof entry.task === 'string' && entry.task.trim() ? { task: entry.task.trim().toUpperCase() } : {}),
     version: Number.isInteger(entry.version) ? entry.version : 1,
     // OXB-072: own timeout for a slow suite (e.g. Electron).
     ...(Number.isInteger(entry.timeout_ms) && entry.timeout_ms > 0 ? { timeout_ms: entry.timeout_ms } : {}),
@@ -325,7 +409,7 @@ function planJsonToParsedPlan(doc) {
   const phaseGates = Array.isArray(doc.phase_gates) ? doc.phase_gates.map((gate) => ({ ...gate })) : [];
   // Teto da execução (1.21, OXB-023): turnos/US$ por run e tentativas por tarefa.
   const budget = doc.budget && typeof doc.budget === 'object' && !Array.isArray(doc.budget) ? { ...doc.budget } : null;
-  return { tasks, waves, totalTasks: tasks.length, source: 'PLAN.json', phase: doc.phase || null, acceptanceTests, phaseGates, budget };
+  return { tasks, waves, totalTasks: tasks.length, source: 'PLAN.json', phase: doc.phase || null, acceptanceTests, phaseGates, budget, supersededCriteria: supersededCriteria(doc) };
 }
 
 /**
@@ -476,10 +560,14 @@ function amendFrozenTestInPlanJson(planMdPath, relPath, newSha, info = {}) {
       const idx = entry.files.findIndex((f) => String(f || '').replace(/\\/g, '/').replace(/^\.\//, '') === normTarget);
       if (idx < 0) continue;
       const canonicalFile = String(entry.files[idx]).replace(/\\/g, '/').replace(/^\.\//, '');
-      const prevSha = (entry.hashes && entry.hashes[canonicalFile])
+      const planStoredSha = (entry.hashes && entry.hashes[canonicalFile])
         || (entry.files.length === 1 && typeof entry.sha256 === 'string' ? entry.sha256 : null)
-        || info.previous_sha256
         || null;
+      // OXB-C21 #2: when PLAN.json already holds newSha while the run lock held the prior hash (e.g. after acceptance_tampered),
+      // prefer info.previous_sha256 so before/after logs show the real lock hash vs new disk hash instead of identical hashes.
+      const prevSha = (planStoredSha && planStoredSha !== newSha)
+        ? planStoredSha
+        : (info.previous_sha256 && info.previous_sha256 !== newSha ? info.previous_sha256 : (planStoredSha || info.previous_sha256 || null));
       if (entry.files.length === 1) {
         entry.sha256 = newSha;
       }
@@ -491,7 +579,9 @@ function amendFrozenTestInPlanJson(planMdPath, relPath, newSha, info = {}) {
         const resolves = Array.isArray(entry.resolves) ? [...entry.resolves] : [];
         if (!resolves.includes(reason)) resolves.push(reason);
         entry.resolves = resolves;
-        entry.version = Math.max(2, (Number.isInteger(entry.version) ? entry.version : 1) + 1);
+        const req = info.amendments instanceof Map && entry.criterion ? info.amendments.get(entry.criterion) : null;
+        const reqVer = req && Number(req.required) > 1 ? Number(req.required) : 2;
+        entry.version = Math.max(reqVer, (Number.isInteger(entry.version) ? entry.version : 1) + 1);
       }
       entry.amended = [
         ...(Array.isArray(entry.amended) ? entry.amended : []),
@@ -521,7 +611,7 @@ function markPlanTaskCheckpointFailed(planMdPath, taskId, info = {}) {
     task.done = false;
     delete task.done_at;
     delete task.done_commit;
-    task.checkpoint_failed = { at: new Date().toISOString(), reason: String(info.reason || '').slice(0, 800), ...(info.commit ? { commit: info.commit } : {}), ...(info.leftover ? { leftover: info.leftover.slice(0, 50) } : {}), ...(info.run_id ? { run_id: info.run_id } : {}), ...(info.snapshot ? { snapshot: info.snapshot } : {}), ...(info.kind ? { kind: info.kind } : {}), ...(info.related_red ? { related_red: info.related_red } : {}), ...(info.title ? { title: info.title } : {}) };
+    task.checkpoint_failed = { at: new Date().toISOString(), reason: String(info.reason || '').slice(0, 800), ...(info.commit ? { commit: info.commit } : {}), ...(info.leftover ? { leftover: info.leftover.slice(0, 50) } : {}), ...(info.run_id ? { run_id: info.run_id } : {}), ...(info.snapshot ? { snapshot: info.snapshot } : {}), ...(info.kind ? { kind: info.kind } : {}), ...(info.related_red ? { related_red: info.related_red } : {}), ...(info.real_regressions ? { real_regressions: info.real_regressions } : {}), ...(info.later_owned_reds && info.later_owned_reds.length ? { later_owned_reds: info.later_owned_reds } : {}), ...(info.preexisting_reds && info.preexisting_reds.length ? { preexisting_reds: info.preexisting_reds } : {}), ...(info.title ? { title: info.title } : {}) };
     const tmp = `${jsonPath}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
     fs.renameSync(tmp, jsonPath);
@@ -680,6 +770,73 @@ function lintPlan(input) {
       }
     }
   }
+
+  // 1.21.2 shift-left generated_files: warn before execute if a task includes a generated file without its source
+  // in files or in an ancestor dependency (at checkpoint that deterministically blocks as scope_insufficient).
+  let genRules = input.config && Array.isArray(input.config.generated_files) ? input.config.generated_files : null;
+  if (!genRules && input.projectRoot) {
+    try {
+      const cfgPath = path.join(input.projectRoot, '.oxe', 'config.json');
+      if (fs.existsSync(cfgPath)) {
+        const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+        if (Array.isArray(cfg.generated_files)) genRules = cfg.generated_files;
+      }
+    } catch { /* ignore */ }
+  }
+  if (Array.isArray(genRules) && genRules.length) {
+    const dh = require('./oxe-dom-hooks.cjs');
+    const scopeCoversSource = (scope, s) => scope.some((p) => p === s || dh.globRe(s).test(p) || dh.globRe(p).test(String(s).replace(/\*.*$/, 'x')) || String(s).startsWith(`${p.replace(/\/+$/, '')}/`));
+    const acceptanceByCrit = new Map();
+    for (const entry of input.plan && Array.isArray(input.plan.acceptanceTests) ? input.plan.acceptanceTests : []) {
+      if (entry && entry.criterion) acceptanceByCrit.set(entry.criterion, [...(acceptanceByCrit.get(entry.criterion) || []), entry]);
+    }
+    for (const task of tasks) {
+      if (task.done === true) continue;
+      const taskFiles = (task.files || []).map((f) => String(f || '').replace(/\\/g, '/').replace(/^\.\//, '')).filter(Boolean);
+      if (!taskFiles.length) continue;
+      const ancestorFiles = [];
+      const seenDeps = new Set([task.id]);
+      const depQueue = [...(task.dependsOn || task.depends_on || [])];
+      while (depQueue.length) {
+        const depId = depQueue.shift();
+        if (!depId || seenDeps.has(depId)) continue;
+        seenDeps.add(depId);
+        const depTask = byId.get(depId);
+        if (!depTask) continue;
+        for (const f of depTask.files || []) {
+          const norm = String(f || '').replace(/\\/g, '/').replace(/^\.\//, '');
+          if (norm) ancestorFiles.push(norm);
+        }
+        for (const d of depTask.dependsOn || depTask.depends_on || []) depQueue.push(d);
+      }
+      const combinedScope = [...taskFiles, ...ancestorFiles];
+      for (const rule of genRules) {
+        if (!rule || !rule.file || !rule.source) continue;
+        const filePatterns = (Array.isArray(rule.file) ? rule.file : [rule.file]).map((g) => String(g).replace(/\\/g, '/'));
+        const fileRes = filePatterns.map(dh.globRe);
+        const edited = taskFiles.filter((p) => filePatterns.includes(p) || fileRes.some((re) => re.test(p)));
+        if (!edited.length) continue;
+        const sources = (Array.isArray(rule.source) ? rule.source : [rule.source]).map((s) => String(s).replace(/\\/g, '/'));
+        if (!sources.some((s) => scopeCoversSource(combinedScope, s))) {
+          warnings.push(`${task.id}: files inclui arquivo gerado (${edited.join(', ')}) sem a fonte (${sources.join(', ')}) em files nem nas dependências — no checkpoint isso bloqueia como scope_insufficient`);
+        }
+        if (rule.test) {
+          const normTest = String(rule.test).replace(/\\/g, '/').replace(/^\.\//, '');
+          const critEntries = (task.aceite || []).flatMap((c) => acceptanceByCrit.get(c) || []);
+          const verifyTexts = [
+            task.verifyCommand || '',
+            ...((task.verify && Array.isArray(task.verify.commands)) ? task.verify.commands : []),
+            ...(Array.isArray(task.affected_suites) ? task.affected_suites : []),
+            ...taskFiles,
+            ...critEntries.flatMap((e) => [e.command || '', ...(e.files || [])]),
+          ].map((v) => String(v || '').replace(/\\/g, '/'));
+          if (!verifyTexts.some((v) => v.includes(normTest))) {
+            warnings.push(`${task.id}: files inclui arquivo gerado (${edited.join(', ')}) sem o teste do gerador (${normTest}) em verify`);
+          }
+        }
+      }
+    }
+  }
   if (tasks.length && hasCycle(tasks)) errors.push('dependência circular entre tarefas');
 
   const waves = new Map();
@@ -728,7 +885,7 @@ function lintPlan(input) {
   if (phase && Array.isArray(phase.acceptance) && phase.acceptance.length) {
     const allowed = new Set(phase.acceptance);
     // A subcriterion belongs to its parent's phase; a G* is global.
-    const standing = new Set(input.standing || []);
+    const standing = new Set([...(input.standing || []), ...((input.plan && input.plan.supersededCriteria) || [])]);
     const outside = [...covered].filter((ref) => !critIds.inPhase(ref, allowed) && !standing.has(ref));
     if (outside.length) errors.push(`fase ${phase.id}: o plano usa A* de outras fases: ${outside.join(', ')}`);
     // A parent with subcriteria declared in the SPEC is covered when each subcriterion is (OXB-037).
@@ -738,7 +895,8 @@ function lintPlan(input) {
       errors.push(`PLAN.json declara fase ${input.plan.phase}, mas a fase ativa é ${phase.id}`);
     }
   } else if (criteria.length) {
-    const missing = critIds.uncovered(criteria.filter((ref) => !critIds.isGlobal(ref) && !critIds.isSub(ref)), covered, criteria);
+    const superseded = new Set((input.plan && input.plan.supersededCriteria) || []);
+    const missing = critIds.uncovered(criteria.filter((ref) => !critIds.isGlobal(ref) && !critIds.isSub(ref) && !superseded.has(ref)), covered, criteria);
     if (missing.length) warnings.push(`A* da SPEC sem tarefa: ${missing.join(', ')}`);
   }
 
@@ -750,18 +908,29 @@ function lintPlan(input) {
   for (const entry of acceptanceTests) {
     if (entry.criterion && criteria.length && !criteria.includes(entry.criterion)) errors.push(`teste de aceite ${entry.criterion}: critério não existe na SPEC`);
     for (const file of entry.files) {
+      // bench B52: a wall-clock assertion (p95, elapsed ms under a limit) frozen as acceptance is flaky under load —
+      // the criterion belongs in .oxe/program/nfr.json (OXB-144: samples, median, phase gate)
+      if (input.projectRoot) {
+        let text = '';
+        try { text = fs.readFileSync(path.resolve(input.projectRoot, file), 'utf8'); } catch { text = ''; }
+        const timing = /performance\.now\(\)|process\.hrtime|Date\.now\(\)\s*-|\bp9[059]\b|percentile/i.test(text);
+        const bound = /toBeLessThan(?:OrEqual)?\(|assert\.ok\([^)\n]*<=?\s*\d|expect\([^)\n]*\)\s*\.\s*to\.be\.below|<=?\s*\d{2,}\s*\)/.test(text);
+        if (timing && bound) warnings.push(`teste de aceite ${entry.criterion}: ${file} afirma um limite de tempo de parede (p95/ms) — instável sob carga; declare o NFR em .oxe/program/nfr.json (runtime nfr measure, amostras + mediana) e deixe no teste só o comportamento [bench B52]`);
+      }
       if (input.projectRoot && !fs.existsSync(path.resolve(input.projectRoot, file))) {
         errors.push(`teste de aceite ${entry.criterion}: ${file} não existe (escreva-o no /oxe-plan, antes da execução)`);
       }
       if (ownedByTasks.has(file)) {
-        errors.push(`teste de aceite ${entry.criterion}: ${file} está no escopo de ${ownedByTasks.get(file)} — o executor não pode escrever o próprio aceite`);
+        const badOwner = ownedByTasks.get(file);
+        errors.push(`teste de aceite ${entry.criterion}: ${file} está no escopo de ${badOwner} — o executor não pode escrever o próprio aceite (remova de files com: oxe-cc plan task edit ${badOwner} --remove-paths ${file} --by <papel> --reason "remover teste congelado de files")`);
       }
     }
   }
   // Prova executada: o runner precisa listar os nomes dos testes que passaram.
   for (const entry of acceptanceTests) {
     if (!entry.proves || !entry.proves.length) continue;
-    const verbose = /--reporter[= ]verbose|--verbose|--test-reporter[= ](tap|spec)|node\s+--test|\s-v\b|junit/i.test(entry.command);
+    // gradle / maven: the test names come from testLogging lines (`Class > method PASSED`) or the JUnit XML reports
+    const verbose = /--reporter[= ]verbose|--verbose|--test-reporter[= ](tap|spec)|node\s+--test|\s-v\b|junit|\b(gradlew|gradle|mvnw?)/i.test(entry.command);
     if (!verbose) warnings.push(`teste de aceite ${entry.criterion}: 'proves' exige saída com nomes de teste — use um reporter verbose (ex.: vitest --reporter=verbose)`);
     // OXB-073: each `proves` must name a test the files DECLARE. Paraphrased proves ("ratchet (LIMIT_SELECTED) stays at
     // 22 or lower, never raised" for the test "ratchet stays at 22 or lower (never raised)") can never be found among
@@ -771,7 +940,7 @@ function lintPlan(input) {
       for (const file of entry.files || []) {
         let text = '';
         try { text = fs.readFileSync(path.resolve(input.projectRoot, file), 'utf8'); } catch { continue; }
-        declared.push(...declaredTestTitles(text, file));
+        declared.push(...declaredTestTitles(text, file, { includeSuites: true }));
       }
       if (declared.length) {
         const norm = (s) => String(s).toLowerCase().replace(/[›>]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -791,7 +960,9 @@ function lintPlan(input) {
   const amendments = input.amendments instanceof Map
     ? input.amendments
     : new Map([...(input.requiredVersions instanceof Map ? input.requiredVersions : new Map())].map(([c, v]) => [c, { required: v, staleBelow: v }]));
+  const supersededForAmend = new Set((input.plan && input.plan.supersededCriteria) || []);
   for (const [criterion, req] of amendments) {
+    if (supersededForAmend.has(criterion)) continue; // superseded (plan task supersede): proven by the phase that replaces it
     const entries = acceptanceTests.filter((a) => a.criterion === criterion);
     if (!entries.some((e) => (e.version || 1) >= req.required)) {
       errors.push(entries.length && req.staleBelow < req.required
@@ -809,7 +980,7 @@ function lintPlan(input) {
   }
   const scopeAcceptance = phase && Array.isArray(phase.acceptance) && phase.acceptance.length ? phase.acceptance : [...covered];
   // OXB-091: a standing criterion is proven by the phase sign-off + evidence, not by a frozen test.
-  const standingSet = new Set(input.standing || []);
+  const standingSet = new Set([...(input.standing || []), ...((input.plan && input.plan.supersededCriteria) || [])]);
   const untested = scopeAcceptance.filter((ref) => !testedCriteria.has(ref) && !standingSet.has(ref));
   if (untested.length) {
     (input.requireAcceptanceTests ? errors : warnings).push(`A* sem teste de aceite congelado: ${untested.join(', ')}`);
@@ -892,7 +1063,10 @@ function markPlanTaskOpen(planMdPath, taskId, info = {}) {
     return false;
   }
   const task = Array.isArray(doc.tasks) ? doc.tasks.find((t) => t && t.id === taskId) : null;
-  if (!task || (task.done !== true && !task.checkpoint_failed && task.status !== 'done')) return false;
+  if (!task || (task.done !== true && !task.checkpoint_failed && task.status !== 'done' && task.status !== 'in_progress')) return false;
+  // a task folded into another (plan task fold) never comes back: its scope now belongs to the target
+  if (task.merged_into) throw new Error(`${taskId} foi fundida em ${task.merged_into} (plan task fold): reabra ${task.merged_into}, não ${taskId}`);
+  if (task.superseded) throw new Error(`${taskId} foi substituída por ${task.superseded.by_phase} (plan task supersede): não volta a este plano`);
   delete task.checkpoint_failed; // OXB-172: reopen also clears a failed checkpoint (scope fixed by a plan edit / CR)
   task.done = false;
   if (task.status != null) delete task.status;
@@ -909,7 +1083,9 @@ function markPlanTaskOpen(planMdPath, taskId, info = {}) {
 }
 
 module.exports = {
+  supersededCriteria,
   eachTestTitles,
+  eachTestGroups,
   markPlanTaskCheckpointFailed,
   markPlanTaskStarted,
   clearPlanTaskInProgress,

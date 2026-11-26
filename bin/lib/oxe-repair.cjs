@@ -20,14 +20,14 @@ const DEFAULT_ALLOW = ['retry', 'decompose', 'prune'];
 /** The concrete adjustment a retry can declare from the failure output; null when there is nothing new to act on. */
 function adjustmentFrom(output, changes) {
   const text = String(output || '');
-  const seg = /Failing segment[^:]*:\s*(.+)/.exec(text);
+  const segs = [...text.matchAll(/Failing segment[^:]*:\s*(.+)/g)].map((m) => m[1].trim());
   const tests = [...new Set([...text.matchAll(/(?:✖|not ok \d+ -|FAIL(?:ED)?:?)\s+([^\n]{4,120})/g)].map((m) => m[1].trim()))].slice(0, 5);
   const assertion = /(AssertionError[^\n]{0,160}|Expected[^\n]{0,120}|expected[^\n]{0,120})/.exec(text);
   const parts = [];
   if (/^turns_exhausted:/m.test(text)) parts.push('a tentativa acabou sem turnos: a próxima recebe o nível de turnos seguinte e deve priorizar terminar o escopo restante');
   if (tests.length) parts.push(`fazer passar: ${tests.join('; ')}`);
   if (assertion) parts.push(`a asserção: ${assertion[1].trim()}`);
-  if (seg && !tests.length) parts.push(`o segmento que reprovou: ${seg[1].trim().slice(0, 160)}`);
+  if (segs.length && !tests.length) parts.push(`o(s) segmento(s) que reprovou(aram): ${segs.join(' ; ').slice(0, 240)}`);
   if (changes && changes.kept && changes.kept.length && parts.length) parts.push(`partir do que a tentativa deixou (${changes.kept.slice(0, 5).join(', ')})`);
   return parts.length ? parts.join(' · ') : null;
 }
@@ -73,7 +73,19 @@ function decide(task, doc, ctx) {
   return { strategy: 'stop', reason: why, adjustment: null };
 }
 
-function proposalFile(root, taskId) { return path.join(root, '.oxe', 'repairs', `${taskId}.json`); }
+function proposalFile(root, taskId) {
+  const safe = String(taskId || '').trim().toUpperCase();
+  if (!/^T\d[\w.-]*$/i.test(safe) || safe.includes('..')) {
+    throw new Error(`taskId inválido em repair: ${taskId}`);
+  }
+  return path.join(root, '.oxe', 'repairs', `${safe}.json`);
+}
+
+function writeAtomic(filePath, content) {
+  const tmp = `${filePath}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, content, 'utf8');
+  fs.renameSync(tmp, filePath);
+}
 
 function writeProposal(root, task, doc, decision) {
   const ids = nextIds(doc, decision.parts.length);
@@ -100,16 +112,42 @@ function writeProposal(root, task, doc, decision) {
 function applyProposal(root, jsonPath, doc, taskId, options = {}) {
   let proposal;
   try { proposal = JSON.parse(fs.readFileSync(proposalFile(root, taskId), 'utf8')); } catch { throw new Error(`sem proposta de reparo para ${taskId} (.oxe/repairs/${taskId}.json)`); }
+  if (proposal.applied_at) throw new Error(`proposta de reparo de ${taskId} já foi aplicada em ${proposal.applied_at}`);
   if (proposal.requires_approval && !options.approve) throw new Error(`${taskId}: as subtarefas mudam o escopo do pack — revise e rode com --approve`);
-  const i = doc.tasks.findIndex((t) => t.id === taskId);
+  const i = (doc.tasks || []).findIndex((t) => t && t.id === taskId);
   if (i < 0) throw new Error(`${taskId} não está mais em PLAN.json tasks`);
-  const [task] = doc.tasks.splice(i, 1, ...proposal.subtasks);
-  doc.decomposed = [...(doc.decomposed || []), { ...task, into: proposal.subtasks.map((s) => s.id), reason: proposal.reason, at: new Date().toISOString() }];
-  const last = proposal.subtasks[proposal.subtasks.length - 1].id;
+
+  // Re-allocate colliding subtask IDs if tasks were appended after `writeProposal`
+  const taken = new Set([...(doc.tasks || []), ...(doc.decomposed || [])].filter(Boolean).map((t) => t.id));
+  const idRemap = new Map();
+  let freshPool = null;
+  const subtasks = proposal.subtasks.map((s) => {
+    let nextId = s.id;
+    if (taken.has(nextId)) {
+      if (!freshPool) freshPool = nextIds(doc, proposal.subtasks.length);
+      nextId = freshPool.shift();
+      taken.add(nextId);
+    }
+    idRemap.set(s.id, nextId);
+    return { ...s, id: nextId };
+  }).map((s) => ({
+    ...s,
+    depends_on: (s.depends_on || []).map((d) => idRemap.get(d) || d),
+  }));
+
+  const [task] = doc.tasks.splice(i, 1, ...subtasks);
+  doc.decomposed = [...(doc.decomposed || []), { ...task, into: subtasks.map((s) => s.id), reason: proposal.reason, at: new Date().toISOString() }];
+  const last = subtasks[subtasks.length - 1].id;
   for (const t of doc.tasks) if (Array.isArray(t.depends_on) && t.depends_on.includes(taskId)) t.depends_on = t.depends_on.map((d) => (d === taskId ? last : d));
-  fs.writeFileSync(jsonPath, `${JSON.stringify(doc, null, 2)}\n`);
-  fs.writeFileSync(proposalFile(root, taskId), `${JSON.stringify({ ...proposal, applied_at: new Date().toISOString() }, null, 2)}\n`);
-  return { task: taskId, into: proposal.subtasks.map((s) => ({ id: s.id, alias: s.alias })) };
+  for (const a of doc.acceptance_tests || []) {
+    if (a && a.task === taskId) {
+      const owner = subtasks.find((s) => (s.acceptance || []).includes(a.criterion)) || subtasks[subtasks.length - 1];
+      a.task = owner.id;
+    }
+  }
+  writeAtomic(jsonPath, `${JSON.stringify(doc, null, 2)}\n`);
+  writeAtomic(proposalFile(root, taskId), `${JSON.stringify({ ...proposal, subtasks, applied_at: new Date().toISOString() }, null, 2)}\n`);
+  return { task: taskId, into: subtasks.map((s) => ({ id: s.id, alias: s.alias })) };
 }
 
 module.exports = { adjustmentFrom, decide, decomposition, writeProposal, applyProposal, proposalFile };
