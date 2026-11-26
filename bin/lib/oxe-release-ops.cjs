@@ -97,10 +97,11 @@ function validateChecksumsText(checksumsText, assetNames) {
 }
 
 function makeJiraClient(cfg, options = {}) {
-  const alm = cfg && cfg.alm && typeof cfg.alm === 'object' ? cfg.alm : {};
-  const site = String(options.site || alm.site || process.env.JIRA_SITE || '').replace(/\/+$/, '');
-  const project = String(options.project || alm.project || '').trim();
   const env = options.env || process.env;
+  const alm = cfg && cfg.alm && typeof cfg.alm === 'object' ? cfg.alm : {};
+  const almJira = alm.jira && typeof alm.jira === 'object' ? alm.jira : {};
+  const site = String(options.site || almJira.site || alm.site || env.JIRA_SITE || '').trim().replace(/\/+$/, '');
+  const project = String(options.project || almJira.project || alm.project || env.JIRA_PROJECT || '').trim();
   if (typeof options.jiraRequest === 'function') {
     return { configured: true, site, project, request: options.jiraRequest };
   }
@@ -318,6 +319,7 @@ async function finalizeRelease(projectRoot, options = {}) {
 
 module.exports = {
   DEFAULT_REQUIRED_GATES,
+  makeJiraClient,
   checkMultiPlatformAssets,
   validateChecksumsText,
   checkReleaseReadiness,
