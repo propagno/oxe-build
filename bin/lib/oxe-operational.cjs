@@ -3259,12 +3259,17 @@ async function runtimeAlmRefine(projectRoot, activeSession, options = {}) {
       }
       const targetEntry = resolvedProgram ? resolvedProgram.entry : null;
       if (action === 'lint') {
-        const l = refine.lintSpec(md, collected.kind);
+        const artRoot = targetEntry ? targetEntry.root : projectRoot;
+        const artSess = artRoot === path.resolve(projectRoot) ? activeSession : null;
+        const artifacts = (collected && collected.project_artifacts && collected.project_artifacts.has_any)
+          ? collected.project_artifacts
+          : refine.discoverProjectArtifacts(artRoot, artSess, key);
+        const l = refine.lintSpec(md, collected.kind, { artifacts });
         // G34 (user decision 14/11, via the brand: the 1.5.2 is faithful to the rebranding end to end): a UI card
         // passes the refine only with (1) its BRD-n, (2) the target (a file or an approved artifact) and (3)
         // measures in the CAs (size, font, radius, color as a token, ms, or system colors / forced-colors), for
         // both themes and both densities. Without them: needs-info, with the question for the brand.
-        const ui = uiCardGaps(md, collected);
+        const ui = uiCardGaps(md, collected, { projectRoot: artRoot });
         if (ui.isUi && ui.gaps.length) {
           for (const g of ui.gaps) { l.warnings.push(`interface: ${g}`); l.questions.push(`MARCA: ${g}`); }
           l.needs_info = true;
@@ -3344,7 +3349,7 @@ async function runtimeAlmRefine(projectRoot, activeSession, options = {}) {
   const out = [];
   for (const key of keys) {
     try {
-      const c = await refine.collect(rest, key, { projectRoot });
+      const c = await refine.collect(rest, key, { projectRoot, activeSession });
       fs.writeFileSync(path.join(d.data, `${key}.json`), JSON.stringify(c, null, 2));
       const specFile = path.join(d.specs, `${key}.md`);
       const kept = fs.existsSync(specFile) && !options.reset;
@@ -3795,10 +3800,17 @@ function criteriaOnlyReadSharedLocales(crit) {
 
 const NON_UI_DOMAIN_LABEL_RE = /^(?:area-(?:desempenho|performance|perf|backend|infra(?:estrutura)?|dados|db|database|seguran[cç]a|security|arquitetura|architecture|ipc|runtime|terminal|git|ci|build|cli|core|engine)|desempenho|performance|perf|backend|infra(?:estrutura)?|seguran[cç]a|security|arquitetura|database|db)$/i;
 
-function uiCardGaps(md, collected = {}) {
+function uiCardGaps(md, collected = {}, options = {}) {
   const text = String(md || '');
   const labels = (collected.labels || []).map((l) => String(l).toLowerCase());
   const hasMarca = labels.includes('area-marca');
+  const hasVisualLabel = labels.some((l) => /^(?:area-marca|visual|polish|ui|design)$/i.test(l));
+  if (collected.kind === 'epic' && !hasMarca) return { isUi: false, gaps: [], epic_exempt: true };
+  if (!hasMarca && !hasVisualLabel && options && options.projectRoot) {
+    const uiDirs = ['src/ui', 'src/styles', 'src/design', 'src/renderer', 'src/components', 'mobile/android'];
+    const hasUiTree = uiDirs.some((d) => fs.existsSync(path.join(options.projectRoot, d)));
+    if (!hasUiTree) return { isUi: false, gaps: [], no_ui_tree_exempt: true };
+  }
   const hasExplicitNonUiLabel = !hasMarca && labels.some((l) => NON_UI_DOMAIN_LABEL_RE.test(l));
   const crit = refineLibCriteria(text);
   const critText = crit.map((c) => String((c && c.text) || '')).join('\n');
@@ -3813,7 +3825,6 @@ function uiCardGaps(md, collected = {}) {
   if (criteriaOnlyReadSharedLocales(crit)) return { isUi: false, gaps: [], locale_only_exempt: true };
   // OXB-C20 #4: logical bugs (e.g. OXE-294 in TerminalPane.tsx) without visual/brand labels that explicitly declare
   // `BRD: nenhum` and do not alter CSS/tokens/geometry should not require light/dark + compact/comfortable UI checklists.
-  const hasVisualLabel = labels.some((l) => /^(?:area-marca|visual|polish|ui|design)$/i.test(l));
   const declaresNoBrd = /\b(?:sem BRD|BRD:\s*(?:nenhum|n\/a|—|-))\b/i.test(text);
   const touchesStyleOrTokens = /\.(?:css|scss|less)\b|var\(--[\w-]+\)|--(?:bar|row|control|fs|radius|space)-|src\/(?:styles|design)\//i.test(text);
   if (collected.kind === 'bug' && !hasVisualLabel && declaresNoBrd && !touchesStyleOrTokens) {

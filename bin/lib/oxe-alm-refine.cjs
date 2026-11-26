@@ -111,6 +111,145 @@ function mdToAdf(md) {
 // a path (src/x.ts) or a bare file name (App.tsx, thread-view.spec.ts:10) with a code extension
 const CODE_PATH_RE = /(?<![\w/.-])(?:[\w.-]+\/)*[\w-]+(?:\.[\w-]+)*\.(?:tsx?|jsx?|mjs|cjs|kt|swift|java|py|go|rs|css|scss|sql)\b(?::\d+)?/g;
 const DESIGN_REF_RE = /\bref-(?:BRD|VIS|DS|UX)-[\w-]+\b|\b(?:BRD|VIS)-\d+\b/g;
+const ARTIFACT_CITE_RE = /\b(?:PRD\.md|SPEC\.md|SYSTEM-DESIGN\.md|GLOSSARY\.md|US-\d+|RFC-\d+|ADR-\d+|D-\d+)\b/i;
+
+/**
+ * Discovers upstream OXE / architecture artifacts in a repository so cards refined or pushed
+ * to Jira / Azure DevOps carry explicit links to PRD, SPEC, SYSTEM-DESIGN, GLOSSARY, RFCs, ADRs and D-nn decisions.
+ */
+function discoverProjectArtifacts(projectRoot, activeSession = null, cardKey = null) {
+  const empty = { prd: null, spec: null, system_design: null, glossary: null, rfcs: [], adrs: [], decisions: [], has_any: false };
+  if (!projectRoot) return empty;
+  const rootAbs = path.resolve(projectRoot);
+  if (!fs.existsSync(rootAbs)) return empty;
+  const rel = (abs) => path.relative(rootAbs, abs).replace(/\\/g, '/');
+  const oxeBase = activeSession ? path.join(rootAbs, '.oxe', 'sessions', activeSession) : path.join(rootAbs, '.oxe');
+  const fallbackBase = path.join(rootAbs, '.oxe');
+  const pickFile = (name) => {
+    const p1 = path.join(oxeBase, name);
+    if (fs.existsSync(p1)) return p1;
+    if (oxeBase !== fallbackBase) {
+      const p2 = path.join(fallbackBase, name);
+      if (fs.existsSync(p2)) return p2;
+    }
+    return null;
+  };
+  const publishedMap = new Map();
+  try {
+    const pubFile = path.join(rootAbs, '.oxe', 'docs', 'published.json');
+    if (fs.existsSync(pubFile)) {
+      const pub = JSON.parse(fs.readFileSync(pubFile, 'utf8'));
+      const entries = Array.isArray(pub) ? pub : (Array.isArray(pub && pub.pages) ? pub.pages : Object.values(pub || {}));
+      for (const e of entries) {
+        if (e && typeof e === 'object' && e.source && e.url) publishedMap.set(String(e.source).replace(/\\/g, '/'), String(e.url));
+      }
+    }
+  } catch { /* optional */ }
+  const urlFor = (relPath) => publishedMap.get(relPath) || publishedMap.get(path.basename(relPath)) || null;
+
+  const prdAbs = pickFile('PRD.md');
+  let prd = null;
+  if (prdAbs) {
+    const prdRel = rel(prdAbs);
+    const stories = [];
+    try {
+      const txt = fs.readFileSync(prdAbs, 'utf8');
+      const keyRe = cardKey ? new RegExp(`(?<![A-Za-z0-9-])${String(cardKey).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9-])`, 'i') : null;
+      const blocks = txt.split(/(?=^###?\s+US-\d+\b)/m);
+      for (const b of blocks) {
+        const m = /^###?\s+(US-\d+)\b/m.exec(b);
+        if (m && (!keyRe || keyRe.test(b))) stories.push(m[1].toUpperCase());
+      }
+      for (const line of txt.split(/\r?\n/)) {
+        const tm = /^\|\s*(US-\d+)\s*\|/i.exec(line.trim());
+        if (tm && (!keyRe || keyRe.test(line))) stories.push(tm[1].toUpperCase());
+      }
+    } catch { /* ignore */ }
+    prd = { path: prdRel, stories: [...new Set(stories)].slice(0, 8), url: urlFor(prdRel) };
+  }
+  const specAbs = pickFile('SPEC.md');
+  const spec = specAbs ? { path: rel(specAbs), url: urlFor(rel(specAbs)) } : null;
+  const sdAbs = pickFile('SYSTEM-DESIGN.md');
+  const system_design = sdAbs ? { path: rel(sdAbs), url: urlFor(rel(sdAbs)) } : null;
+  const glAbs = pickFile('GLOSSARY.md');
+  const glossary = glAbs ? { path: rel(glAbs), url: urlFor(rel(glAbs)) } : null;
+
+  const listMatching = (dirAbs, re, idRe) => {
+    const found = [];
+    if (!fs.existsSync(dirAbs)) return found;
+    try {
+      for (const f of fs.readdirSync(dirAbs).sort()) {
+        if (!re.test(f)) continue;
+        const abs = path.join(dirAbs, f);
+        if (!fs.statSync(abs).isFile()) continue;
+        const r = rel(abs);
+        const im = idRe.exec(f);
+        found.push({ id: im ? im[0].toUpperCase() : f.replace(/\.md$/i, ''), path: r, url: urlFor(r) });
+      }
+    } catch { /* ignore */ }
+    return found;
+  };
+  const rfcs = [
+    ...listMatching(path.join(oxeBase, 'rfc'), /^RFC-.*\.md$/i, /^RFC-\d+/i),
+    ...(oxeBase !== fallbackBase ? listMatching(path.join(fallbackBase, 'rfc'), /^RFC-.*\.md$/i, /^RFC-\d+/i) : []),
+  ].filter((x, i, a) => a.findIndex((y) => y.path === x.path) === i).slice(0, 10);
+
+  const adrs = [
+    ...listMatching(path.join(rootAbs, 'docs', 'adr'), /^(?:ADR|D)-\d+.*\.md$/i, /^(?:ADR|D)-\d+/i),
+    ...listMatching(path.join(oxeBase, 'adr'), /^(?:ADR|D)-\d+.*\.md$/i, /^(?:ADR|D)-\d+/i),
+  ].filter((x, i, a) => a.findIndex((y) => y.path === x.path) === i).slice(0, 10);
+
+  const decisions = [];
+  const decFile = fs.existsSync(path.join(oxeBase, 'program', 'decisions.ndjson'))
+    ? path.join(oxeBase, 'program', 'decisions.ndjson')
+    : path.join(fallbackBase, 'program', 'decisions.ndjson');
+  if (fs.existsSync(decFile)) {
+    try {
+      const byId = new Map();
+      for (const line of fs.readFileSync(decFile, 'utf8').split(/\r?\n/)) {
+        const t = line.trim();
+        if (!t) continue;
+        try {
+          const obj = JSON.parse(t);
+          if (obj && obj.id) byId.set(String(obj.id), obj);
+        } catch { /* skip malformed */ }
+      }
+      for (const d of byId.values()) {
+        const st = String(d.status || 'active').toLowerCase();
+        if (st === 'superseded' || st === 'revoked' || st === 'rejected') continue;
+        decisions.push({ id: String(d.id), title: String(d.title || d.decision || d.summary || '').slice(0, 120) });
+      }
+    } catch { /* ignore */ }
+  }
+  const activeDecisions = decisions.slice(-15);
+  const has_any = Boolean(prd || spec || system_design || glossary || rfcs.length || adrs.length || activeDecisions.length);
+  return { prd, spec, system_design, glossary, rfcs, adrs, decisions: activeDecisions, has_any };
+}
+
+/** Formats discovered OXE artifacts as markdown bullet lines for Referências / ALM push descriptions. */
+function formatArtifactRefs(artifacts, opts = {}) {
+  if (!artifacts || !artifacts.has_any) return [];
+  const fmtLink = (item, anchor = null) => {
+    if (!item) return null;
+    const label = anchor ? `${item.path}#${anchor}` : item.path;
+    return item.url ? `[${label}](${anchor ? `${item.url}#${anchor}` : item.url})` : `\`${label}\``;
+  };
+  const lines = [];
+  if (artifacts.prd) {
+    const storyHint = opts.storyId ? null : (artifacts.prd.stories && artifacts.prd.stories.length ? ` (${artifacts.prd.stories.join(', ')})` : '');
+    lines.push(`- PRD: ${fmtLink(artifacts.prd, opts.storyId || null)}${storyHint || ''}`);
+  }
+  if (artifacts.spec) lines.push(`- SPEC: ${fmtLink(artifacts.spec)}`);
+  if (artifacts.system_design) lines.push(`- Arquitetura (SYSTEM-DESIGN): ${fmtLink(artifacts.system_design)}`);
+  if (artifacts.glossary) lines.push(`- Glossário: ${fmtLink(artifacts.glossary)}`);
+  if (artifacts.rfcs && artifacts.rfcs.length) lines.push(`- RFCs: ${artifacts.rfcs.map((r) => fmtLink(r)).join(', ')}`);
+  if (artifacts.adrs && artifacts.adrs.length) lines.push(`- ADRs: ${artifacts.adrs.map((a) => fmtLink(a)).join(', ')}`);
+  if (artifacts.decisions && artifacts.decisions.length) {
+    const top = artifacts.decisions.slice(-6).map((d) => (d.title ? `${d.id} (${d.title})` : d.id));
+    lines.push(`- Decisões registradas: ${top.join('; ')}`);
+  }
+  return lines;
+}
 
 /**
  * Reads a card through a Jira REST context (`request` + site): read-only.
@@ -141,7 +280,9 @@ async function collect(ctx, key, options = {}) {
   const corpus = [f.summary, description, ...comments.map((c) => c.text)].join('\n');
   const codeRefs = [...new Set(corpus.match(CODE_PATH_RE) || [])];
   const designRefs = [...new Set([...(corpus.match(DESIGN_REF_RE) || []), ...(f.labels || []).filter((l) => /^ref-(BRD|VIS|DS|UX)-/i.test(l))])];
-  const existing = options.projectRoot ? codeRefs.filter((p) => fs.existsSync(path.join(options.projectRoot, p.replace(/:\d+$/, '')))) : [];
+  const rootAbs = options.projectRoot ? path.resolve(options.projectRoot) : null;
+  const existing = rootAbs ? codeRefs.filter((p) => fs.existsSync(path.join(rootAbs, p.replace(/:\d+$/, '')))) : [];
+  const projectArtifacts = rootAbs ? discoverProjectArtifacts(rootAbs, options.activeSession || null, issue.key) : null;
   return {
     key: issue.key,
     id: issue.id,
@@ -162,6 +303,7 @@ async function collect(ctx, key, options = {}) {
     code_refs: codeRefs,
     code_refs_found: existing,
     design_refs: designRefs,
+    project_artifacts: projectArtifacts,
     collected_at: new Date().toISOString(),
     already_refined: (f.labels || []).includes('spec-v1'),
   };
@@ -180,7 +322,7 @@ const TBC = 'A confirmar';
 const TBC_RE = /(?<![\p{L}\p{N}])(?:A[ \t]+(?:confirmar|Confirmar|CONFIRMAR)|(?<![\p{L}\p{N}][ \t]+)a[ \t]+confirmar(?![ \t]+[\p{L}\p{N}]))(?![\p{L}\p{N}])/u;
 const TBC_RE_G = new RegExp(TBC_RE.source, 'gu');
 const SECTIONS = {
-  story: ['História', 'Contexto', 'Critérios de aceite', 'Regras de negócio', 'Regras técnicas', 'Fora de escopo', 'Dependências', 'Riscos', 'Definição de pronto', 'Referências', 'Perguntas em aberto'],
+  story: ['História', 'Contexto', 'Critérios de aceite', 'Regras de negócio', 'Regras técnicas', 'Arquitetura e fluxo', 'Fora de escopo', 'Dependências', 'Riscos', 'Definição de pronto', 'Referências', 'Perguntas em aberto'],
   bug: ['Resumo', 'Passos para reproduzir', 'Resultado esperado', 'Resultado obtido', 'Ambiente e versão', 'Causa', 'Critérios de correção', 'Teste de regressão', 'Fora de escopo', 'Definição de pronto', 'Referências', 'Perguntas em aberto'],
   task: ['Objetivo', 'Contexto', 'Critérios de aceite', 'Regras técnicas', 'Fora de escopo', 'Dependências', 'Definição de pronto', 'Referências', 'Perguntas em aberto'],
   epic: ['Objetivo', 'Escopo', 'Fora de escopo', 'Métricas de sucesso', 'Filhos', 'Riscos', 'Referências', 'Perguntas em aberto'],
@@ -194,14 +336,29 @@ const REQUIRED = {
 
 function skeleton(c) {
   const kind = c.kind;
+  const art = c.project_artifacts && c.project_artifacts.has_any ? c.project_artifacts : null;
   const refs = [
     `- Card: [${c.key}](${c.url}) · ${c.type || kind} · ${c.status || '—'}${c.fix_versions.length ? ` · versão ${c.fix_versions.join(', ')}` : ''}`,
     ...(c.parent ? [`- Épico/pai: ${c.parent.key}${c.parent.summary ? ` — ${c.parent.summary}` : ''}`] : []),
     ...c.links.map((l) => `- ${l.type}: ${l.key}${l.summary ? ` — ${l.summary}` : ''}${l.status ? ` (${l.status})` : ''}`),
     ...c.design_refs.map((r) => `- Design: ${r}`),
     ...c.code_refs.map((p) => `- Código: \`${p}\`${c.code_refs_found.includes(p) ? '' : ' (não encontrado no repositório)'}`),
+    ...formatArtifactRefs(art),
     ...(c.dev ? [`- Desenvolvimento: ${c.dev.pullrequests} PR(s), ${c.dev.commits} commit(s), ${c.dev.builds} build(s)`] : []),
   ];
+  const archLines = [];
+  if (art && art.system_design) archLines.push(`- Componentes e fluxo: ${TBC} (consultar \`${art.system_design.path}\`)`);
+  else archLines.push(`- Componentes e fluxo: ${TBC} (descrever fluxo ponta a ponta ou "N/A" sem impacto arquitetural)`);
+  if (art && ((art.adrs && art.adrs.length) || (art.decisions && art.decisions.length) || (art.rfcs && art.rfcs.length))) {
+    const pointers = [
+      ...(art.rfcs || []).map((r) => `\`${r.path}\``),
+      ...(art.adrs || []).map((a) => `\`${a.path}\``),
+      ...(art.decisions || []).slice(-4).map((d) => d.id),
+    ];
+    archLines.push(`- ADRs / RFCs / Decisões aplicáveis: ${pointers.join(', ')}`);
+  } else {
+    archLines.push(`- ADRs / Decisões aplicáveis: ${TBC} (ou nenhuma)`);
+  }
   const body = {
     'História': [`Como **${TBC}**, quero **${c.summary || TBC}**, para **${TBC}**.`],
     Resumo: [c.summary || TBC],
@@ -211,6 +368,7 @@ function skeleton(c) {
     'Critérios de correção': ['1. **CA-1** — Dado … quando … então … _(A confirmar)_ · Teste: A confirmar'],
     'Regras de negócio': [`- **RN-1** — ${TBC}`],
     'Regras técnicas': [`- **RT-1** — ${TBC} (arquivos, contratos/IPC, migração, desempenho, testes congelados afetados, compatibilidade)`],
+    'Arquitetura e fluxo': archLines,
     'Fora de escopo': [`- ${TBC}`],
     'Dependências': [c.links.length ? c.links.map((l) => `- ${l.key} (${l.type})`).join('\n') : '- Nenhuma conhecida'],
     Riscos: [`- ${TBC}`],
@@ -371,7 +529,7 @@ function setSpecIds(md, map, options = {}) {
 /**
  * @returns {{ ok: boolean, errors: string[], warnings: string[], questions: string[], criteria: Array<{id,text,test}> }}
  */
-function lintSpec(md, kind) {
+function lintSpec(md, kind, options = {}) {
   const errors = [];
   const warnings = [];
   const sec = sectionsOf(md);
@@ -406,6 +564,30 @@ function lintSpec(md, kind) {
   const questions = (sec.get('Perguntas em aberto') || '').split('\n').map((l) => l.replace(/^\s*[-*\d.)]+\s*/, '').trim()).filter((l) => l && !/^\(preencha/.test(l) && !/^\(?\s*nenhuma\b/i.test(l));
   if (tbc && !questions.length) errors.push(`${tbc} item(ns) "A confirmar" sem pergunta em "Perguntas em aberto"`);
   if (tbc) warnings.push(`${tbc} item(ns) "A confirmar": o card recebe needs-info, com as perguntas num comentário`);
+  const artifacts = options.artifacts || (options.projectRoot ? discoverProjectArtifacts(options.projectRoot, options.activeSession || null) : null);
+  if (kind === 'story' && artifacts && artifacts.has_any) {
+    const hasUpstreamDesign = Boolean(
+      artifacts.prd
+      || artifacts.system_design
+      || (artifacts.rfcs && artifacts.rfcs.length)
+      || (artifacts.adrs && artifacts.adrs.length)
+      || (artifacts.decisions && artifacts.decisions.length)
+    );
+    const hasSpecLink = criteria.some((c) => c.spec_id || c.plan_ref);
+    const avail = [
+      artifacts.prd && 'PRD.md',
+      artifacts.spec && 'SPEC.md',
+      artifacts.system_design && 'SYSTEM-DESIGN.md',
+      artifacts.rfcs && artifacts.rfcs.length && 'RFC',
+      ((artifacts.adrs && artifacts.adrs.length) || (artifacts.decisions && artifacts.decisions.length)) && 'ADR/D-nn',
+    ].filter(Boolean);
+    if (!ARTIFACT_CITE_RE.test(body) && (hasUpstreamDesign || !hasSpecLink)) {
+      warnings.push(`rastreabilidade: o projeto possui artefatos OXE (${avail.join(', ')}) mas a história não referencia nenhum (PRD/US-n, SYSTEM-DESIGN, RFC ou ADR/D-nn)`);
+    }
+    if (artifacts.system_design && !sec.has('Arquitetura e fluxo') && !/SYSTEM-DESIGN/i.test(body)) {
+      warnings.push('arquitetura: o projeto possui SYSTEM-DESIGN.md mas a história não traz a seção "Arquitetura e fluxo" nem referencia o documento');
+    }
+  }
   return { ok: errors.length === 0, errors, warnings, questions, criteria, needs_info: tbc > 0 };
 }
 
@@ -818,4 +1000,4 @@ function lintCardCriteriaAgainstPrograms(md, key, primaryEntry, options = {}) {
   return { errors, warnings, programs: [...checkedPrograms] };
 }
 
-module.exports = { TBC_RE, parseCriteria, setSpecIds, collect, skeleton, lintSpec, apply, mdToAdf, adfToText, descriptionBody, kindOf, sectionsOf, dirs, hash, SECTIONS, REQUIRED, discoverProgramCatalog, resolveProgramSpec, resolveCardProgram, lintCardCriteriaAgainstPrograms };
+module.exports = { TBC_RE, parseCriteria, setSpecIds, collect, skeleton, lintSpec, apply, mdToAdf, adfToText, descriptionBody, kindOf, sectionsOf, dirs, hash, SECTIONS, REQUIRED, discoverProjectArtifacts, formatArtifactRefs, discoverProgramCatalog, resolveProgramSpec, resolveCardProgram, lintCardCriteriaAgainstPrograms };

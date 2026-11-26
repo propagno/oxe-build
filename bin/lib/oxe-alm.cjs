@@ -784,20 +784,45 @@ async function push(programDir, cfg, input, options = {}) {
       return null;
     }
   };
+  const refineLib = require('./oxe-alm-refine.cjs');
+  const inferredRoot = input.projectRoot || (() => {
+    const p = path.resolve(programDir);
+    if (path.basename(p) === 'program') {
+      const parent = path.dirname(p);
+      if (path.basename(parent) === '.oxe') return path.dirname(parent);
+      if (path.basename(path.dirname(parent)) === 'sessions') return path.dirname(path.dirname(path.dirname(parent)));
+    }
+    return null;
+  })();
+  const artifacts = input.artifacts || (inferredRoot ? refineLib.discoverProjectArtifacts(inferredRoot, input.activeSession || null) : null);
+  const epicArtifactBlock = artifacts && artifacts.has_any ? `Artefatos OXE:\n${refineLib.formatArtifactRefs(artifacts).join('\n')}` : '';
+  const taskRefParts = artifacts ? [artifacts.spec && artifacts.spec.path, artifacts.system_design && artifacts.system_design.path].filter(Boolean) : [];
   // Spec approved → the epic, when the config names none (one per program, or per phase with input.phase).
   if (cfg.stories_source !== 'alm' && !epicFor(input.phase) && input.epicTitle && (input.stories || []).length) {
     // one epic per spec (program); per phase only when the config already maps epics per phase
     const ref = cfg.epic && typeof cfg.epic === 'object' && input.phase ? `EPIC-${input.phase}` : 'EPIC';
-    createdEpic = await ensure(ref, { kind: 'epic', title: input.epicTitle, description: input.epicDescription || 'Criado pelo OXE a partir do PRD.md.', labels: [...cfg.labels, refLabel(ref, cfg)], fixVersion });
+    const epicDesc = [input.epicDescription || 'Criado pelo OXE a partir do PRD.md.', epicArtifactBlock].filter(Boolean).join('\n\n');
+    createdEpic = await ensure(ref, { kind: 'epic', title: input.epicTitle, description: epicDesc, labels: [...cfg.labels, refLabel(ref, cfg)], fixVersion });
   }
   const storyKeyByCriterion = new Map();
   const storyRefByCriterion = new Map();
   for (const s of input.stories || []) for (const a of s.criteria) if (!storyRefByCriterion.has(a)) storyRefByCriterion.set(a, s.id);
   for (const s of input.stories || []) {
+    const storyArtifactBlock = artifacts && artifacts.has_any
+      ? `Artefatos & Arquitetura:\n${refineLib.formatArtifactRefs(artifacts, { storyId: s.id }).join('\n')}`
+      : '';
     const key = await ensure(s.id, {
       kind: 'story',
       title: `${s.id}: ${s.want}`,
-      description: [`Como ${s.persona}, quero ${s.want}, para ${s.benefit}.`, s.criteria.length ? `Critérios de aceite: ${s.criteria.join(', ')}` : '', s.requirements.length ? `Requisitos: ${s.requirements.join(', ')}` : '', 'Criado pelo OXE (PRD.md).'].filter(Boolean).join('\n\n'),
+      description: [
+        `Como ${s.persona}, quero ${s.want}, para ${s.benefit}.`,
+        s.criteria.length ? `Critérios de aceite: ${s.criteria.join(', ')}` : '',
+        s.requirements.length ? `Requisitos: ${s.requirements.join(', ')}` : '',
+        Array.isArray(s.business_rules) && s.business_rules.length ? `Regras de negócio: ${s.business_rules.join('; ')}` : '',
+        s.flow ? `Fluxo: ${s.flow}` : '',
+        storyArtifactBlock,
+        'Criado pelo OXE (PRD.md).',
+      ].filter(Boolean).join('\n\n'),
       labels: [...cfg.labels, refLabel(s.id, cfg)],
       parent: epicFor(input.phase),
       fixVersion,
@@ -815,7 +840,13 @@ async function push(programDir, cfg, input, options = {}) {
     const key = await ensure(ref, {
       kind: 'task',
       title: `${t.id}: ${t.title || 'tarefa'}`,
-      description: [t.description || '', (t.files || []).length ? `Arquivos: ${t.files.join(', ')}` : '', crit.length ? `Critérios: ${crit.join(', ')}` : '', `Fase ${input.phase || '—'} · criado pelo OXE (PLAN.json).`].filter(Boolean).join('\n\n'),
+      description: [
+        t.description || '',
+        (t.files || []).length ? `Arquivos: ${t.files.join(', ')}` : '',
+        crit.length ? `Critérios: ${crit.join(', ')}` : '',
+        taskRefParts.length ? `Referências OXE: ${taskRefParts.join(' · ')}` : '',
+        `Fase ${input.phase || '—'} · criado pelo OXE (PLAN.json).`,
+      ].filter(Boolean).join('\n\n'),
       // the block's labels PLUS the task's own (area-…), never replacing them
       labels: [...new Set([...cfg.labels, ...(Array.isArray(t.labels) ? t.labels.map(String) : []), refLabel(ref, cfg)])],
       parent,
