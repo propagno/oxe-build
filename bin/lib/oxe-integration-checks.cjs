@@ -135,11 +135,33 @@ function checkPrePush(root, stdinText = '', options = {}) {
   }
   const parked_files = [...found].sort();
   const parked_dirs = parkedAcceptanceDirs(parked_files);
+  // OXB-G16: run configured cheap `preflight.checks` during pre-push when enabled (and not skipped)
+  let preflight = null;
+  if (!options.skipPreflight) {
+    try {
+      const cfg = readMergedConfig(root);
+      const pf = cfg && cfg.preflight && typeof cfg.preflight === 'object' ? cfg.preflight : null;
+      if (pf && pf.runOnPrePush !== false && Array.isArray(pf.checks) && pf.checks.length) {
+        preflight = require('./oxe-preflight.cjs').runPreflight(root, {
+          base: options.baseRef || null,
+          noTriggers: pf.triggersOnPrePush !== true,
+          e2eImpact: pf.e2eImpactOnPrePush === true,
+          cssTargets: false,
+        });
+      }
+    } catch { preflight = null; }
+  }
+  const preflightFailed = Boolean(preflight && !preflight.ok);
+  const failedChecks = preflightFailed ? (preflight.checks || []).filter((c) => !c.ok).map((c) => c.name) : [];
+  const messages = [];
+  if (parked_files.length) messages.push(formatParkedAcceptanceError(parked_files));
+  if (preflightFailed) messages.push(`preflight falhou antes do push (${failedChecks.join(', ')}) — rode \`oxe-cc preflight\` para detalhes`);
   return {
-    ok: parked_files.length === 0,
+    ok: parked_files.length === 0 && !preflightFailed,
     parked_files,
     parked_dirs,
-    message: parked_files.length ? formatParkedAcceptanceError(parked_files) : null,
+    ...(preflight ? { preflight } : {}),
+    message: messages.length ? messages.join('\n') : null,
   };
 }
 

@@ -8917,6 +8917,101 @@ async function main() {
     return;
   }
 
+  // 1.23.0 (OXB-G09, G16, G10, G13, G14): `oxe-cc preflight [--e2e-impact] [--strict-e2e] [--strict-css-targets] [--no-triggers] [--no-css-targets] [--base <ref>] [--dir <dir>] [--json]`
+  if (command === 'preflight') {
+    if (argv.includes('--help') || argv.includes('-h')) {
+      console.log(`\n  oxe-cc preflight [--e2e-impact] [--e2e-impact-only] [--strict-e2e] [--strict-css-targets] [--no-triggers] [--no-css-targets] [--base <ref>] [--dir <pasta>] [--json]
+  Executa guardas baratos (<5s) de preflight.checks, gatilhos de regressão UI/Perf (preflight.triggers),
+  detector estático de impacto em seletores E2E e e2e/acceptance (--e2e-impact) e alerta CSS em src/design/targets/*.json.\n`);
+      return;
+    }
+    const o = { dir: process.cwd(), json: false, base: null, e2eImpact: false, e2eImpactOnly: false, strictE2e: false, strictCssTargets: false, noTriggers: false, cssTargets: true };
+    for (let i = 0; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--e2e-impact') o.e2eImpact = true;
+      else if (a === '--e2e-impact-only') { o.e2eImpact = true; o.e2eImpactOnly = true; }
+      else if (a === '--strict-e2e') { o.e2eImpact = true; o.strictE2e = true; }
+      else if (a === '--strict-css-targets') o.strictCssTargets = true;
+      else if (a === '--no-triggers') o.noTriggers = true;
+      else if (a === '--no-css-targets') o.cssTargets = false;
+      else if (a === '--base' && argv[i + 1]) o.base = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+    }
+    try {
+      const out = require('./lib/oxe-preflight.cjs').runPreflight(o.dir, o);
+      if (o.json) {
+        console.log(JSON.stringify({ oxePreflightSchema: 1, ...out }, null, 2));
+      } else {
+        console.log(`  ${out.ok ? `${green}✓${reset}` : `${red}✗${reset}`} preflight (${out.duration_ms} ms · ${out.changed_files} arquivo(s) vs ${out.base})`);
+        for (const r of [...out.checks, ...out.triggers]) {
+          console.log(`    ${r.ok ? `${green}✓${reset}` : `${red}✗${reset}`} [${r.kind}] ${r.name} (${r.duration_ms} ms)`);
+          if (!r.ok && r.tail) console.log(r.tail.split('\n').map((l) => `        ${l}`).join('\n'));
+        }
+        if (out.e2e_impact) {
+          const ei = out.e2e_impact;
+          if (!ei.affected_specs.length) console.log(`    ${green}✓${reset} e2e-impact: 0 specs afetadas (${ei.specs_scanned} escaneadas)`);
+          else {
+            console.log(`    ${yellow}!${reset} e2e-impact: ${ei.affected_specs.length} spec(s) afetada(s) (${ei.frozen_affected.length} congelada(s)):`);
+            for (const s of ei.affected_specs) console.log(`      - ${s.file}${s.frozen ? ' [CONGELADA]' : ''}: ${s.matched_tokens.map((t) => `${t.kind}:${t.token}`).join(', ')}`);
+          }
+        }
+        if (out.css_targets && out.css_targets.alerts.length) {
+          console.log(`    ${yellow}!${reset} design targets (${out.css_targets.alerts.length} alerta(s) de geometria CSS):`);
+          for (const a of out.css_targets.alerts) console.log(`      - ${a.target_id} (${a.target_file}) ← ${a.css_file}: ${a.selectors.join(', ')}`);
+        }
+      }
+      if (!out.ok) process.exitCode = 1;
+    } catch (err) {
+      console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  // 1.23.0 (OXB-G06): `oxe-cc sync [--base <ref>] [--apply|--dry-run] [--verify "<cmd>"] [--dir <dir>] [--json]`
+  if (command === 'sync') {
+    if (argv.includes('--help') || argv.includes('-h')) {
+      console.log(`\n  oxe-cc sync [--base <ref>] [--apply|--dry-run] [--verify "<comando>"] [--dir <pasta>] [--json]
+  Detecta conflitos puramente sequenciais (migrações SQLite numeradas e ratchets declarados) contra a base
+  e propõe/aplica auto-bump determinístico com revalidação opcional (--verify). Padrão: --dry-run.\n`);
+      return;
+    }
+    const o = { dir: process.cwd(), base: null, apply: false, verify: null, json: false };
+    for (let i = 0; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--apply') o.apply = true;
+      else if (a === '--dry-run') o.apply = false;
+      else if (a === '--base' && argv[i + 1]) o.base = String(argv[++i]);
+      else if (a === '--verify' && argv[i + 1] != null) o.verify = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+    }
+    try {
+      const out = require('./lib/oxe-sync.cjs').syncSequentialResources(o.dir, o);
+      if (o.json) {
+        console.log(JSON.stringify({ oxeSyncSchema: 1, ...out }, null, 2));
+      } else {
+        const total = out.migration_bumps.length + out.ratchet_updates.length;
+        if (!total) console.log(`  ${green}✓${reset} nenhum conflito sequencial (migrações/ratchets) contra ${out.base}`);
+        else {
+          console.log(`  ${out.dry_run ? `${yellow}(simulação)${reset}` : `${green}✓${reset}`} ${out.migration_bumps.length} migração(ões) · ${out.ratchet_updates.length} ratchet(s)`);
+          for (const b of out.migration_bumps) console.log(`    - migração: ${b.from} → ${b.to} (colidiu com ${b.collided_with})`);
+          for (const r of out.ratchet_updates) console.log(`    - ratchet: ${r.file}:${r.line} ${r.from} → ${r.to}`);
+          if (out.dry_run) console.log(`  ${dim}rode com --apply para aplicar os bumps determinísticos${reset}`);
+        }
+        if (out.verify) console.log(`  ${out.verify.ok ? `${green}✓${reset}` : `${red}✗${reset}`} verify: ${out.verify.command}`);
+      }
+      if (!out.ok) process.exitCode = 1;
+    } catch (err) {
+      console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   // 1.23.0 (OXB-G12): `oxe-cc gc-worktrees [--merged] [--base <ref>] [--apply|--dry-run] [--delete-branches] [--dir <pasta>] [--json]`
   if (command === 'gc-worktrees') {
     if (argv.includes('--help') || argv.includes('-h')) {

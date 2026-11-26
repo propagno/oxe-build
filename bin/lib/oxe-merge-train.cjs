@@ -18,6 +18,89 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const TRAIN_RE_GLOBAL = /^\s*merge-train:\s*(.+)$/gim;
+const DEFAULT_INFRA_BACKOFF_MS = Object.freeze([5000, 15000, 30000]);
+
+/**
+ * OXB-G07: Classifies a merge-train failure message to separate transient infrastructure errors
+ * (GitHub API 5xx, runner timeouts, transient network errors, isolated perf-recheck runner spikes)
+ * from real code/test regressions.
+ */
+function classifyTrainFailure(text) {
+  const s = String(text || '');
+  if (/\b(?:HTTP\s*)?50[0234]\b|bad gateway|service unavailable|internal server error|gateway timeout|server error/i.test(s)) {
+    return { transient: true, kind: 'github_5xx', reason: 'erro HTTP 5xx transitório da API do GitHub' };
+  }
+  if (/ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|TLS handshake timeout|socket hang up|wsasend|wsarecv|connection reset/i.test(s)) {
+    return { transient: true, kind: 'network_transient', reason: 'erro transitório de rede/TLS' };
+  }
+  if (/runner.*(?:timed?\s*out|lost communication|shutdown|canceled due to)|job exceeded the maximum execution time/i.test(s)) {
+    return { transient: true, kind: 'runner_timeout', reason: 'timeout/queda transitória do runner de CI' };
+  }
+  if (/perf-recheck/i.test(s) && /(?:spike|variance|runner|noisy|flak|timeout)/i.test(s)) {
+    return { transient: true, kind: 'perf_spike', reason: 'pico isolado de runner no perf-recheck' };
+  }
+  return { transient: false, kind: 'code_failure', reason: 'falha de código/teste (não transitória)' };
+}
+
+function defaultSyncSleep(ms) {
+  if (!ms || ms <= 0) return;
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch { /* fallback no-op */ }
+}
+
+/**
+ * OXB-G07: Retries an operation with exponential backoff ONLY when `classifyTrainFailure` identifies
+ * a transient infra failure (5xx, network, runner timeout). Preserves queue position without manual ejection.
+ */
+function runWithInfraRetry(fn, options = {}) {
+  const delays = Array.isArray(options.backoffMs) ? options.backoffMs : DEFAULT_INFRA_BACKOFF_MS;
+  const maxAttempts = Number.isInteger(options.maxAttempts) && options.maxAttempts > 0 ? options.maxAttempts : (delays.length + 1);
+  const sleep = typeof options.sleep === 'function' ? options.sleep : defaultSyncSleep;
+  const attempts = [];
+  let last = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    last = fn(attempt);
+    const ok = Boolean(last && (last.status === 0 || last.ok === true));
+    if (ok) {
+      return { ok: true, result: last, attempts: attempt, retries: attempts };
+    }
+    const errText = String((last && (last.stderr || last.error || last.stdout)) || '');
+    const cls = classifyTrainFailure(errText);
+    attempts.push({ attempt, kind: cls.kind, transient: cls.transient, detail: errText.trim().slice(0, 200) });
+    if (!cls.transient || attempt >= maxAttempts) {
+      return { ok: false, result: last, attempts: attempt, retries: attempts, classification: cls };
+    }
+    const waitMs = delays[Math.min(attempt - 1, delays.length - 1)] || 0;
+    sleep(waitMs);
+  }
+  return { ok: false, result: last, attempts: maxAttempts, retries: attempts };
+}
+
+/**
+ * OXB-G07: Decides if a PR ejected from the merge train can be automatically re-enqueued without
+ * resyncing/losing position because its ejection reason was purely transient infra.
+ */
+function retryIfTransient(ctx) {
+  const item = ctx && ctx.item ? ctx.item : {};
+  const cls = classifyTrainFailure(item.note || ctx.errorText || '');
+  if (!cls.transient) {
+    return { retried: false, kept_position: false, classification: cls };
+  }
+  const spawn = ctx.spawn || spawnSync;
+  const run = (cmd, args) => spawn(cmd, args, { cwd: ctx.root, encoding: 'utf8', windowsHide: true });
+  const relabel = runWithInfraRetry(
+    () => run('gh', ['pr', 'edit', String(item.url || item.pr || item.branch), '--remove-label', 'merge-train:removed', '--add-label', 'merge-train']),
+    { backoffMs: ctx.backoffMs, sleep: ctx.sleep }
+  );
+  return {
+    retried: relabel.ok,
+    kept_position: relabel.ok,
+    attempts: relabel.attempts,
+    retries: relabel.retries,
+    classification: cls,
+  };
+}
 
 /** The train state from labels and the latest merge-train comment. */
 function trainState(pr) {
@@ -178,16 +261,17 @@ function resync(ctx) {
       steps.push({ step: 'verify', ok: v.status === 0 });
       if (v.status !== 0) return { steps, ok: false, why: 'verify vermelho depois do merge da base — nada foi enviado' };
     }
-    const p = run('git', ['push', 'origin', `HEAD:${item.branch}`], ws);
-    steps.push({ step: 'push (sem force)', ok: p.status === 0 });
-    if (p.status !== 0) return { steps, ok: false, why: String(p.stderr).trim().slice(0, 200) };
-    const l = run('gh', ['pr', 'edit', String(item.url || item.branch), '--remove-label', 'merge-train:removed', '--add-label', 'merge-train'], ctx.root);
-    steps.push({ step: 'relabel', ok: l.status === 0 });
-    return { steps, ok: l.status === 0 };
+    const retryOpts = { backoffMs: ctx.backoffMs, sleep: ctx.sleep };
+    const pWrap = runWithInfraRetry(() => run('git', ['push', 'origin', `HEAD:${item.branch}`], ws), retryOpts);
+    steps.push({ step: 'push (sem force)', ok: pWrap.ok, attempts: pWrap.attempts });
+    if (!pWrap.ok) return { steps, ok: false, why: String((pWrap.result && pWrap.result.stderr) || '').trim().slice(0, 200), classification: pWrap.classification };
+    const lWrap = runWithInfraRetry(() => run('gh', ['pr', 'edit', String(item.url || item.branch), '--remove-label', 'merge-train:removed', '--add-label', 'merge-train'], ctx.root), retryOpts);
+    steps.push({ step: 'relabel', ok: lWrap.ok, attempts: lWrap.attempts });
+    return { steps, ok: lWrap.ok };
   } finally {
     run('git', ['worktree', 'remove', ws], ctx.root);
     if (fs.existsSync(ws)) { run('git', ['worktree', 'prune'], ctx.root); }
   }
 }
 
-module.exports = { trainState, promotedTasks, status, resync };
+module.exports = { trainState, promotedTasks, status, resync, classifyTrainFailure, runWithInfraRetry, retryIfTransient, DEFAULT_INFRA_BACKOFF_MS };

@@ -15,6 +15,7 @@ const { spawnSync } = require('child_process');
 
 const MARKER = '<!-- oxe-ci-verdict -->';
 const DEFAULT_TRAIN = ['na-fila', 'no-batch', 'fix-main'];
+const DEFAULT_REQUIRED_STATUSES = ['marca/conformidade'];
 
 function gh(spawn, cwd, args, input) {
   const r = spawn('gh', args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 60_000, maxBuffer: 16 * 1024 * 1024, ...(input != null ? { input } : {}) });
@@ -22,7 +23,60 @@ function gh(spawn, cwd, args, input) {
   return String(r.stdout || '');
 }
 
-const FIELDS = 'number,title,headRefName,url,labels,isDraft,state';
+const FIELDS = 'number,title,headRefName,headRefOid,url,labels,isDraft,state';
+
+/**
+ * OXB-G14: Evaluates GitHub commit statuses (specifically `marca/conformidade` or configured `requiredStatuses`)
+ * so a green Actions job never masks an enforced brand-conformance divergence posted as a commit status.
+ */
+function inspectRequiredCommitStatuses(cwd, headSha, options = {}) {
+  const required = Array.isArray(options.requiredStatuses) && options.requiredStatuses.length
+    ? options.requiredStatuses.map((s) => String(s).toLowerCase())
+    : DEFAULT_REQUIRED_STATUSES;
+  if (!headSha) return { ok: true, checked: [], failures: [] };
+  const spawn = options.spawn || spawnSync;
+  let statuses = [];
+  if (Array.isArray(options.commitStatuses)) {
+    statuses = options.commitStatuses;
+  } else {
+    try {
+      const raw = gh(spawn, cwd, ['api', `repos/{owner}/{repo}/commits/${headSha}/status`]);
+      const parsed = JSON.parse(raw);
+      if (parsed && Array.isArray(parsed.statuses)) statuses = parsed.statuses;
+    } catch {
+      return { ok: true, checked: [], failures: [] };
+    }
+  }
+  // Keep latest status per context
+  const latestByCtx = new Map();
+  for (const st of statuses) {
+    if (!st || !st.context) continue;
+    const key = String(st.context).toLowerCase();
+    if (!latestByCtx.has(key)) latestByCtx.set(key, st);
+  }
+  const checked = [];
+  const failures = [];
+  for (const reqCtx of required) {
+    const st = latestByCtx.get(reqCtx);
+    if (!st) continue;
+    const state = String(st.state || '').toLowerCase();
+    const desc = String(st.description || '');
+    const divMatch = /(\d+)\s*(?:enforced\s+)?diverg[êe]nc/i.exec(desc) || /enforced[^0-9]{0,20}(\d+)/i.exec(desc);
+    const enforcedDivergences = divMatch ? Number(divMatch[1]) : 0;
+    const failed = state === 'failure' || state === 'error' || enforcedDivergences > 0;
+    const entry = {
+      context: st.context,
+      state,
+      description: desc,
+      enforced_divergences: enforcedDivergences,
+      target_url: st.target_url || null,
+      ok: !failed,
+    };
+    checked.push(entry);
+    if (failed) failures.push(entry);
+  }
+  return { ok: failures.length === 0, checked, failures };
+}
 
 function prState(spawn, cwd) {
   const cache = new Map();
@@ -57,9 +111,30 @@ function status(cwd, sel, options = {}) {
   const out = prs.map((p) => {
     const labels = (p.labels || []).map((l) => l.name || l);
     const merged = String(p.state || '').toUpperCase() === 'MERGED';
-    const row = { pr: p.number, title: p.title, url: p.url, branch: p.headRefName, draft: Boolean(p.isDraft), state: p.state || 'OPEN', labels, train: labels.filter((l) => trainLabels.includes(l)) };
+    const row = { pr: p.number, title: p.title, url: p.url, branch: p.headRefName, head_sha: p.headRefOid || null, draft: Boolean(p.isDraft), state: p.state || 'OPEN', labels, train: labels.filter((l) => trainLabels.includes(l)) };
     if (!merged && String(p.state || 'OPEN').toUpperCase() !== 'CLOSED') {
       try { row.ci = kf.classifyPr(p.number, known, { spawn, cwd, itemOpen: options.itemOpen || (() => null) }); } catch { row.ci = { state: 'unknown', failed: [] }; }
+      // OXB-G14: inspect explicit commit statuses (e.g. `marca/conformidade`) so a green job never masks enforced divergences
+      if (p.headRefOid || Array.isArray(options.commitStatuses)) {
+        const cs = inspectRequiredCommitStatuses(cwd, p.headRefOid || 'HEAD', {
+          spawn,
+          requiredStatuses: options.requiredStatuses,
+          commitStatuses: options.commitStatuses,
+        });
+        if (cs.checked.length) row.commit_statuses = cs;
+        if (!cs.ok) {
+          row.ci = row.ci || { state: 'regression', failed: [] };
+          row.ci.state = 'regression';
+          row.ci.failed = [
+            ...(Array.isArray(row.ci.failed) ? row.ci.failed : []),
+            ...cs.failures.map((f) => ({
+              run: f.target_url || 'commit-status',
+              checks: [`${f.context} (${f.state}${f.enforced_divergences ? `: ${f.enforced_divergences} enforced divergence(s)` : ''}${f.description ? ` — ${f.description}` : ''})`],
+              known: [],
+            })),
+          ];
+        }
+      }
     }
     return row;
   });
@@ -126,4 +201,4 @@ function publishVerdict(cwd, row, options = {}) {
   return { pr: row.pr, updated: Boolean(mine), created: !mine };
 }
 
-module.exports = { status, selectPrs, prState, verdictComment, publishVerdict, parsePaginatedJsonArray, MARKER, DEFAULT_TRAIN, VERDICT };
+module.exports = { status, selectPrs, prState, inspectRequiredCommitStatuses, verdictComment, publishVerdict, parsePaginatedJsonArray, MARKER, DEFAULT_TRAIN, DEFAULT_REQUIRED_STATUSES, VERDICT };
