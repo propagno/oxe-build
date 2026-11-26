@@ -81,12 +81,19 @@ function splitSegments(command) {
  * A task's verify with its vitest segments merged per key (first occurrence keeps its place). Same meaning: every file
  * must pass; one process per runner+flags instead of one per file.
  */
-function batchVerifyCommand(command) {
+function batchVerifyCommand(command, options = {}) {
   const segments = splitSegments(command);
   if (segments.length < 2) return command;
+  const noBatch = Array.isArray(options && options.noBatchPatterns)
+    ? options.noBatchPatterns.map((p) => String(p || '').toLowerCase()).filter(Boolean)
+    : [];
   const groups = new Map();
   const order = [];
   for (const seg of segments) {
+    if (noBatch.length && noBatch.some((p) => seg.toLowerCase().includes(p))) {
+      order.push({ raw: seg });
+      continue;
+    }
     const v = parseVitest(seg);
     if (!v) { order.push({ raw: seg }); continue; }
     if (!groups.has(v.key)) { groups.set(v.key, { ...v, files: [] }); order.push({ key: v.key }); }
@@ -98,10 +105,10 @@ function batchVerifyCommand(command) {
 }
 
 /** Applies batchVerifyCommand to each pending task of a parsed plan (graph and verify suite). */
-function batchPlanVerifies(parsedPlan) {
+function batchPlanVerifies(parsedPlan, options = {}) {
   for (const task of (parsedPlan && parsedPlan.tasks) || []) {
     if (task.done || !task.verifyCommand) continue;
-    const batched = batchVerifyCommand(task.verifyCommand);
+    const batched = batchVerifyCommand(task.verifyCommand, options);
     if (batched !== task.verifyCommand) {
       task.meta = { ...(task.meta || {}), verify_batched_from: task.verifyCommand };
       task.verifyCommand = batched;

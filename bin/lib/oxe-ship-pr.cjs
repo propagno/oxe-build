@@ -11,11 +11,31 @@
  * gh only (the user's login); `spawn` injectable for tests.
  */
 
+const fs = require('fs');
+const path = require('path');
 const { spawnSync } = require('child_process');
+const presets = require('./oxe-presets.cjs');
 
 const MARKER = '<!-- oxe-ci-verdict -->';
 const DEFAULT_TRAIN = ['na-fila', 'no-batch', 'fix-main'];
 const DEFAULT_REQUIRED_STATUSES = ['marca/conformidade'];
+
+function resolveRequiredCommitStatuses(cwd, options = {}) {
+  if (Array.isArray(options.requiredStatuses)) {
+    return options.requiredStatuses.map((s) => String(s).toLowerCase()).filter(Boolean);
+  }
+  const hasConfigFile = Boolean(
+    cwd && (fs.existsSync(path.join(cwd, 'oxe.config.json')) || fs.existsSync(path.join(cwd, '.oxe', 'config.json')))
+  );
+  const presetCfg = cwd ? presets.resolvePresetConfig(cwd) : null;
+  if (presetCfg && Array.isArray(presetCfg.ship && presetCfg.ship.requiredCommitStatuses) && presetCfg.ship.requiredCommitStatuses.length) {
+    return presetCfg.ship.requiredCommitStatuses.map((s) => String(s).toLowerCase()).filter(Boolean);
+  }
+  if (presetCfg && presetCfg.hasExplicitPreset) return [];
+  if (cwd && fs.existsSync(path.join(cwd, 'src', 'design', 'targets'))) return DEFAULT_REQUIRED_STATUSES;
+  if (hasConfigFile) return [];
+  return Array.isArray(options.commitStatuses) ? DEFAULT_REQUIRED_STATUSES : [];
+}
 
 function gh(spawn, cwd, args, input) {
   const r = spawn('gh', args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 60_000, maxBuffer: 16 * 1024 * 1024, ...(input != null ? { input } : {}) });
@@ -30,10 +50,8 @@ const FIELDS = 'number,title,headRefName,headRefOid,url,labels,isDraft,state';
  * so a green Actions job never masks an enforced brand-conformance divergence posted as a commit status.
  */
 function inspectRequiredCommitStatuses(cwd, headSha, options = {}) {
-  const required = Array.isArray(options.requiredStatuses) && options.requiredStatuses.length
-    ? options.requiredStatuses.map((s) => String(s).toLowerCase())
-    : DEFAULT_REQUIRED_STATUSES;
-  if (!headSha) return { ok: true, checked: [], failures: [] };
+  const required = resolveRequiredCommitStatuses(cwd, options);
+  if (!headSha || !required.length) return { ok: true, checked: [], failures: [] };
   const spawn = options.spawn || spawnSync;
   let statuses = [];
   if (Array.isArray(options.commitStatuses)) {

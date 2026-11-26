@@ -3806,10 +3806,19 @@ function uiCardGaps(md, collected = {}, options = {}) {
   const hasMarca = labels.includes('area-marca');
   const hasVisualLabel = labels.some((l) => /^(?:area-marca|visual|polish|ui|design)$/i.test(l));
   if (collected.kind === 'epic' && !hasMarca) return { isUi: false, gaps: [], epic_exempt: true };
-  if (!hasMarca && !hasVisualLabel && options && options.projectRoot) {
-    const uiDirs = ['src/ui', 'src/styles', 'src/design', 'src/renderer', 'src/components', 'mobile/android'];
-    const hasUiTree = uiDirs.some((d) => fs.existsSync(path.join(options.projectRoot, d)));
-    if (!hasUiTree) return { isUi: false, gaps: [], no_ui_tree_exempt: true };
+  let brandStrict = false;
+  if (options && options.projectRoot) {
+    const presetCfg = require('./oxe-presets.cjs').resolvePresetConfig(options.projectRoot);
+    const hasDesignTargets = fs.existsSync(path.join(options.projectRoot, 'src', 'design', 'targets'));
+    brandStrict = Boolean(presetCfg.ui && presetCfg.ui.brandGate);
+    if (!hasMarca && !hasDesignTargets && !brandStrict) {
+      return { isUi: false, gaps: [], brand_gate_disabled_exempt: true };
+    }
+    if (!hasMarca && !hasVisualLabel && !brandStrict) {
+      const uiDirs = ['src/ui', 'src/styles', 'src/design', 'src/renderer', 'src/components', 'mobile/android'];
+      const hasUiTree = uiDirs.some((d) => fs.existsSync(path.join(options.projectRoot, d)));
+      if (!hasUiTree) return { isUi: false, gaps: [], no_ui_tree_exempt: true };
+    }
   }
   const hasExplicitNonUiLabel = !hasMarca && labels.some((l) => NON_UI_DOMAIN_LABEL_RE.test(l));
   const crit = refineLibCriteria(text);
@@ -3832,7 +3841,7 @@ function uiCardGaps(md, collected = {}, options = {}) {
   }
   // OXB-C28-6 (OXE-332/333): a card whose only UI path is src/components/ (a behavior card: a handler, a state) is not a
   // geometry card unless it says something visual — a measure, a token, a style file, a theme/density, a visual label
-  if (!hasMarca && !hasVisualLabel && !/\b(src\/(renderer|ui|styles|design)\/|mobile\/android\/[\w/.-]*\/ui\/)/.test(text)) {
+  if (!hasMarca && !brandStrict && !hasVisualLabel && !/\b(src\/(renderer|ui|styles|design)\/|mobile\/android\/[\w/.-]*\/ui\/)/.test(text)) {
     const VISUAL_RE = /\b\d+(?:[.,]\d+)?\s*(?:px|dp|sp|rem|em)\b|var\(--[\w-]+\)|\.(?:css|scss|less)\b|\b(?:raio|altura|largura|fonte|espa[cç]amento|padding|margem|margin|borda|sombra|temas?|densidades?|alinhamento|geometria|tokens?|cores?|contraste|tamanho)\b|\bBRD-\d+\b/i;
     if (!VISUAL_RE.test(text)) return { isUi: false, gaps: [], behavior_component_exempt: true };
   }
@@ -6314,8 +6323,17 @@ function readProtectedAcceptancePaths(projectRoot, activeSession) {
 function parsePlanArtifact(parsers, planText, planPath) {
   // OXB-049: a reference anchor with action copy becomes part of its task's verify (copy matches the source).
   const plan = require('./oxe-anchor-copy.cjs').attachAnchorCopyChecks(require('./oxe-plan-json.cjs').readPlanArtifact(planPath, planText, parsers.parsePlan), planPath);
-  // OXB-094: a task's vitest segments with the same runner + flags run as one process (same meaning: all must pass).
-  return require('./oxe-vitest-batch.cjs').batchPlanVerifies(plan);
+  // OXB-094 + OXB-221-05: honor preset/config verify.noBatchPatterns instead of hardcoded runner exclusions.
+  let noBatchPatterns = [];
+  if (planPath) {
+    const dir = path.dirname(path.resolve(planPath));
+    const rootCandidate = path.basename(dir) === '.oxe' ? path.dirname(dir) : dir;
+    try {
+      const presetCfg = require('./oxe-presets.cjs').resolvePresetConfig(rootCandidate);
+      noBatchPatterns = (presetCfg.verify && presetCfg.verify.noBatchPatterns) || [];
+    } catch { /* fallback empty */ }
+  }
+  return require('./oxe-vitest-batch.cjs').batchPlanVerifies(plan, { noBatchPatterns });
 }
 
 /**
