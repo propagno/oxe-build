@@ -6,7 +6,8 @@ Copie `oxe/templates/config.template.json` para **`.oxe/config.json`** no seu pr
 
 | Chave | Tipo | Significado |
 |-------|------|-------------|
-| `profile` | string | Profile de execução: `balanced` (padrão) \| `strict` \| `fast` \| `legacy`. Expande automaticamente outras keys — keys explícitas prevalecem. Ver tabela abaixo. |
+| `profile` | string | Profile de execução: `balanced` (padrão) \| `strict` \| `fast` \| `legacy` \| `lean`. Expande automaticamente outras keys — keys explícitas prevalecem. Ver tabela abaixo. |
+| `preset` / `presets` | string \| string[] | Preset(s) declarativo(s) de domínio (`cli`, `web`, `desktop-mobile`, `brand-strict`) resolvidos por `bin/lib/oxe-presets.cjs`. Chaves explícitas em `oxe.config.json`/`.oxe/config.json` sempre prevalecem sobre o preset. |
 | `discuss_before_plan` | boolean | Se `true`, o fluxo recomenda **`oxe:discuss`** entre spec e plan. |
 | `verification_depth` | string | Profundidade da verificação: `standard` (padrão) \| `thorough` (ativa Camada 5 — validate-gaps automático) \| `quick` (skip camadas 3–4 e UAT). |
 | `plan_confidence_threshold` | number | Limiar mínimo de confiança para o `execute` aceitar um `PLAN.md`. Padrão canónico: `90`, com gate estrito (`Confiança` precisa ser **maior que** o limiar). Valores menores que 90 não reduzem esse gate. |
