@@ -259,7 +259,8 @@ function check(root, options = {}) {
   // but in the mirror counts as recorded
   let mirrorDir = null;
   // never with a mocked spawn (a test of the classification): the mirror lookup runs real git
-  if (!options.spawn) { try { mirrorDir = require('./oxe-quick.cjs').mirrorDirOf(root); } catch { mirrorDir = null; } }
+  // OXB-G01: strictly read-only — never mkdirSync or backfill into .git/oxe/quick during check-origin
+  if (!options.spawn) { try { mirrorDir = require('./oxe-quick.cjs').mirrorDirOf(root, { readOnly: true }); } catch { mirrorDir = null; } }
   const stores = [quickDir, mirrorDir].filter((d) => d && fs.existsSync(d));
   const quickExists = stores.length ? (id) => stores.some((d) => fs.existsSync(path.join(d, `${id}.json`))) : () => null;
   // the start of the record stores this checkout sees: the earliest started_at among their records

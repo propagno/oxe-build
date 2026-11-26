@@ -50,17 +50,29 @@ function isConfinedPath(root, relPath) {
 function parallelConfig(projectRoot, options = {}) {
   const config = readMergedConfig(projectRoot);
   const p = config.parallel && typeof config.parallel === 'object' ? config.parallel : {};
+  const wtLink = require('./oxe-worktree-deps.cjs').worktreeLinkConfig(projectRoot);
   const envMin = Number(process.env.OXE_EXECUTOR_MIN_FREE_MB) || 0;
   const rawMax = Number(options.maxParallel) || Number(p.max) || 2;
   const rawMin = Number(p.min_free_mb) || envMin || 0;
+  const strategy = typeof config.deps_strategy === 'string'
+    ? config.deps_strategy
+    : (wtLink.enabled ? 'link' : null);
+  const from = typeof config.deps_link_from === 'string' && config.deps_link_from.trim()
+    ? path.resolve(projectRoot, config.deps_link_from.trim())
+    : wtLink.from;
   return {
     projectRoot,
     maxParallel: Math.max(1, Number.isFinite(rawMax) ? Math.floor(rawMax) : 2),
     minFreeMb: Number.isFinite(rawMin) && rawMin > 0 ? rawMin : 0,
     deps: {
-      strategy: typeof config.deps_strategy === 'string' ? config.deps_strategy : null,
-      from: typeof config.deps_link_from === 'string' && config.deps_link_from.trim() ? path.resolve(projectRoot, config.deps_link_from.trim()) : null,
-      protected: (Array.isArray(config.deps_protected) ? config.deps_protected : []).map((p2) => path.resolve(projectRoot, String(p2))),
+      strategy,
+      from,
+      validateLockfile: wtLink.validateLockfile,
+      validatePackages: wtLink.validatePackages,
+      protected: [...new Set([
+        ...(Array.isArray(config.deps_protected) ? config.deps_protected : []).map((p2) => path.resolve(projectRoot, String(p2))),
+        ...wtLink.protected,
+      ])],
     },
   };
 }
@@ -119,14 +131,14 @@ function parallelPreconditions(projectRoot, cfg, input) {
   return errors;
 }
 
-function childEnv() {
+function childEnv(projectRoot = null) {
   try {
     const runtime = require('../../lib/runtime/index.js');
-    if (typeof runtime.childProcessEnv === 'function') return runtime.childProcessEnv(process.env);
+    if (typeof runtime.childProcessEnv === 'function') {
+      return require('./oxe-env-sanitize.cjs').sanitizeEnv(runtime.childProcessEnv(process.env), projectRoot).env;
+    }
   } catch { /* fallback */ }
-  const env = { ...process.env };
-  delete env.NODE_TEST_CONTEXT;
-  return env;
+  return require('./oxe-env-sanitize.cjs').sanitizeEnv(process.env, projectRoot).env;
 }
 
 /** Prepares a fresh worktree's dependencies. Throws (the lease is disposed) when the result is not usable. */
@@ -137,6 +149,15 @@ function prepareDeps(cfg, root) {
   if (!strategy || strategy === 'none') return;
   const target = path.join(root, 'node_modules');
   if (strategy === 'link') {
+    // OXB-G03 + OXB-G15: validate SHA-256 package-lock.json hash & package integrity before creating the junction.
+    const wtDeps = require('./oxe-worktree-deps.cjs');
+    const check = wtDeps.validateNodeModulesJunction(cfg.deps.from, root, {
+      validateLockfile: cfg.deps.validateLockfile !== false,
+      validatePackages: cfg.deps.validatePackages !== false,
+    });
+    if (!check.ok) {
+      throw new Error(`deps_strategy link bloqueado (OXB-G15): ${check.errors.join('; ')}`);
+    }
     // A directory junction on Windows, a dir symlink elsewhere; removed by unlinkExternalLinks before any dispose.
     try {
       const existing = fs.lstatSync(target);
@@ -150,7 +171,7 @@ function prepareDeps(cfg, root) {
     return;
   }
   if (strategy === 'ci') {
-    const res = spawnSync('npm ci --no-audit --no-fund', { cwd: root, shell: true, encoding: 'utf8', windowsHide: true, env: childEnv(), timeout: 900_000, maxBuffer: 8 * 1024 * 1024 });
+    const res = spawnSync('npm ci --no-audit --no-fund', { cwd: root, shell: true, encoding: 'utf8', windowsHide: true, env: childEnv(cfg.projectRoot || root), timeout: 900_000, maxBuffer: 8 * 1024 * 1024 });
     if (res.status !== 0) throw new Error(`deps_strategy ci: npm ci falhou na worktree: ${String(res.stderr || res.stdout || '').trim().split(/\r?\n/).slice(-3).join(' · ')}`);
     // OXB-039: present after the install, and the project's native check.
     const env = require('./oxe-project-env.cjs');

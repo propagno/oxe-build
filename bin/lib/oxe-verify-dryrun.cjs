@@ -16,17 +16,8 @@ const path = require('path');
 
 const MISSING_TARGET_RE = /cannot find module|modulenotfounderror|no module named|failed to resolve import|does the file exist|enoent|no such file|could not resolve|module not found|não encontrad|cannot open file|file not found|not found/i;
 
-function scrubbedEnv(env = process.env) {
-  const out = {};
-  for (const [key, value] of Object.entries(env)) {
-    if (/^OXESPACE_/i.test(key)) continue;
-    if (/TOKEN|SECRET|PASSWORD|API_KEY|CREDENTIAL|PRIVATE_KEY/i.test(key)) continue;
-    // Inherited from a parent `node --test`, it makes a child `node --test` speak the runner protocol and exit 0:
-    // a red verify read as already green.
-    if (key === 'NODE_TEST_CONTEXT') continue;
-    out[key] = value;
-  }
-  return out;
+function scrubbedEnv(env = process.env, projectRoot = null) {
+  return require('./oxe-env-sanitize.cjs').sanitizeEnv(env, projectRoot, { stripSecrets: true }).env;
 }
 
 /** OXB-152: same Windows mapping as the runtime (gradlew/mvnw → .bat/.cmd) and a UTF-8 console for readable errors. */
@@ -44,7 +35,7 @@ function runCommand(command, cwd, timeoutMs) {
     timeout: timeoutMs,
     windowsHide: true,
     windowsVerbatimArguments: isWin,
-    env: scrubbedEnv(),
+    env: scrubbedEnv(process.env, cwd),
     maxBuffer: 8 * 1024 * 1024,
   });
   return {

@@ -7571,6 +7571,13 @@ async function main() {
     argv[0] === 'report' ||
     argv[0] === 'change' ||
     argv[0] === 'session' ||
+    argv[0] === 'gc-worktrees' ||
+    argv[0] === 'worktree' ||
+    argv[0] === 'preflight' ||
+    argv[0] === 'sync' ||
+    argv[0] === 'acceptance-audit' ||
+    argv[0] === 'release-readiness' ||
+    argv[0] === 'release-finalize' ||
     argv[0] === 'install'
   ) {
     command = argv[0];
@@ -7580,7 +7587,7 @@ async function main() {
   } else if (argv[0] && /^[a-z][a-z-]*$/.test(argv[0]) && !fs.existsSync(argv[0])) {
     // 1.21.2 (OXB-G10): a word that is no command used to fall into the install with exit 0 — "oxe-cc quick --help"
     // printed the install help. It is an error now, with the closest command or the workflow it names.
-    const KNOWN = ['doctor', 'status', 'init-oxe', 'context', 'dashboard', 'events', 'map', 'runtime', 'azure', 'uninstall', 'update', 'capabilities', 'plugins', 'plan', 'spec', 'program', 'phase', 'policy', 'decision', 'prd', 'grill', 'ship', 'trace', 'rfc', 'alm', 'review', 'docs', 'eval', 'design', 'release', 'customize', 'state', 'guards', 'verify', 'install', 'member', 'queue', 'quick', 'workflow', 'report', 'change', 'session'];
+    const KNOWN = ['doctor', 'status', 'init-oxe', 'context', 'dashboard', 'events', 'map', 'runtime', 'azure', 'uninstall', 'update', 'capabilities', 'plugins', 'plan', 'spec', 'program', 'phase', 'policy', 'decision', 'prd', 'grill', 'ship', 'trace', 'rfc', 'alm', 'review', 'docs', 'eval', 'design', 'release', 'customize', 'state', 'guards', 'verify', 'install', 'member', 'queue', 'quick', 'workflow', 'report', 'change', 'session', 'gc-worktrees', 'worktree', 'preflight', 'sync', 'acceptance-audit', 'release-readiness', 'release-finalize'];
     const WORKFLOWS = { execute: '/oxe-execute (ou oxe-cc runtime execute)', discuss: '/oxe-discuss', scan: '/oxe-scan', debug: '/oxe-execute --debug', retro: '/oxe-retro', next: '/oxe-next (ou oxe-cc status)', oxe: '/oxe' };
     const word = argv[0];
     const dist = (a, b) => { const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]); for (let j = 1; j <= b.length; j += 1) d[0][j] = j; for (let i = 1; i <= a.length; i += 1) for (let j = 1; j <= b.length; j += 1) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); return d[a.length][b.length]; };
@@ -8907,6 +8914,90 @@ async function main() {
       }
     }
     console.log(file);
+    return;
+  }
+
+  // 1.23.0 (OXB-G12): `oxe-cc gc-worktrees [--merged] [--base <ref>] [--apply|--dry-run] [--delete-branches] [--dir <pasta>] [--json]`
+  if (command === 'gc-worktrees') {
+    if (argv.includes('--help') || argv.includes('-h')) {
+      console.log(`\n  oxe-cc gc-worktrees [--merged] [--base <ref>] [--apply|--dry-run] [--delete-branches] [--dir <pasta>] [--json]
+  Remove com segurança worktrees secundárias limpas já mergeadas em origin/main (ou --base) e executa git worktree prune.
+  Padrão: --dry-run (somente leitura); passe --apply para remover.\n`);
+      return;
+    }
+    const o = { dir: process.cwd(), json: false, mergedOnly: true, apply: false, deleteBranches: false, base: null };
+    for (let i = 0; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--merged') o.mergedOnly = true;
+      else if (a === '--all') o.mergedOnly = false;
+      else if (a === '--apply') o.apply = true;
+      else if (a === '--dry-run') o.apply = false;
+      else if (a === '--delete-branches') o.deleteBranches = true;
+      else if (a === '--base' && argv[i + 1]) o.base = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+    }
+    try {
+      const out = require('./lib/oxe-worktree-gc.cjs').gcWorktrees(o.dir, o);
+      if (o.json) { console.log(JSON.stringify({ oxeGcWorktreesSchema: 1, ...out }, null, 2)); return; }
+      if (!out.candidates.length) {
+        console.log(`  ${green}✓${reset} nenhuma worktree elegível para limpeza (base: ${out.base || '—'})`);
+      } else if (out.dry_run) {
+        console.log(`  ${yellow}(simulação)${reset} ${out.candidates.length} worktree(s) limpa(s) mergeada(s) em ${out.base}:`);
+        for (const c of out.candidates) console.log(`    - ${c.path} [${c.branch || 'detached'}]${c.prunable ? ' (prunable)' : ''}`);
+        console.log(`  ${dim}rode com --apply para remover e executar git worktree prune${reset}`);
+      } else {
+        console.log(`  ${green}✓${reset} ${out.removed.length} worktree(s) removida(s) · prune=${out.pruned}`);
+        for (const c of out.removed) console.log(`    - ${c.path} [${c.branch || 'detached'}]`);
+      }
+      if (out.skipped.length) {
+        console.log(`  ${dim}mantidas (${out.skipped.length}): ${out.skipped.map((s) => `${path.basename(s.path)} (${s.reason})`).join(', ')}${reset}`);
+      }
+    } catch (err) {
+      console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  // 1.23.0 (OXB-G03 + OXB-G15): `oxe-cc worktree link-node-modules [--from <dir>] [--dir <dir>] [--check-only] [--force] [--json]`
+  if (command === 'worktree') {
+    const sub = argv[0] && !argv[0].startsWith('-') ? argv[0] : 'help';
+    if (sub === 'help' || argv.includes('--help') || argv.includes('-h')) {
+      console.log(`\n  oxe-cc worktree link-node-modules [--from <origem>] [--dir <destino>] [--check-only] [--force] [--json]
+  Cria junction/symlink seguro de node_modules validando SHA-256 do package-lock.json e integridade dos pacotes (OXB-G03 / OXB-G15).\n`);
+      return;
+    }
+    if (sub !== 'link-node-modules') {
+      console.error(`${red}Subcomando desconhecido:${reset} worktree ${sub} (use link-node-modules)`);
+      process.exitCode = 1;
+      return;
+    }
+    const o = { dir: process.cwd(), from: null, checkOnly: false, force: false, json: false };
+    for (let i = 1; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--check-only') o.checkOnly = true;
+      else if (a === '--force') o.force = true;
+      else if (a === '--from' && argv[i + 1]) o.from = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+    }
+    const res = require('./lib/oxe-worktree-deps.cjs').linkNodeModules(o.dir, o);
+    if (o.json) {
+      console.log(JSON.stringify({ oxeWorktreeDepsSchema: 1, ...res }, null, 2));
+    } else if (!res.ok) {
+      console.error(`  ${red}✗${reset} node_modules junction recusada:`);
+      for (const e of res.errors || []) console.error(`    - ${e}`);
+    } else if (res.check_only) {
+      console.log(`  ${green}✓${reset} lockfile e pacotes compatíveis (${res.checked_packages || 0} pacotes verificados)`);
+    } else if (res.skipped) {
+      console.log(`  ${dim}ignorado (${res.skipped})${reset}`);
+    } else {
+      console.log(`  ${green}✓${reset} ${res.link_type} criado: ${res.link_path} → ${res.source}/node_modules (${res.checked_packages || 0} pacotes validados)`);
+    }
+    if (!res.ok) process.exitCode = 1;
     return;
   }
 

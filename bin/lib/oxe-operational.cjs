@@ -5695,16 +5695,13 @@ function writeRecoverySummaryMarkdown(projectRoot, activeSession, runState, reco
   return summaryPath;
 }
 
-/** 1.21.1 (OXB-042): the project's env policy for every child process of this execute/verify. */
+/** 1.21.1 (OXB-042) + 1.23.0 (OXB-G02): the project's env policy for every child process of this execute/verify. */
 function applyChildEnvPolicy(projectRoot) {
   const runtime = loadRuntimeModule();
   if (!runtime || typeof runtime.configureChildEnv !== 'function') return;
   const cfg = readProjectConfig(projectRoot);
-  runtime.configureChildEnv({
-    // OXB-118: `{ kind: "env", strip: "OXESPACE_" }` policy rules strip the prefix from every child process.
-    scrub: [...(Array.isArray(cfg.env_scrub) ? cfg.env_scrub : []), ...require('./oxe-policy-rules.cjs').envStripPatterns(cfg.policy_rules)],
-    allow: Array.isArray(cfg.env_allow) ? cfg.env_allow : [],
-  });
+  const policy = require('./oxe-env-sanitize.cjs').toChildEnvPolicy(cfg);
+  runtime.configureChildEnv(policy);
 }
 
 async function runRuntimeVerify(projectRoot, activeSession, options = {}) {

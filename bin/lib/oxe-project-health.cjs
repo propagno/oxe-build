@@ -48,6 +48,12 @@ const ALLOWED_CONFIG_KEYS = [
   'external_dependency_check',
   'env_scrub',
   'env_allow',
+  // 1.23.0 (OXB-G02, G06, G08, G09, G14, G16, G17)
+  'envSanitize',
+  'stripEnvPrefixes',
+  'preflight',
+  'sync',
+  'release',
   'isolate_failed_attempts',
   'repo_rules',
   'commit_convention',

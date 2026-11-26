@@ -30,39 +30,55 @@ function newId(now = new Date()) {
  * checkout; a record missing locally is read — and restored — from there.
  */
 const mirrorCache = new Map();
-function mirrorDirOf(root) {
+const mirrorBackfilled = new Set();
+/**
+ * Resolves `<git-common-dir>/oxe/quick`.
+ * OXB-G01: when `options.readOnly` is true (e.g. `ship check-origin`), strictly read-only —
+ * NEVER calls `fs.mkdirSync` or copies/writes any file inside `.git/`.
+ */
+function mirrorDirOf(root, options = {}) {
+  const readOnly = Boolean(options && options.readOnly);
   const key = path.resolve(root);
-  if (mirrorCache.has(key)) return mirrorCache.get(key);
-  let dir = null;
-  try {
-    const r = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: root, encoding: 'utf8', windowsHide: true });
-    const out = r.status === 0 ? String(r.stdout || '').trim() : '';
-    if (out) dir = path.join(path.resolve(root, out), 'oxe', 'quick');
-  } catch { dir = null; }
-  if (!dir) return null; // not cached: a repo initialised later is found next time
-  mirrorCache.set(key, dir);
-  // cross-review 15/11: the records made BEFORE the mirror existed go in once (backfill), or a sibling worktree that
-  // only sees the mirror would read them as lost
-  try {
-    fs.mkdirSync(dir, { recursive: true });
-    for (const f of fs.readdirSync(dirOf(root))) {
-      if (!ID_RE.test(f.replace(/\.json$/, '')) || fs.existsSync(path.join(dir, f))) continue;
-      try { fs.copyFileSync(path.join(dirOf(root), f), path.join(dir, f)); } catch { /* */ }
-    }
-  } catch { /* no local records */ }
+  let dir = mirrorCache.get(key) || null;
+  if (!dir) {
+    try {
+      const r = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: root, encoding: 'utf8', windowsHide: true });
+      const out = r.status === 0 ? String(r.stdout || '').trim() : '';
+      if (out) dir = path.join(path.resolve(root, out), 'oxe', 'quick');
+    } catch { dir = null; }
+    if (!dir) return null; // not cached: a repo initialised later is found next time
+    mirrorCache.set(key, dir);
+  }
+  if (readOnly) {
+    return fs.existsSync(dir) ? dir : null;
+  }
+  if (!mirrorBackfilled.has(key)) {
+    mirrorBackfilled.add(key);
+    // cross-review 15/11: the records made BEFORE the mirror existed go in once (backfill), or a sibling worktree that
+    // only sees the mirror would read them as lost
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      for (const f of fs.readdirSync(dirOf(root))) {
+        if (!ID_RE.test(f.replace(/\.json$/, '')) || fs.existsSync(path.join(dir, f))) continue;
+        try { fs.copyFileSync(path.join(dirOf(root), f), path.join(dir, f)); } catch { /* */ }
+      }
+    } catch { /* no local records */ }
+  }
   return dir;
 }
 
-function read(root, id) {
+function read(root, id, options = {}) {
   if (!ID_RE.test(String(id || ''))) return null;
   try { return JSON.parse(fs.readFileSync(fileOf(root, id), 'utf8')); } catch { /* not here: the mirror */ }
-  const m = mirrorDirOf(root);
+  const m = mirrorDirOf(root, options);
   if (!m) return null;
   try {
     const text = fs.readFileSync(path.join(m, `${id}.json`), 'utf8');
     const rec = JSON.parse(text);
-    // restore the local copy (best effort): the worktree's record store is whole again
-    try { fs.mkdirSync(dirOf(root), { recursive: true }); fs.writeFileSync(fileOf(root, id), text); } catch { /* */ }
+    // restore the local copy (best effort) unless readOnly
+    if (!options.readOnly) {
+      try { fs.mkdirSync(dirOf(root), { recursive: true }); fs.writeFileSync(fileOf(root, id), text); } catch { /* */ }
+    }
     return rec;
   } catch { return null; }
 }
@@ -76,11 +92,11 @@ function write(root, rec) {
   if (m) { try { fs.mkdirSync(m, { recursive: true }); fs.writeFileSync(path.join(m, `${rec.id}.json`), text); } catch { /* auxiliar */ } }
 }
 
-/** A quick record exists here or in the repo's mirror (the check-origin question). */
+/** A quick record exists here or in the repo's mirror (the check-origin question). Read-only (OXB-G01). */
 function exists(root, id) {
   if (!ID_RE.test(String(id || ''))) return false;
   if (fs.existsSync(fileOf(root, id))) return true;
-  const m = mirrorDirOf(root);
+  const m = mirrorDirOf(root, { readOnly: true });
   return Boolean(m && fs.existsSync(path.join(m, `${id}.json`)));
 }
 
