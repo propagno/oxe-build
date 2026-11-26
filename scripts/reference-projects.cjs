@@ -2,21 +2,16 @@
 'use strict';
 
 /**
- * 1.21 · Real reference projects for the maturity scorecard.
+ * 1.21 / 1.22.1 · Real reference projects for the maturity scorecard.
  *
  * Builds each project in `scripts/reference-projects/<name>.cjs` end to end with oxe-build and a REAL executor
- * (`claude -p` by default), the way the manual recommends:
- *   ROADMAP → program init → per phase: program start → SPEC/PLAN.json/PACK + frozen acceptance tests (planner) →
- *   plan lint → compile → execute (preflight ON, checkpoint commits, run budget) → verify (+ phase gates) →
- *   dossier handoff → program close.
- * An independent oracle (never shown to the executor) checks each phase for false greens. At the end the project's
- * scorecard is computed and upserted into oxe-build's `.oxe/release/scorecard-report.json`.
+ * (`claude -p` by default), or offline with `--solution`.
  *
  * Usage:
- *   node scripts/reference-projects.cjs [--project ledger-api|mdlint|all] [--root <dir>] [--model sonnet]
+ *   node scripts/reference-projects.cjs [--project ledger-api|mdlint|all] [--root <dir>]
+ *        [--model sonnet] [--plan-model opus] [--execute-model haiku] [--compare <baseline.json>]
  *        [--max-turns 10] [--budget-turns 80] [--fresh] [--plan-only] [--solution]
- *   --solution runs offline (CI): a scripted executor writes the known-good solution; no model, no release report.
- * Resumable: a phase already closed is skipped; `--fresh` deletes the project directory first.
+ *
  * Output: .oxe/release/reference-projects-report.json and scorecard-report.json (oxe-build).
  */
 
@@ -28,24 +23,130 @@ const { spawnSync } = require('child_process');
 const REPO = path.resolve(__dirname, '..');
 const operational = require(path.join(REPO, 'bin', 'lib', 'oxe-operational.cjs'));
 const CLI = path.join(REPO, 'bin', 'oxe-cc.js');
-
-function arg(name, fallback) {
-  const i = process.argv.indexOf(name);
-  return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
-}
-const PROJECT = arg('--project', 'all');
-const ROOT = path.resolve(arg('--root', process.argv.includes('--solution') ? fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-reference-solution-')) : path.join(os.homedir(), 'Estudos', 'oxe-reference')));
-const MODEL = arg('--model', 'sonnet');
-const MAX_TURNS = Number(arg('--max-turns', '10'));
-const BUDGET_TURNS = Number(arg('--budget-turns', '80'));
-const FRESH = process.argv.includes('--fresh');
-const PLAN_ONLY = process.argv.includes('--plan-only');
-// --solution: offline mode for CI. A scripted executor writes the known-good solution
-// (scripts/reference-projects/solutions/<name>/) for each task, so the whole flow runs without a model and the
-// planner's frozen tests and oracles are checked against a correct implementation. Never feeds the release report.
-const SOLUTION = process.argv.includes('--solution');
-const RELEASE_REPORT = !SOLUTION && !process.argv.includes('--no-release-report');
 const RELEASE_DIR = path.join(REPO, '.oxe', 'release');
+
+function parseCliArgs(argv = process.argv.slice(2)) {
+  const arg = (name, fallback) => {
+    const i = argv.indexOf(name);
+    return i >= 0 && argv[i + 1] ? argv[i + 1] : fallback;
+  };
+  const solution = argv.includes('--solution');
+  const rootArg = arg('--root', null);
+  const root = rootArg
+    ? path.resolve(rootArg)
+    : (solution ? fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-reference-solution-')) : path.join(os.homedir(), 'Estudos', 'oxe-reference'));
+  const model = arg('--model', 'sonnet');
+  const planModel = arg('--plan-model', null);
+  const executeModel = arg('--execute-model', null);
+  const compare = arg('--compare', null);
+  return {
+    project: arg('--project', 'all'),
+    root,
+    model,
+    planModel,
+    executeModel,
+    models: resolveModels({ model, planModel, executeModel }),
+    compare: compare ? path.resolve(compare) : null,
+    maxTurns: Number(arg('--max-turns', '10')),
+    budgetTurns: Number(arg('--budget-turns', '80')),
+    fresh: argv.includes('--fresh'),
+    planOnly: argv.includes('--plan-only'),
+    solution,
+    releaseReport: !solution && !argv.includes('--no-release-report'),
+  };
+}
+
+function resolveModels(opts = {}) {
+  const base = String(opts.model || 'sonnet').trim() || 'sonnet';
+  const plan = String(opts.planModel || (opts.models && opts.models.plan) || base).trim() || base;
+  const execute = String(opts.executeModel || (opts.models && opts.models.execute) || base).trim() || base;
+  return { plan, execute };
+}
+
+function roundNum(val, decimals = 2) {
+  const factor = 10 ** decimals;
+  return Math.round((Number(val) || 0) * factor) / factor;
+}
+
+function extractReportTotals(report) {
+  const results = Array.isArray(report && report.results) ? report.results : [];
+  let cost = 0;
+  let turns = 0;
+  let farSum = 0;
+  let farCount = 0;
+  let oracleTotal = 0;
+  let oraclePassed = 0;
+  let falseGreens = 0;
+  let failedProjects = 0;
+
+  for (const r of results) {
+    if (!r || r.skipped) continue;
+    cost += Number(r.cost_usd) || 0;
+    turns += Number(r.turns) || 0;
+    if (r.ok === false) failedProjects += 1;
+    const metrics = (r.scorecard && Array.isArray(r.scorecard.metrics)) ? r.scorecard.metrics : [];
+    const far = metrics.find((m) => m && m.metric === 'first_attempt_rate');
+    if (far && typeof far.value === 'number' && !Number.isNaN(far.value)) {
+      farSum += far.value;
+      farCount += 1;
+    }
+    for (const ph of Array.isArray(r.phases) ? r.phases : []) {
+      if (ph && ph.false_green === true) falseGreens += 1;
+      if (ph && ph.oracle && typeof ph.oracle.ok === 'boolean') {
+        oracleTotal += 1;
+        if (ph.oracle.ok) oraclePassed += 1;
+      }
+    }
+  }
+  const firstAttemptRate = farCount > 0 ? roundNum(farSum / farCount, 4) : 1;
+  const oracleRate = oracleTotal > 0 ? roundNum(oraclePassed / oracleTotal, 4) : 1;
+  return {
+    cost_usd: roundNum(cost, 2),
+    turns,
+    first_attempt_rate: firstAttemptRate,
+    oracle_rate: oracleRate,
+    false_greens: falseGreens,
+    failed_projects: failedProjects,
+  };
+}
+
+/**
+ * Pure ROI comparison between a baseline reference-projects report and a candidate (e.g. model-split) report.
+ * Blocks (`regression: true`) if oracle drops below 100%, any `false_green: true` occurs, or any project fails.
+ */
+function compareReferenceReports(baseline, candidate) {
+  const b = extractReportTotals(baseline);
+  const c = extractReportTotals(candidate);
+  const costDelta = roundNum(c.cost_usd - b.cost_usd, 2);
+  const costSavingsPct = b.cost_usd > 0 ? roundNum(((b.cost_usd - c.cost_usd) / b.cost_usd) * 100, 2) : 0;
+  const turnsDelta = c.turns - b.turns;
+  const farDelta = roundNum(c.first_attempt_rate - b.first_attempt_rate, 4);
+
+  const reasons = [];
+  if (c.false_greens > 0) reasons.push(`false_green detectado no candidato (${c.false_greens})`);
+  if (c.oracle_rate < 1) reasons.push(`oráculo do candidato abaixo de 100% (${Math.round(c.oracle_rate * 100)}%)`);
+  if (c.oracle_rate < b.oracle_rate) reasons.push(`regressão no oráculo vs baseline (${b.oracle_rate} -> ${c.oracle_rate})`);
+  if (c.failed_projects > 0) reasons.push(`${c.failed_projects} projeto(s) falharam no candidato`);
+
+  return {
+    baseline_models: (baseline && baseline.models) || resolveModels({ model: baseline && baseline.model }),
+    candidate_models: (candidate && candidate.models) || resolveModels({ model: candidate && candidate.model }),
+    baseline_cost_usd: b.cost_usd,
+    candidate_cost_usd: c.cost_usd,
+    cost_delta_usd: costDelta,
+    cost_savings_pct: costSavingsPct,
+    baseline_turns: b.turns,
+    candidate_turns: c.turns,
+    turns_delta: turnsDelta,
+    baseline_first_attempt_rate: b.first_attempt_rate,
+    candidate_first_attempt_rate: c.first_attempt_rate,
+    first_attempt_rate_delta: farDelta,
+    false_greens: c.false_greens,
+    oracle_ok: c.oracle_rate === 1 && c.false_greens === 0 && c.failed_projects === 0,
+    regression: reasons.length > 0,
+    regression_reasons: reasons,
+  };
+}
 
 function writeFile(file, content) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -137,7 +238,6 @@ function scaffold(def, dir) {
   });
   writeFile(cfgPath, `${JSON.stringify(cfg, null, 2)}\n`);
   writeFile(path.join(dir, '.oxe', 'ROADMAP.md'), roadmapMd(def));
-  // Greenfield: no external reference (docs, designs, other repos) drives the plan — said explicitly, not omitted.
   writeFile(path.join(dir, '.oxe', 'FIXTURE-PACK.json'), `${JSON.stringify({ schema_version: '1', ready: true, fixtures: [], status: 'not_applicable', reason: 'os testes de aceite congelados trazem os próprios dados; não há parser de formato externo nem layout a reproduzir' }, null, 2)}\n`);
   writeFile(path.join(dir, '.oxe', 'REFERENCE-ANCHORS.md'), `# REFERENCE-ANCHORS — ${def.name}\n\n<reference_anchors version="1" ready="true" status="not_applicable">\n  <!-- Projeto novo, sem referência externa: a especificação são a SPEC e os testes de aceite congelados. -->\n</reference_anchors>\n`);
 }
@@ -280,13 +380,14 @@ function writeHandoff(dir, def, phase) {
   fs.writeFileSync(file, body, 'utf8');
 }
 
-async function runPhase(def, dir, phase, priorPhases) {
+async function runPhase(def, dir, phase, priorPhases, opts) {
+  const models = resolveModels(opts);
   const program = operational.runtimeProgramStatus(dir, null);
   const phases = program && program.state && Array.isArray(program.state.phases) ? program.state.phases : [];
   const status = (phases.find((p) => p.id === phase.id) || {}).status || null;
   if (status === 'closed') {
     log(def.name, phase.id, 'já fechada — pulando');
-    return { phase: phase.id, skipped: true, closed: true };
+    return { phase: phase.id, skipped: true, closed: true, turns: 0, cost_usd: 0 };
   }
   if (status !== 'executing' && status !== 'verifying' && status !== 'planning') operational.runtimeProgramStart(dir, null, phase.id);
 
@@ -304,25 +405,26 @@ async function runPhase(def, dir, phase, priorPhases) {
 
   const lint = operational.runtimePlanLint(dir, null, { dryVerify: true });
   log(def.name, phase.id, `plan lint: ${lint.ok ? 'ok' : 'FALHOU'}`, lint.errors.join(' | '));
-  if (!lint.ok) return { phase: phase.id, lint, closed: false, aborted: 'plan_lint' };
-  if (PLAN_ONLY) {
+  if (!lint.ok) return { phase: phase.id, lint, closed: false, aborted: 'plan_lint', turns: 0, cost_usd: 0 };
+  if (opts.planOnly) {
     const compiled = operational.compileExecutionGraphFromArtifacts(dir, null, {});
     const preflight = operational.buildRuntimeExecutePreflight(dir, null, compiled.run);
     log(def.name, phase.id, `preflight: ${preflight.ok ? 'ready' : 'BLOCKED'}`, preflight.blockers.join(' | '), preflight.warnings.length ? `avisos: ${preflight.warnings.join(' | ')}` : '');
-    return { phase: phase.id, lint_ok: lint.ok, preflight, closed: false, aborted: 'plan_only' };
+    return { phase: phase.id, lint_ok: lint.ok, preflight, closed: false, aborted: 'plan_only', turns: 0, cost_usd: 0 };
   }
 
+  const usageBefore = (operational.readExecutorUsageRows(dir, null, null) || []).length;
   const executions = [];
   let verified = null;
   for (let round = 1; round <= 2; round += 1) {
     operational.compileExecutionGraphFromArtifacts(dir, null, { runState: round === 1 ? undefined : null });
-    const executorOptions = SOLUTION
+    const executorOptions = opts.solution
       ? { executor: solutionExecutor(def, phase) }
-      : { adapter: 'claude', adapterOptions: { model: MODEL }, providerConfig: { baseUrl: '', apiKey: '', model: MODEL, maxTurns: MAX_TURNS } };
+      : { adapter: 'claude', adapterOptions: { model: models.execute }, providerConfig: { baseUrl: '', apiKey: '', model: models.execute, maxTurns: opts.maxTurns } };
     const executed = await operational.runRuntimeExecute(dir, null, {
       ...executorOptions,
       checkpointCommits: true,
-      budgetTurns: BUDGET_TURNS,
+      budgetTurns: opts.budgetTurns,
       onProgress: (event) => {
         if (event && event.type === 'executor_usage') log(def.name, phase.id, event.nodeId, `tentativa ${event.attempt}: ${event.detail && event.detail.turns} turnos, US$ ${Number(event.detail && event.detail.cost_usd || 0).toFixed(2)}${event.detail && event.detail.success === false ? ` (${event.detail.failure_class})` : ''}`);
       },
@@ -334,6 +436,10 @@ async function runPhase(def, dir, phase, priorPhases) {
     log(def.name, phase.id, `verify r${round}: ${verified.report.status}`, verified.gates ? `gates ${verified.gates.passed.length}/${verified.gates.total}` : '');
     if (verified.report.status === 'passed') break;
   }
+  const usageRows = (operational.readExecutorUsageRows(dir, null, null) || []).slice(usageBefore);
+  const phaseTurns = usageRows.reduce((s, r) => s + (Number(r.turns) || 0), 0);
+  const phaseCost = roundNum(usageRows.reduce((s, r) => s + (Number(r.cost_usd) || 0), 0), 2);
+
   const truth = oracle(dir, [...priorPhases, phase]);
   let closed = { closed: false, gate: null };
   if (verified && verified.report.status === 'passed') {
@@ -351,56 +457,98 @@ async function runPhase(def, dir, phase, priorPhases) {
     gate_reasons: closed.gate ? closed.gate.reasons : [],
     oracle: truth,
     false_green: closed.closed === true && !truth.ok,
+    turns: phaseTurns,
+    cost_usd: phaseCost,
   };
 }
 
-async function runProject(def) {
-  const dir = path.join(ROOT, def.name);
-  if (FRESH && fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+async function runProject(def, opts = {}) {
+  const models = resolveModels(opts);
+  const root = opts.root || fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-reference-'));
+  const dir = path.join(root, def.name);
+  if (opts.fresh && fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
   if (!fs.existsSync(path.join(dir, '.oxe', 'program', 'PROGRAM.json'))) {
     if (!fs.existsSync(path.join(dir, '.oxe'))) scaffold(def, dir);
     operational.runtimeProgramInit(dir, null);
   }
   const started = Date.now();
   const phases = [];
+  const turnsByPhase = {};
   for (let i = 0; i < def.phases.length; i += 1) {
-    const rec = await runPhase(def, dir, def.phases[i], def.phases.slice(0, i));
+    const rec = await runPhase(def, dir, def.phases[i], def.phases.slice(0, i), opts);
     phases.push(rec);
+    turnsByPhase[def.phases[i].id] = Number(rec.turns) || 0;
     if (!rec.closed) break;
   }
-  const card = operational.runtimeScorecard(dir, null, { write: true, ...(RELEASE_REPORT ? { releaseReport: path.join(RELEASE_DIR, 'scorecard-report.json'), name: def.name } : {}) });
+  const card = operational.runtimeScorecard(dir, null, { write: true, ...(opts.releaseReport ? { releaseReport: path.join(RELEASE_DIR, 'scorecard-report.json'), name: def.name } : {}) });
   const usage = operational.readExecutorUsageRows(dir, null, null) || [];
-  const cost = usage.reduce((s, r) => s + (Number(r.cost_usd) || 0), 0);
+  const executeCost = usage.reduce((s, r) => s + (Number(r.cost_usd) || 0), 0);
+  const planCost = 0;
+  const cost = planCost + executeCost;
   const turns = usage.reduce((s, r) => s + (Number(r.turns) || 0), 0);
   log(def.name, `scorecard ${card.ok ? 'dentro das metas' : 'FORA das metas'}`, JSON.stringify(card.metrics.map((m) => [m.metric, m.value])), `· ${turns} turnos · US$ ${cost.toFixed(2)}`);
   return {
     name: def.name,
     dir,
     ok: phases.length === def.phases.length && phases.every((p) => p.closed && !p.false_green) && card.ok,
+    models,
+    cost_by_tier: {
+      plan: roundNum(planCost, 2),
+      execute: roundNum(executeCost, 2),
+    },
+    turns_by_phase: turnsByPhase,
     phases,
     scorecard: card,
     turns,
-    cost_usd: Math.round(cost * 100) / 100,
+    cost_usd: roundNum(cost, 2),
     duration_ms: Date.now() - started,
   };
 }
 
-async function main() {
-  const names = PROJECT === 'all' ? ['ledger-api', 'mdlint'] : [PROJECT];
+async function main(argv = process.argv.slice(2)) {
+  const opts = parseCliArgs(argv);
+  const names = opts.project === 'all' ? ['ledger-api', 'mdlint'] : [opts.project];
   const results = [];
   for (const name of names) {
     const def = require(path.join(__dirname, 'reference-projects', `${name}.cjs`));
-    results.push(await runProject(def));
+    results.push(await runProject(def, opts));
   }
-  const reportPath = RELEASE_REPORT ? path.join(RELEASE_DIR, 'reference-projects-report.json') : path.join(ROOT, 'reference-projects-report.json');
+  const reportPath = opts.releaseReport ? path.join(RELEASE_DIR, 'reference-projects-report.json') : path.join(opts.root, 'reference-projects-report.json');
   const previous = fs.existsSync(reportPath) ? JSON.parse(fs.readFileSync(reportPath, 'utf8')) : { results: [] };
   const merged = [...(previous.results || []).filter((r) => !names.includes(r.name)), ...results];
-  writeFile(reportPath, `${JSON.stringify({ schema_version: 1, generated_at: new Date().toISOString(), model: MODEL, results: merged }, null, 2)}\n`);
+  const report = {
+    schema_version: 1,
+    generated_at: new Date().toISOString(),
+    model: opts.models.execute,
+    models: opts.models,
+    results: merged,
+  };
+  let comparison = null;
+  if (opts.compare && fs.existsSync(opts.compare)) {
+    const baseline = JSON.parse(fs.readFileSync(opts.compare, 'utf8'));
+    comparison = compareReferenceReports(baseline, report);
+    report.comparison = comparison;
+    log(`compare vs ${opts.compare}: cost_delta=${comparison.cost_delta_usd} (${comparison.cost_savings_pct}% savings) · regression=${comparison.regression}`);
+  }
+  writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
   log(`relatório: ${reportPath}`);
-  process.exitCode = results.every((r) => r.ok) ? 0 : 1;
+  const ok = results.every((r) => r.ok) && (!comparison || !comparison.regression);
+  process.exitCode = ok ? 0 : 1;
+  return report;
 }
 
-main().catch((err) => {
-  console.error(err && err.stack ? err.stack : err);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err && err.stack ? err.stack : err);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  parseCliArgs,
+  resolveModels,
+  compareReferenceReports,
+  runPhase,
+  runProject,
+  main,
+};
