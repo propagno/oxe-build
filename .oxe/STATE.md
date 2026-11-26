@@ -11,11 +11,11 @@
 
 ## Programa
 
-▶ F1 Distribuição, Higiene Windows & Base de Presets (OB-21 + OB-28) (verifying) · · F2 Core Agnóstico & Modularização Fatia 1 (OB-22 + OB-23) (pending) · · F3 Multi-Modelo, Python pycsv & Corte 1.22.1 (OB-24) (pending)
+✓ F1 Distribuição, Higiene Windows & Base de Presets (OB-21 + OB-28) (closed) · ▶ F2 Core Agnóstico & Modularização Fatia 1 (OB-22 + OB-23) (verifying) · · F3 Multi-Modelo, Python pycsv & Corte 1.22.1 (OB-24) (pending)
 
 ## Run
 
-- **run:** `oxe-run-mwxv5bye-zojhku` · **status:** completed · checks 15/15 verdes
+- **run:** `oxe-run-mwy1lshp-oxfqph` · **status:** completed · checks 30/30 verdes
 
 ## Próximo passo sugerido
 
@@ -33,17 +33,17 @@
 ### Fase atual
 
 - **Status da run:** completed
-- **Run ID:** oxe-run-mwxv5bye-zojhku
+- **Run ID:** oxe-run-mwy1lshp-oxfqph
 - **Modo:** completo
 
 ### Runtime operacional
 
 - **runtime_status:** completed
-- **active_run_ref:** oxe-run-mwxv5bye-zojhku
+- **active_run_ref:** oxe-run-mwy1lshp-oxfqph
 
 ### Progresso
 
-- **Concluídos (4):** T1, T2, T3, T4
+- **Concluídos (5):** T1, T2, T3, T4, T5
 - **Falhos (0):** —
 - **Bloqueados (0):** —
 
