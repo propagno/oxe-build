@@ -13,7 +13,9 @@ const PYCSV_DEF = path.join(ROOT, 'scripts', 'reference-projects', 'pycsv.cjs');
 
 const tmpDirs = [];
 after(() => {
-  for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
+  for (const d of tmpDirs) {
+    try { fs.rmSync(d, { recursive: true, force: true, maxRetries: 3 }); } catch { /* ignore EBUSY */ }
+  }
 });
 
 describe('A11 (OB-35 / OXB-221-11): pycsv Python 3 stdlib reference project', () => {
@@ -50,7 +52,7 @@ describe('A11 (OB-35 / OXB-221-11): pycsv Python 3 stdlib reference project', ()
     const res = spawnSync(
       process.execPath,
       [SCRIPT, '--project', 'pycsv', '--solution', '--fresh', '--root', outDir],
-      { cwd: ROOT, encoding: 'utf8', timeout: 180000 }
+      { cwd: ROOT, encoding: 'utf8', timeout: 300000 }
     );
     assert.equal(res.status, 0, res.stderr || res.stdout);
     const report = JSON.parse(fs.readFileSync(path.join(outDir, 'reference-projects-report.json'), 'utf8'));

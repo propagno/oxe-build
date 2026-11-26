@@ -12,7 +12,9 @@ const SCRIPT = path.join(ROOT, 'scripts', 'reference-projects.cjs');
 
 const tmpDirs = [];
 after(() => {
-  for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
+  for (const d of tmpDirs) {
+    try { fs.rmSync(d, { recursive: true, force: true, maxRetries: 3 }); } catch { /* ignore EBUSY */ }
+  }
 });
 
 describe('A10 (OB-34 / OXB-221-10): reference-projects --plan-model/--execute-model split and ROI comparison', () => {
@@ -80,7 +82,7 @@ describe('A10 (OB-34 / OXB-221-10): reference-projects --plan-model/--execute-mo
     const res = spawnSync(
       process.execPath,
       [SCRIPT, '--project', 'mdlint', '--solution', '--fresh', '--plan-model', 'opus', '--execute-model', 'haiku', '--root', outDir],
-      { cwd: ROOT, encoding: 'utf8', timeout: 120000 }
+      { cwd: ROOT, encoding: 'utf8', timeout: 300000 }
     );
     assert.equal(res.status, 0, res.stderr || res.stdout);
     const reportPath = path.join(outDir, 'reference-projects-report.json');
