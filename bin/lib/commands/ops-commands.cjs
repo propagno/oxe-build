@@ -225,12 +225,21 @@ function createOpsCommandRegistry(deps = {}) {
       name: 'gc-worktrees',
       handler(argv) {
         if (argv.includes('--help') || argv.includes('-h')) {
-          console.log(`\n  oxe-cc gc-worktrees [--merged] [--base <ref>] [--apply|--dry-run] [--delete-branches] [--dir <pasta>] [--json]
-  Remove com segurança worktrees secundárias limpas já mergeadas em origin/main (ou --base) e executa git worktree prune.
-  Padrão: --dry-run (somente leitura); passe --apply para remover.\n`);
+          console.log(`\n  oxe-cc gc-worktrees [--merged] [--base <ref>] [--apply|--dry-run] [--delete-branches] [--include-nested] [--ignore-agent-settings] [--dir <pasta>] [--json]
+  Remove com segurança worktrees secundárias limpas já mergeadas em origin/main (ou --base), protege destinos de junctions ativas e executa git worktree prune.
+  Padrão: --dry-run (somente leitura); passe --apply para remover. Use --include-nested --ignore-agent-settings para limpar worktrees aninhados de agentes (.claude/worktrees).\n`);
           return;
         }
-        const o = { dir: process.cwd(), json: false, mergedOnly: true, apply: false, deleteBranches: false, base: null };
+        const o = {
+          dir: process.cwd(),
+          json: false,
+          mergedOnly: true,
+          apply: false,
+          deleteBranches: false,
+          includeNested: false,
+          ignoreAgentSettings: false,
+          base: null,
+        };
         for (let i = 0; i < argv.length; i += 1) {
           const a = argv[i];
           if (a === '--json') o.json = true;
@@ -239,6 +248,8 @@ function createOpsCommandRegistry(deps = {}) {
           else if (a === '--apply') o.apply = true;
           else if (a === '--dry-run') o.apply = false;
           else if (a === '--delete-branches') o.deleteBranches = true;
+          else if (a === '--include-nested') o.includeNested = true;
+          else if (a === '--ignore-agent-settings') o.ignoreAgentSettings = true;
           else if (a === '--base' && argv[i + 1]) o.base = String(argv[++i]);
           else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
           else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
@@ -250,7 +261,14 @@ function createOpsCommandRegistry(deps = {}) {
             console.log(`  ${green}✓${reset} nenhuma worktree elegível para limpeza (base: ${out.base || '—'})`);
           } else if (out.dry_run) {
             console.log(`  ${yellow}(simulação)${reset} ${out.candidates.length} worktree(s) limpa(s) mergeada(s) em ${out.base}:`);
-            for (const c of out.candidates) console.log(`    - ${c.path} [${c.branch || 'detached'}]${c.prunable ? ' (prunable)' : ''}`);
+            for (const c of out.candidates) {
+              const tags = [
+                c.prunable ? 'prunable' : null,
+                c.nested_agent ? 'nested' : null,
+                c.has_real_node_modules ? 'node_modules real' : null,
+              ].filter(Boolean);
+              console.log(`    - ${c.path} [${c.branch || 'detached'}]${tags.length ? ` (${tags.join(', ')})` : ''}`);
+            }
             console.log(`  ${dim}rode com --apply para remover e executar git worktree prune${reset}`);
           } else {
             console.log(`  ${green}✓${reset} ${out.removed.length} worktree(s) removida(s) · prune=${out.pruned}`);

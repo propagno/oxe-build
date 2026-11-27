@@ -408,6 +408,13 @@ function buildOnboardingPack(projectRoot, options = {}) {
   if (envCheck.leaked_env && envCheck.leaked_env.length) {
     gaps.push(`Variável(is) do shell coincidem com stripEnvPrefixes: ${envCheck.leaked_env.join(', ')}.`);
   }
+  if (envCheck.worktrees && envCheck.worktrees.needs_gc) {
+    const wt = envCheck.worktrees;
+    const gcCmd = wt.nested_agent > 0
+      ? 'oxe-cc gc-worktrees --merged --include-nested --ignore-agent-settings --apply'
+      : 'oxe-cc gc-worktrees --merged --apply';
+    gaps.push(`Higiene de worktrees: ${wt.secondary} worktree(s) secundária(s) (${wt.clean_merged} mergeada(s), ${wt.prunable} prunable, ${wt.nested_agent} aninhada(s)) — rode \`${gcCmd}\`.`);
+  }
   if (alm.missing_env_vars.length) {
     gaps.push(`ALM (${alm.provider}) sem variável(is) de ambiente: ${alm.missing_env_vars.join(', ')}.`);
   }
@@ -443,6 +450,7 @@ function buildOnboardingPack(projectRoot, options = {}) {
       warnings: envCheck.warnings || [],
       leaked_env: envCheck.leaked_env || [],
       scrubbed_env: envCheck.scrubbed_env || [],
+      worktrees: envCheck.worktrees || null,
     },
     ci: {
       mode: ciRaw.mode,
@@ -491,6 +499,9 @@ function renderOnboardingMarkdown(pack) {
     `- **Stack detectada:** ${pack.project.stacks.length ? pack.project.stacks.join(', ') : 'genérica'}${pack.project.git_remote_host ? ` · git host: \`${pack.project.git_remote_host}\`` : ''}`,
     `- **Sessão / Fase ativa:** ${pack.oxe.active_session || 'raiz (.oxe/)'} · fase: ${pack.oxe.active_phase || 'nenhuma'}${pack.oxe.next_step && pack.oxe.next_step.command ? ` · próximo: \`${pack.oxe.next_step.command}\`` : ''}`,
     `- **Toolchain:** node ${pack.environment.toolchain.node || '?'} · ${pack.environment.toolchain.platform || '?'}/${pack.environment.toolchain.arch || '?'}${pack.environment.leaked_env.length ? ` · env leak (stripEnvPrefixes): ${pack.environment.leaked_env.join(', ')}` : ''}`,
+    ...(pack.environment.worktrees && pack.environment.worktrees.secondary > 0
+      ? [`- **Worktrees secundárias:** ${pack.environment.worktrees.secondary} (${pack.environment.worktrees.clean_merged} mergeada(s), ${pack.environment.worktrees.prunable} prunable, ${pack.environment.worktrees.nested_agent} aninhada(s))${pack.environment.worktrees.needs_gc ? ' · limpeza recomendada (`oxe-cc gc-worktrees --merged --apply`)' : ''}`]
+      : []),
     '',
     '## 2. CI / Pipelines (Agnóstico)',
     `- **Provedor(es):** ${pack.ci.providers.length ? pack.ci.providers.join(', ') : 'local-only (nenhum pipeline de CI detectado)'}`,

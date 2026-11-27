@@ -289,12 +289,44 @@ function checkProjectEnvironment(projectRoot, machine = {}) {
     // optional helper
   }
 
+  // OXB-222-13: non-blocking worktree hygiene check (read-only; opt-out via worktree.hygiene: false).
+  let worktrees = null;
+  try {
+    const rootCfg = readJson(path.join(projectRoot, 'oxe.config.json')) || {};
+    const mergedCfg = { ...rootCfg, ...(oxeConfig || {}) };
+    const wtCfg = mergedCfg.worktree && typeof mergedCfg.worktree === 'object' ? mergedCfg.worktree : {};
+    if (wtCfg.hygiene !== false && machine.worktrees !== false) {
+      const wtGc = require('./oxe-worktree-gc.cjs');
+      if (typeof wtGc.summarizeWorktreeHygiene === 'function') {
+        worktrees = wtGc.summarizeWorktreeHygiene(projectRoot, {
+          warnAbove: wtCfg.warn_above,
+          spawn: machine.spawn,
+        });
+        if (worktrees && worktrees.needs_gc) {
+          const parts = [`${worktrees.secondary} worktree(s) secundária(s)`];
+          if (worktrees.clean_merged) parts.push(`${worktrees.clean_merged} mergeada(s) limpa(s)`);
+          if (worktrees.prunable) parts.push(`${worktrees.prunable} órfã(s)/prunable`);
+          if (worktrees.nested_agent) parts.push(`${worktrees.nested_agent} aninhada(s) de agente`);
+          if (worktrees.with_real_node_modules) parts.push(`${worktrees.with_real_node_modules} com node_modules próprio`);
+          if (worktrees.protected_junction_targets) parts.push(`${worktrees.protected_junction_targets} protegida(s) por junction ativa`);
+          const cmd = worktrees.nested_agent > 0
+            ? 'oxe-cc gc-worktrees --merged --include-nested --ignore-agent-settings --apply'
+            : 'oxe-cc gc-worktrees --merged --apply';
+          warnings.push(`higiene de worktrees: ${parts.join(', ')} — rode \`${cmd}\` (ou configure worktree.auto_gc)`);
+        }
+      }
+    }
+  } catch {
+    // optional hygiene helper
+  }
+
   return {
     ok: problems.length === 0,
     problems,
     warnings,
     scrubbed_env: scrubbedEnv,
     leaked_env: leakedEnv,
+    worktrees,
     toolchain: { node, npm: npm || null, platform: process.platform, arch: process.arch, free_mb: freeMb },
     wanted: { engines, nvmrc: nvmrc || null, packageManager: (pkg && pkg.packageManager) || null },
   };

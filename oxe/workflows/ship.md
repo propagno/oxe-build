@@ -54,6 +54,7 @@ Levar o trabalho verificado até produção, um passo verde por vez: **PR → CI
 2. **Com programa:** `oxe-cc runtime program close`: regressão congelada, contratos e commit da fase (exige `--by <papel> --reason "…"` quando combinado com `--by-ci`, `--no-rollback-check` ou `--accept-drift`). Num branch com PR aberto, o close não commita (use um branch separado ou `--force-branch`).
    **Sem programa:** não há `program close`. Com o merge registrado (e o deploy anexado, quando houver ambiente), o ciclo está fechado; atualize `STATE.md` com a entrega (PR, merge, deploy).
 3. Com ALM: `oxe-cc alm sync --apply`, que leva os itens a "lançado".
+4. **Higiene de worktrees:** o `program close` avalia `worktree.auto_gc` (`"warn"` por padrão; `"prune"` ou `"apply"` opt-in em `.oxe/config.json`). Quando houver worktrees antigos ou `.claude/worktrees/` acumulados, limpe com segurança via `oxe-cc gc-worktrees --merged --apply` (ou `--include-nested --ignore-agent-settings --apply`) — destinos de junctions ativas são protegidos automaticamente (`junction_target_in_use`).
 
 ### Passo X — Defeito depois da entrega (`--defect`)
 1. Pergunte a reprodução, o impacto e o critério ou a história de origem (uma pergunta por vez, com a recomendada).

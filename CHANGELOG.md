@@ -6,7 +6,7 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ## [1.22.2] — 2026-11-26
 
-Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-37`..`OB-51`, 5 fases `F1`–`F5`, 12 entregas + `RFC-1`) incorporando os achados de uso real no OXESpace `v1.6.3`, as fricções catalogadas no bench `v1.22.0`, gates mecânicos de qualidade de specs/cards e onboarding agnóstico multi-CI/multi-ALM (`OXB-222-01`..`OXB-222-12`).
+Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-37`..`OB-52`, 6 fases `F1`–`F6`, 13 entregas + `RFC-1`) incorporando os achados de uso real no OXESpace `v1.6.3`, as fricções catalogadas no bench `v1.22.0`, gates mecânicos de qualidade de specs/cards, onboarding agnóstico multi-CI/multi-ALM e higiene operacional segura de worktrees (`OXB-222-01`..`OXB-222-13`).
 
 ### Paridade pré-push, contexto compacto & coordenação de recursos (`OB-40`..`OB-43`, ADR `D-7`)
 
@@ -34,6 +34,13 @@ Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-37`..
 ### Onboarding agnóstico multi-CI e multi-ALM (`OB-51`)
 
 - **Comando `oxe-cc onboard [--json] [--write]` (`bin/lib/oxe-onboard.cjs`, `OB-51`):** gera dossiê 100% read-only e offline para novos agentes ou desenvolvedores, adaptando-se de forma agnóstica a GitHub Actions, GitLab CI, Azure Pipelines, Bitbucket Pipelines, CircleCI, Jenkins ou operação local, e a Jira, Azure DevOps, provedor customizado ou operação sem ALM — cruzando checks do CI contra `phase_gates`/`preflight.triggers` locais e reportando `leaked_env` sem jamais expor valores de segredos.
+
+### Higiene operacional segura de worktrees (`OB-52`)
+
+- **Proteção de destinos de junctions NTFS, worktrees aninhados, `doctor --project`/`onboard` e `worktree.auto_gc` (`OB-52`):**
+  - `bin/lib/oxe-worktree-gc.cjs` protege por fecho transitivo qualquer worktree cujo diretório ou `node_modules` seja destino de junction/symlink usado por worktrees mantidas (`reason: "junction_target_in_use"`, `dependents`), desfaz junctions rasas (`depth <= 3`) antes de remover, sinaliza `has_real_node_modules` e `nested_agent`, e aceita `--include-nested` e `--ignore-agent-settings` (`.claude/worktrees/*` com apenas `.claude/settings.local.json` modificado).
+  - `oxe-cc doctor --project` (`bin/lib/oxe-project-env.cjs`) e `oxe-cc onboard` (`bin/lib/oxe-onboard.cjs`) reportam `worktrees` (`summarizeWorktreeHygiene`) com aviso não-bloqueante acima de `worktree.warn_above` (padrão `5`, silenciável por `worktree.hygiene: false`).
+  - `runtimeProgramClose` (`bin/lib/oxe-operational.cjs`) executa `runPostCloseWorktreeHygiene` conforme `worktree.auto_gc` (`"warn"` padrão, `"prune"`, `"apply"` ou `false`) e expõe `runtimeWorktreeHygiene` no SDK.
 
 ---
 

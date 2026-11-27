@@ -13742,6 +13742,13 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     },
   });
   almAutoSync(projectRoot, activeSession);
+  let worktreeHygiene = null;
+  try {
+    worktreeHygiene = require('./oxe-worktree-gc.cjs').runPostCloseWorktreeHygiene(projectRoot, {
+      worktree: cfgClose.worktree,
+      base: options.base || null,
+    });
+  } catch { /* higiene de worktrees é auxiliar e nunca falha o close */ }
   return {
     closed: true,
     phase: phase.id,
@@ -13754,6 +13761,7 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     regression_checks: regressionChecks.length,
     interface_modules: modules.length,
     docs: docsPublished,
+    worktree_hygiene: worktreeHygiene,
     next: runtime.nextOpenPhase(closed.state),
   };
 }
@@ -15194,6 +15202,10 @@ function runtimeOnboard(projectRoot, activeSession, options = {}) {
   });
 }
 
+function runtimeWorktreeHygiene(projectRoot, options = {}) {
+  return require('./oxe-worktree-gc.cjs').summarizeWorktreeHygiene(projectRoot, options);
+}
+
 module.exports = {
   relatedTestsCommand,
   relatedRedsOfTask,
@@ -15405,4 +15417,5 @@ module.exports = {
   applySpecChecklistSync,
   isPathInScope,
   runtimeOnboard,
+  runtimeWorktreeHygiene,
 };
