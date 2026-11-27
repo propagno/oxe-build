@@ -10676,8 +10676,9 @@ function classifyBlockedResult(result, graph) {
 function runtimePlanScopeAdd(projectRoot, activeSession, options = {}) {
   const planJsonLib = require('./oxe-plan-json.cjs');
   const changeLib = require('./oxe-change.cjs');
+  const programLib = require('./oxe-program.cjs');
   const taskId = String(options.task || '').toUpperCase();
-  if (!/^T\d+$/.test(taskId)) throw new Error('use: oxe-cc plan scope add T<n> <arquivo…> --cr CR-n --by <papel> --reason "…"');
+  if (!/^T\d+$/.test(taskId)) throw new Error('use: oxe-cc plan scope add T<n> <arquivo…> (--cr CR-n | --auto-cr) --by <papel> --reason "…"');
   const add = [...new Set((options.paths || []).map((p) => String(p).replace(/\\/g, '/').replace(/^\.\//, '').trim()).filter(Boolean))];
   if (!add.length) throw new Error('informe ao menos um arquivo');
   if (add.some((p) => p.startsWith('/') || /^[A-Za-z]:/.test(p) || p.split('/').includes('..'))) throw new Error('caminho relativo ao repositório, sem ".." nem absoluto');
@@ -10687,18 +10688,22 @@ function runtimePlanScopeAdd(projectRoot, activeSession, options = {}) {
   if (reason.length < 8) throw new Error('informe o motivo em uma frase (--reason "…")');
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
-  const crId = String(options.cr || '').toUpperCase();
-  const cr = changeLib.listChanges(programDir).find((c) => c.id === crId);
-  if (!cr) throw new Error(`--cr ${options.cr || '(ausente)'}: o escopo de uma fase em andamento só cresce por um CR aberto (oxe-cc runtime feedback …)`);
-  if (cr.status !== 'open') throw new Error(`${crId} está ${cr.status}: use um CR aberto`);
-  if (!(cr.tasks || []).map((t) => String(t).toUpperCase()).includes(taskId)) throw new Error(`${crId} não reabre ${taskId} (tasks: ${(cr.tasks || []).join(', ') || '—'})`);
+  const autoCr = Boolean(options.autoCr);
+  let crId = String(options.cr || '').toUpperCase();
+  let autoCrCreated = false;
+  if (!autoCr || crId) {
+    const cr = changeLib.listChanges(programDir).find((c) => c.id === crId);
+    if (!cr) throw new Error(`--cr ${options.cr || '(ausente)'}: o escopo de uma fase em andamento só cresce por um CR aberto (oxe-cc runtime feedback … ou passe --auto-cr)`);
+    if (cr.status !== 'open') throw new Error(`${crId} está ${cr.status}: use um CR aberto`);
+    if (!(cr.tasks || []).map((t) => String(t).toUpperCase()).includes(taskId)) throw new Error(`${crId} não reabre ${taskId} (tasks: ${(cr.tasks || []).join(', ') || '—'})`);
+  }
   const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
   if (!jsonPath || !fs.existsSync(jsonPath)) throw new Error('plan scope add exige PLAN.json');
   const result = planJsonLib.withPlanLock(jsonPath, () => {
     const doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
     const task = (doc.tasks || []).find((t) => t && String(t.id).toUpperCase() === taskId);
     if (!task) throw new Error(`Tarefa ${taskId} não encontrada em PLAN.json`);
-    if (task.done === true) throw new Error(`${taskId} está done: reabra antes (oxe-cc plan reopen ${taskId})`);
+    if (task.done === true && !autoCr) throw new Error(`${taskId} está done: reabra antes (oxe-cc plan reopen ${taskId}) ou passe --auto-cr`);
     const bad = add.filter((p) => isFrozenTestPathCandidate(doc, p));
     if (bad.length) {
       throw new Error(
@@ -10709,9 +10714,36 @@ function runtimePlanScopeAdd(projectRoot, activeSession, options = {}) {
     const added = add.filter((p) => !have.has(p));
     let packUpdated = false;
     let clearedScopeFailure = false;
+    let reopened = false;
     if (added.length) {
+      // Create the audited CR only AFTER validating task existence and frozen-test guards (zero orphan CRs on error).
+      if (autoCr && !crId) {
+        const programState = programLib.readProgram(programDir);
+        const created = changeLib.recordChange({
+          programDir,
+          program: programState,
+          plan: doc,
+          class: 'constraint',
+          summary: `ampliação de escopo (${taskId}): ${reason}`,
+          criteria: Array.isArray(task.acceptance) ? task.acceptance : [],
+          tasks: [taskId],
+          by,
+        });
+        crId = created.cr.id;
+        autoCrCreated = true;
+        appendEvent(projectRoot, activeSession, {
+          type: 'ChangeRequested',
+          work_item_id: taskId,
+          payload: { id: crId, class: created.cr.class, phase: created.cr.phase, criteria: created.cr.criteria || [], tasks: [taskId], by, auto_cr: true },
+        });
+      }
+      if (task.done === true && autoCr) {
+        task.done = false;
+        task.reopened_for_scope = { cr: crId, by, reason, at: new Date().toISOString() };
+        reopened = true;
+      }
       task.files = [...(task.files || []), ...added];
-      task.scope_added = [...(Array.isArray(task.scope_added) ? task.scope_added : []), { paths: added, cr: crId, by, reason, at: new Date().toISOString() }];
+      task.scope_added = [...(Array.isArray(task.scope_added) ? task.scope_added : []), { paths: added, cr: crId, by, reason, at: new Date().toISOString(), ...(autoCrCreated ? { auto_cr: true } : {}) }];
       if (task.checkpoint_failed && task.checkpoint_failed.kind === 'scope_insufficient') {
         const normF = (p) => String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
         const under = (a, b) => a === b || b.startsWith(`${a.replace(/\/+$/, '')}/`);
@@ -10727,14 +10759,24 @@ function runtimePlanScopeAdd(projectRoot, activeSession, options = {}) {
       fs.renameSync(tmp, jsonPath);
       packUpdated = syncImplementationPackTaskPaths(paths, jsonPath, taskId, { addPaths: added });
     }
-    return { added, existed: add.filter((p) => have.has(p)), ...(packUpdated ? { pack_updated: true } : {}), ...(clearedScopeFailure ? { cleared_checkpoint_failed: true } : {}) };
+    return {
+      added,
+      existed: add.filter((p) => have.has(p)),
+      ...(autoCrCreated ? { auto_cr_created: true } : {}),
+      ...(reopened ? { reopened: true } : {}),
+      ...(packUpdated ? { pack_updated: true } : {}),
+      ...(clearedScopeFailure ? { cleared_checkpoint_failed: true } : {}),
+    };
   });
   if (result.added.length) {
     if (result.cleared_checkpoint_failed) {
       clearTaskResidualRunState(projectRoot, activeSession, [taskId], { clearFailedAndBlocked: true });
     }
-    changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'scope', id: crId, task: taskId, paths: result.added, by, reason, at: new Date().toISOString(), ...(result.pack_updated ? { pack_updated: true } : {}) });
-    appendEvent(projectRoot, activeSession, { type: 'PlanScopeAmended', work_item_id: taskId, payload: { task: taskId, paths: result.added, cr: crId, by, reason, ...(result.pack_updated ? { pack_updated: true } : {}), ...(result.cleared_checkpoint_failed ? { cleared_checkpoint_failed: true } : {}) } });
+    if (result.reopened) {
+      appendEvent(projectRoot, activeSession, { type: 'TaskReopenedForScope', work_item_id: taskId, payload: { task: taskId, cr: crId, by, reason } });
+    }
+    changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'scope', id: crId, task: taskId, paths: result.added, by, reason, at: new Date().toISOString(), ...(result.auto_cr_created ? { auto_cr: true } : {}), ...(result.reopened ? { reopened: true } : {}), ...(result.pack_updated ? { pack_updated: true } : {}) });
+    appendEvent(projectRoot, activeSession, { type: 'PlanScopeAmended', work_item_id: taskId, payload: { task: taskId, paths: result.added, cr: crId, by, reason, ...(result.auto_cr_created ? { auto_cr: true } : {}), ...(result.reopened ? { reopened: true } : {}), ...(result.pack_updated ? { pack_updated: true } : {}), ...(result.cleared_checkpoint_failed ? { cleared_checkpoint_failed: true } : {}) } });
   }
   return { task: taskId, cr: crId, by, ...result };
 }
