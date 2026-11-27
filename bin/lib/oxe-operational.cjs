@@ -5021,15 +5021,41 @@ async function runRuntimeVerifyInner(projectRoot, activeSession, options = {}) {
   const regressionChecks = programState && options.regression !== false
     ? programLib.loadRegressionChecks(artifactPaths.programDir, programState, programPhaseId)
     : [];
-  // 1.21 (OXB-020): the project's own gates (typecheck, lint, governance suite, CI) run once per phase verify.
+  // 1.21 (OXB-020) + 1.22.2 (OXB-222-01): the project's own gates (with optional paths/globs filtering)
+  // plus matched preflight.triggers run once per phase verify before the first push.
   const gatesLib = require('./oxe-phase-gates.cjs');
+  const preflightLib = require('./oxe-preflight.cjs');
   const projectConfig = readProjectConfig(projectRoot);
   const phaseGates = options.gates === false ? [] : [...gatesLib.readPhaseGates({ phase_gates: parsedPlan.phaseGates }, projectConfig), ...implicitPhaseGates(projectRoot, programState, programPhaseId, projectConfig)];
-  const gateCheckList = gatesLib.gateChecks(phaseGates, 'phase_verify', {
-    programDir: artifactPaths.programDir || path.join(projectRoot, '.oxe', 'program'),
-    phase: programPhaseId,
-    defaultRunner: projectConfig.phase_gates_runner || null,
-  });
+  let verifyChangedFiles = Array.isArray(options.changedFiles) ? options.changedFiles : null;
+  if (verifyChangedFiles === null && options.gates !== false) {
+    try {
+      const activePhaseObj = programState && programPhaseId && Array.isArray(programState.phases)
+        ? programState.phases.find((p) => p && p.id === programPhaseId)
+        : null;
+      const baseRef = (activePhaseObj && activePhaseObj.base_commit) || preflightLib.resolveDiffBase(projectRoot, null);
+      const detected = preflightLib.getChangedFiles(projectRoot, baseRef);
+      // Safe fallback: when no diff base differs from HEAD and working tree is clean, keep null so path-scoped gates still run.
+      if (Array.isArray(detected) && (detected.length > 0 || (baseRef && baseRef !== 'HEAD'))) {
+        verifyChangedFiles = detected;
+      }
+    } catch {
+      verifyChangedFiles = null;
+    }
+  }
+  const gateCheckList = [
+    ...gatesLib.gateChecks(phaseGates, 'phase_verify', {
+      programDir: artifactPaths.programDir || path.join(projectRoot, '.oxe', 'program'),
+      phase: programPhaseId,
+      defaultRunner: projectConfig.phase_gates_runner || null,
+      changedFiles: verifyChangedFiles,
+    }),
+    ...(options.gates === false
+      ? []
+      : gatesLib.preflightTriggerChecks(projectConfig, verifyChangedFiles, {
+        defaultRunner: projectConfig.phase_gates_runner || null,
+      })),
+  ];
   const runSuite = regressionChecks.length || gateCheckList.length
     ? { ...suite, checks: [...(suite.checks || []).filter((check) => !check.regression_phase && !check.phase_gate), ...regressionChecks, ...gateCheckList] }
     : suite;

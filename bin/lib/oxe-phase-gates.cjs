@@ -23,14 +23,20 @@ const { spawnSync } = require('child_process');
 const WHEN = new Set(['phase_verify', 'program_close']);
 /** A full typecheck or governance suite takes minutes, not the verify's 60 s per check. */
 const DEFAULT_GATE_TIMEOUT_MS = 15 * 60 * 1000;
-const GOVERNANCE_TEST_RE = /(^|[\\/._-])(lint|allowlist|catalog|coverage|governance|ratchet|boundar(y|ies)|budget)[^\\/]*\.test\.[cm]?[jt]sx?$/i;
+const GOVERNANCE_TEST_RE = /(^|[\\/._-])(lint|allowlist|catalog|coverage|governance|ratchet|boundar(y|ies)|budget|guard|contract|copy|tokens?|schema-pin|migration|i18n|policy)[^\\/]*\.test\.[cm]?[jt]sx?$/i;
 const GATE_SCRIPT_NAMES = ['typecheck', 'type-check', 'lint', 'check', 'test:governance'];
 
 const BUILTIN_KINDS = new Set(['command', 'ci', 'deploy', 'signoff', 'script']);
 
+function normalizeGatePaths(raw) {
+  const src = Array.isArray(raw && raw.paths) ? raw.paths : (Array.isArray(raw && raw.globs) ? raw.globs : []);
+  return [...new Set(src.map((p) => String(p || '').replace(/\\/g, '/').replace(/^\.\//, '').trim()).filter(Boolean))];
+}
+
 function normalizeGate(raw, plugins = {}) {
   if (!raw || typeof raw !== 'object') return null;
   const id = String(raw.id || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+  const paths = normalizeGatePaths(raw);
   // OXB-107: signoff / script are built in; another kind is a plugin from config gate_plugins.
   if (raw.kind === 'signoff' || raw.kind === 'script' || (raw.kind && !BUILTIN_KINDS.has(raw.kind))) {
     const pluginModule = raw.kind === 'script' ? raw.module : raw.kind === 'signoff' ? null : plugins && plugins[raw.kind];
@@ -48,6 +54,7 @@ function normalizeGate(raw, plugins = {}) {
       runner: null,
       when: WHEN.has(raw.when) ? raw.when : raw.kind === 'signoff' ? 'program_close' : 'phase_verify',
       repo: null,
+      paths,
       description: typeof raw.description === 'string' ? raw.description.trim() : '',
       timeout_ms: Number(raw.timeout_ms) > 0 ? Number(raw.timeout_ms) : DEFAULT_GATE_TIMEOUT_MS,
     };
@@ -70,6 +77,7 @@ function normalizeGate(raw, plugins = {}) {
     runner: typeof raw.runner === 'string' && raw.runner.trim() ? raw.runner.trim() : null,
     when,
     repo: typeof raw.repo === 'string' && raw.repo.trim() ? raw.repo.trim() : null,
+    paths,
     description: typeof raw.description === 'string' ? raw.description.trim() : '',
     timeout_ms: Number(raw.timeout_ms) > 0 ? Number(raw.timeout_ms) : DEFAULT_GATE_TIMEOUT_MS,
   };
@@ -155,9 +163,18 @@ function alreadyWrapped(runner, command) {
 }
 
 /** Verification checks (same shape as the runtime's AcceptanceCheck) for the gates of one moment. */
+function gateMatchesChangedFiles(gate, changedFiles) {
+  const patterns = Array.isArray(gate && gate.paths) ? gate.paths : [];
+  if (!patterns.length) return true;
+  if (!Array.isArray(changedFiles)) return true; // safe fallback: never false green without diff
+  const { globMatch } = require('./oxe-preflight.cjs');
+  const normFiles = changedFiles.map((f) => String(f || '').replace(/\\/g, '/').replace(/^\.\//, '')).filter(Boolean);
+  return normFiles.some((file) => patterns.some((pat) => globMatch(file, pat)));
+}
+
 function gateChecks(gates, when, options = {}) {
   return gates
-    .filter((gate) => gate.when === when)
+    .filter((gate) => gate.when === when && gateMatchesChangedFiles(gate, options.changedFiles))
     .map((gate) => ({
       id: `gate-${gate.id}`,
       type: 'policy',
@@ -168,6 +185,53 @@ function gateChecks(gates, when, options = {}) {
       phase_gate: gate.id,
       timeout_ms: gate.timeout_ms,
     }));
+}
+
+/**
+ * OXB-222-01: Converts matched `config.preflight.triggers` entries into runtime verify checks so
+ * path-scoped contract/UI/schema guards run locally before the first push.
+ */
+function preflightTriggerChecks(config, changedFiles, options = {}) {
+  const pf = config && config.preflight && typeof config.preflight === 'object' ? config.preflight : null;
+  const triggers = pf && Array.isArray(pf.triggers) ? pf.triggers : [];
+  if (!triggers.length) return [];
+  const { globMatch } = require('./oxe-preflight.cjs');
+  const normFiles = Array.isArray(changedFiles)
+    ? changedFiles.map((f) => String(f || '').replace(/\\/g, '/').replace(/^\.\//, '')).filter(Boolean)
+    : null;
+  const out = [];
+  for (let i = 0; i < triggers.length; i += 1) {
+    const tr = triggers[i];
+    if (!tr || typeof tr !== 'object' || !tr.command) continue;
+    const patterns = Array.isArray(tr.globs) && tr.globs.length
+      ? tr.globs
+      : (Array.isArray(tr.paths) ? tr.paths : []);
+    if (!patterns.length) continue;
+    if (normFiles !== null) {
+      const hit = normFiles.some((f) => patterns.some((g) => globMatch(f, g)));
+      if (!hit) continue;
+    }
+    const slug = String(tr.name || `trigger-${i + 1}`).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+    const gate = {
+      id: `trigger-${slug}`,
+      kind: 'command',
+      command: String(tr.command).trim(),
+      runner: typeof tr.runner === 'string' && tr.runner.trim() ? tr.runner.trim() : null,
+      when: 'phase_verify',
+      timeout_ms: Number(tr.timeout_ms || tr.timeoutMs) > 0 ? Number(tr.timeout_ms || tr.timeoutMs) : DEFAULT_GATE_TIMEOUT_MS,
+    };
+    out.push({
+      id: `gate-${gate.id}`,
+      type: 'policy',
+      command: gateCommand(gate, options),
+      evidence_type_expected: 'stdout',
+      acceptance_ref: null,
+      description: `[preflight trigger] ${tr.name || slug}`,
+      phase_gate: gate.id,
+      timeout_ms: gate.timeout_ms,
+    });
+  }
+  return out;
 }
 
 /**
@@ -525,6 +589,76 @@ if (require.main === module && process.argv.includes('--signoff-gate')) {
   process.exitCode = runDeployGateCli(process.argv.slice(2));
 }
 
+/**
+ * OXB-222-01: Suggests agnostic, declarative `phase_gates` entries with optional `paths` globs
+ * derived solely from generic filenames and package.json scripts present in `projectRoot`.
+ */
+function suggestPathGates(projectRoot) {
+  const candidates = detectGateCandidates(projectRoot);
+  const suggestions = [];
+  let pkg = null;
+  try {
+    pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
+  } catch {
+    pkg = null;
+  }
+  const deps = { ...((pkg && pkg.dependencies) || {}), ...((pkg && pkg.devDependencies) || {}) };
+  const testRunnerFor = (files) => {
+    if (files.every((f) => /\.cjs$/i.test(f))) return `node --test ${files.join(' ')}`;
+    if (deps.vitest || files.some((f) => /\.tsx?$/i.test(f))) return `npx vitest run ${files.join(' ')}`;
+    if (deps.jest) return `npx jest ${files.join(' ')}`;
+    return `node --test ${files.join(' ')}`;
+  };
+
+  for (const cand of candidates) {
+    if (cand.command) {
+      suggestions.push({
+        id: cand.id,
+        command: cand.command,
+        paths: [],
+        source: cand.source,
+        description: `script ${cand.id} do package.json`,
+      });
+    } else if (Array.isArray(cand.files) && cand.files.length) {
+      const buckets = [
+        {
+          id: 'ui-tokens-copy',
+          re: /(copy|tokens?|css|i18n|design-lint)/i,
+          paths: ['**/*.css', '**/*.scss', '**/*.tsx', '**/*.jsx', '**/locales/**'],
+          description: 'guardas de UI, tokens, copy e i18n',
+        },
+        {
+          id: 'db-schema-migrations',
+          re: /(schema-pin|migration)/i,
+          paths: ['**/migrations/**', '**/db/**', '**/schema*'],
+          description: 'guardas de schema e numeração de migrations',
+        },
+        {
+          id: 'contracts-governance',
+          re: /(guard|contract|policy|allowlist|catalog|coverage|governance|ratchet|boundar|budget|lint)/i,
+          paths: ['src/**', 'lib/**', 'bin/**', 'shared/**'],
+          description: 'guardas de contrato, política e governança',
+        },
+      ];
+      const assigned = new Set();
+      for (const bucket of buckets) {
+        const matched = cand.files.filter((f) => !assigned.has(f) && bucket.re.test(f));
+        if (!matched.length) continue;
+        for (const f of matched) assigned.add(f);
+        suggestions.push({
+          id: bucket.id,
+          command: testRunnerFor(matched),
+          paths: bucket.paths,
+          files: matched,
+          source: 'tests',
+          description: bucket.description,
+        });
+      }
+    }
+  }
+  return suggestions;
+}
+
 module.exports = {
   unknownGateKinds,
   signoffGateStatus,
@@ -534,10 +668,13 @@ module.exports = {
   readPhaseGates,
   gateCommand,
   gateChecks,
+  gateMatchesChangedFiles,
+  preflightTriggerChecks,
   recordGateFailures,
   isInfraFailure,
   detectGateCandidates,
   findGovernanceTests,
+  suggestPathGates,
   lintPhaseGates,
   attachCiRun,
   attachDeploy,

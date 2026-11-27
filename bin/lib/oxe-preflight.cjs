@@ -376,6 +376,8 @@ function runPreflight(projectRoot, options = {}) {
 
 module.exports = {
   globMatch,
+  resolveDiffBase,
+  getChangedFiles,
   detectE2eImpact,
   detectCssTargetRisk,
   runPreflight,
