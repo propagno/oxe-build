@@ -128,6 +128,7 @@ describe('A3 — OXB-222-03: oxe-cc sync version_pins, electron/main/db/migratio
           id: 'T1',
           title: 'add migration',
           wave: 1,
+          done: true,
           files: ['electron/main/db/migrations/0109_task.sql', 'electron/main/db/schema.ts'],
           acceptance: ['A1'],
           verify: { commands: ['node -e "process.exit(0)"'] },
