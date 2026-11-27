@@ -1,36 +1,45 @@
-# PLAN
+# PLAN — F1
 
-> Gerado por `oxe-cc plan build` a partir de F3.role.json. A fonte é o PLAN.json; este arquivo é a leitura humana.
+> Gerado por `oxe-cc plan build` a partir de F1.role.json. A fonte é o PLAN.json; este arquivo é a leitura humana.
 
 ## Onda 1
 
-### T1 — OB-34: Suporte a --plan-model/--execute-model e compareReferenceReports em scripts/reference-projects.cjs
+### T1 — OB-40: Path-aware phase_gates (paths/globs) + preflight.triggers no runtime verify + suggestPathGates
 
-- **Arquivos prováveis:** `scripts/reference-projects.cjs`
+- **Arquivos prováveis:** `bin/lib/oxe-phase-gates.cjs`, `bin/lib/oxe-preflight.cjs`, `bin/lib/oxe-operational.cjs`
 - **Depende de:** —
 - **Onda:** 1
 - **Verificar:**
-  - Comando: `node --test tests/acceptance/oxe-1221-a10-model-split-roi.test.cjs`
-- **Aceite vinculado:** A10
+  - Comando: `node --test tests/acceptance/oxe-1222-a1-path-gates.test.cjs tests/oxe-phase-gates.test.cjs tests/oxe-1230-lote2-ci-rework.test.cjs`
+- **Aceite vinculado:** A1
+
+### T2 — OB-41: Saida --json compacta (< 4 KB) por padrao em runtime verify, plan lint e status (--full opt-in)
+
+- **Arquivos prováveis:** `bin/oxe-cc.js`
+- **Depende de:** —
+- **Onda:** 1
+- **Verificar:**
+  - Comando: `node --test tests/acceptance/oxe-1222-a2-compact-json.test.cjs tests/oxe-status-summary.test.cjs tests/oxe-cli-purity.test.cjs`
+- **Aceite vinculado:** A2
 
 ## Onda 2
 
-### T2 — OB-35: Adicionar 3o projeto de referencia em Python 3 stdlib (pycsv) com 2 fases e 10 tarefas
+### T3 — OB-42: oxe-cc sync com sync.version_pins, electron/main/db/migrations e hook no runtimePromote
 
-- **Arquivos prováveis:** `scripts/reference-projects.cjs`, `scripts/reference-projects/pycsv.cjs`, `scripts/reference-projects/solutions/pycsv/src/pycsv/__init__.py`, `scripts/reference-projects/solutions/pycsv/src/pycsv/parser.py`, `scripts/reference-projects/solutions/pycsv/src/pycsv/schema.py`, `scripts/reference-projects/solutions/pycsv/src/pycsv/filters.py`, `scripts/reference-projects/solutions/pycsv/src/pycsv/normalize.py`, `scripts/reference-projects/solutions/pycsv/src/pycsv/dedupe.py`, `scripts/reference-projects/solutions/pycsv/src/pycsv/aggregate.py`, `scripts/reference-projects/solutions/pycsv/src/pycsv/formatters.py`, `scripts/reference-projects/solutions/pycsv/src/pycsv/stats.py`, `scripts/reference-projects/solutions/pycsv/src/pycsv/pipeline.py`, `scripts/reference-projects/solutions/pycsv/src/pycsv/cli.py`
+- **Arquivos prováveis:** `bin/lib/oxe-sync.cjs`, `bin/lib/oxe-operational.cjs`
 - **Depende de:** T1
 - **Onda:** 2
 - **Verificar:**
-  - Comando: `node --test tests/acceptance/oxe-1221-a11-pycsv-python.test.cjs`
-- **Aceite vinculado:** A11
+  - Comando: `node --test tests/acceptance/oxe-1222-a3-sync-version-pins.test.cjs tests/oxe-1230-lote2-ci-rework.test.cjs`
+- **Aceite vinculado:** A3
 
 ## Onda 3
 
-### T3 — OB-36: Sincronizar versao 1.22.1, CHANGELOG.md e validar dependencias seguras
+### T4 — OB-43: oxe-cc plan scope add --auto-cr atomico com reabertura automatica de tarefa done
 
-- **Arquivos prováveis:** `package.json`, `package-lock.json`, `packages/runtime/package.json`, `vscode-extension/package.json`, `README.md`, `CHANGELOG.md`
-- **Depende de:** T1, T2
+- **Arquivos prováveis:** `bin/lib/oxe-operational.cjs`, `bin/oxe-cc.js`
+- **Depende de:** T2, T3
 - **Onda:** 3
 - **Verificar:**
-  - Comando: `node --test tests/acceptance/oxe-1221-a12-release-1221.test.cjs tests/oxe-sdk-types.test.cjs`
-- **Aceite vinculado:** A12
+  - Comando: `node --test tests/acceptance/oxe-1222-a4-scope-auto-cr.test.cjs tests/oxe-1212-amend-scope.test.cjs`
+- **Aceite vinculado:** A4

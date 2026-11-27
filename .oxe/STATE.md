@@ -7,20 +7,20 @@
 
 ## Sessão ativa (opcional — `/oxe-session`)
 
-- **active_session:** sessions/s001-v1-22-1
+- **active_session:** sessions/s002-v1-22-2
 
 ## Programa
 
-✓ F1 Distribuição, Higiene Windows & Base de Presets (OB-21 + OB-28) (closed) · ✓ F2 Core Agnóstico & Modularização Fatia 1 (OB-22 + OB-23) (closed) · ▶ F3 Multi-Modelo, Python pycsv & Corte 1.22.1 (OB-24) (verifying)
+▶ F1 Paridade Pré-Push, JSON Compacto, Sync & Escopo Pós-CI (E1) (verifying) · · F2 Grill Unificado, Confiabilidade Windows/CLI & Polimento (E2) (pending) · · F3 Telemetria CI, Discovery & Corte 1.22.2 (E3) (pending)
 
 ## Run
 
-- **run:** `oxe-run-mwy2kecs-7w93rw` · **status:** completed · checks 40/40 verdes
+- **run:** `oxe-run-mwyc3kc1-3s4bc6` · **status:** completed · checks 16/16 verdes
 
 ## Próximo passo sugerido
 
 - Comando: `oxe-cc alm push --stories-only --dry-run`
-- Motivo: ALM jira: as 17 história(s) do PRD ainda não viraram itens — confira o ensaio e rode sem --dry-run com o OK do usuário
+- Motivo: ALM jira: as 10 história(s) do PRD ainda não viraram itens — confira o ensaio e rode sem --dry-run com o OK do usuário
 
 ## Bloqueios
 
@@ -33,17 +33,17 @@
 ### Fase atual
 
 - **Status da run:** completed
-- **Run ID:** oxe-run-mwy2kecs-7w93rw
+- **Run ID:** oxe-run-mwyc3kc1-3s4bc6
 - **Modo:** completo
 
 ### Runtime operacional
 
 - **runtime_status:** completed
-- **active_run_ref:** oxe-run-mwy2kecs-7w93rw
+- **active_run_ref:** oxe-run-mwyc3kc1-3s4bc6
 
 ### Progresso
 
-- **Concluídos (3):** T1, T2, T3
+- **Concluídos (4):** T1, T2, T3, T4
 - **Falhos (0):** —
 - **Bloqueados (0):** —
 
