@@ -128,8 +128,9 @@ const ALLOWED_CONFIG_KEYS = [
   'autoresume',
   // report failure-cost: failure_cost.fixes (cause → the OXB/commit that fixed it)
   'failure_cost',
-  // 1.23.0: agents.auto_lease (OXB-230-04)
+  // 1.23.0: agents.auto_lease (OXB-230-04) & reevaluate.block_on_drift (OXB-230-05)
   'agents',
+  'reevaluate',
 ];
 
 /**

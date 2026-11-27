@@ -3843,6 +3843,29 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     if (humanPending.length > 0) {
       blockers.push(`pending_gates:${humanPending.length}`);
     }
+    // 1.23.0 (OXB-230-05): read-only upstream drift detection against base branch (warn by default; block when reevaluate.block_on_drift === true)
+    let reevaluate = null;
+    try {
+      const reevCfg = (readProjectConfig(projectRoot) || {}).reevaluate || {};
+      if (reevCfg.enabled !== false && options.reevaluate !== false) {
+        const reev = require('./oxe-reevaluate.cjs').reevaluateAgainstBase(projectRoot, {
+          against: options.base || reevCfg.base || undefined,
+        });
+        if (reev && reev.ok) {
+          reevaluate = reev;
+          if (reev.summary && reev.summary.contract_drift > 0) {
+            const ids = (reev.tasks || []).filter((t) => t.classification === 'contract_drift').map((t) => t.id).join(', ');
+            if (reevCfg.block_on_drift === true) {
+              blockers.push(`reevaluate_drift:${reev.summary.contract_drift} tarefa(s) com contract_drift contra ${reev.base} (${ids}) — rode oxe-cc reevaluate --against ${reev.base}`);
+            } else {
+              warnings.push(`reevaluate:contract_drift em ${reev.summary.contract_drift} tarefa(s) contra ${reev.base} (${ids}) — rode oxe-cc reevaluate --against ${reev.base}`);
+            }
+          } else if (reev.summary && reev.summary.mechanical_sync > 0) {
+            warnings.push(`reevaluate:mechanical_sync em ${reev.summary.mechanical_sync} tarefa(s) contra ${reev.base} — rode oxe-cc sync --base ${reev.base} --apply`);
+          }
+        }
+      }
+    } catch { /* base branch ausente ou repo não-git: auxiliar */ }
     return {
       ok: blockers.length === 0,
       blockers,
@@ -3855,6 +3878,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
       confidence: report && report.planSelfEvaluation ? report.planSelfEvaluation.confidence : null,
       confidenceThreshold: report ? report.planConfidenceThreshold || 90 : 90,
       executionRationalityReady: report ? Boolean(report.executionRationalityReady) : false,
+      ...(reevaluate ? { reevaluate } : {}),
     };
   }
 
