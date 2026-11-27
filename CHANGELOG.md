@@ -4,6 +4,31 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.22.2] — 2026-11-26
+
+Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-37`..`OB-49`, 3 fases `F1`–`F3`, 10 entregas) incorporando os achados de uso real no OXESpace `v1.6.3` e as fricções catalogadas no bench `v1.22.0` (`OXB-222-01`..`OXB-222-10`).
+
+### Paridade pré-push, contexto compacto & coordenação de recursos (`OB-40`..`OB-43`, ADR `D-7`)
+
+- **Gates path-aware e disparo de `preflight.triggers` no `runtime verify` (`OB-40`):** `phase_gates` agora aceita `paths`/`globs` (disparando apenas quando `git diff` toca caminhos compatíveis, com fallback seguro quando não há base de diff); `runRuntimeVerify` incorpora `preflight.triggers` automaticamente antes do primeiro push; `bin/lib/oxe-preflight.cjs` exporta `getChangedFiles`/`resolveDiffBase` e `suggestPathGates(projectRoot)`.
+- **Saída `--json` compacta por padrão (`< 4 KB`) + `--summary` e `--full` (`OB-41`):** `runtime verify --json` / `--summary` grava o relatório completo em `.oxe/runs/<run_id>/verify-full.json` e imprime veredito enxuto sem truncamento de terminal nem poluição de banner; `plan lint --json` limita avisos a 25 com resumo de `suite_impact`; `status --json` omite `releaseReadiness.manifest` bruto por padrão (`--full` devolve payload completo em todos).
+- **Coordenação atômica de migrações e pinos de versão (`sync.version_pins`, `OB-42`):** `bin/lib/oxe-sync.cjs` adiciona `electron/main/db/migrations` a `DEFAULT_MIGRATION_DIRS`, implementa `planVersionPinSync` com atualização atômica em ordem reversa de offset e `finalizePromotedWorktree` dispara `syncSequentialResources` automaticamente durante `runtime promote`.
+- **Evolução auditada de escopo pós-CI (`plan scope add --auto-cr`, `OB-43`):** `oxe-cc plan scope add` aceita `--auto-cr`, `--task`, `--add-file` e `--session`, valida guarda de teste congelado antes de criar o CR, reabre tarefas `done` com evento `TaskReopenedForScope` e atualiza `PLAN.json` + `IMPLEMENTATION-PACK.json` atomicamente.
+
+### Ergonomia de descoberta, confiabilidade Windows & governança de sessão (`OB-44`..`OB-46`)
+
+- **Grill unificado e importação em lote (`OB-44`):** `oxe-cc grill import --from <briefing.md|json>` importa fatos, perguntas e respostas preservando confirmações estritamente como `unconfirmed` (nunca auto-confirma nem fecha); `oxe-cc grill promote --card <KEY>` promove grills de `.oxe/alm/grill/` para `.oxe/grill/`; `spec check --card <KEY>` lê diretamente o grill do card e `grill start --card` emite `card_notice`.
+- **Confiabilidade Windows/CLI e ergonomia `plan build` (`OB-45`):** `commitExactContent` substitui o loop per-file por um único `git update-index --index-info` com retry de `index.lock`; `runtimeProgramClose` reutiliza cache de `complexityAlarms`; `oxe-plan-build.cjs` infere membros de `const mod = require(...)` em CommonJS e preserva `symbols` do `role.json`; `origin.allow_no_alm_quick` libera `quick` sem `OXE-Card` mantendo bloqueio de commits comuns.
+- **Resolução de sessão, preservação de ADRs, `suite_impact`, `plan mutate` e LF (`OB-46`):** `prd lint --session` resolve `.oxe/sessions/<id>/PRD.md`; `decision add` preserva ADRs raiz `D-1..D-N` sem sobrescrever; `oxe-suite-impact.cjs` elimina falso positivo `unrun_acceptance_ci` para `node --test` / `scripts/quality-check.cjs`; `oxe-plan-mutate.cjs` prioriza mutantes nas linhas alteradas (`prioritizeMutants`); `packages/runtime/tsconfig*.json` fixa `"newLine": "lf"`.
+
+### Telemetria offline de CI, discovery nos workflows & corte `1.22.2` (`OB-47`..`OB-49`)
+
+- **Scorecard offline de CI e leadtime (`runtime scorecard --with-ci`, `OB-47`):** `computeLeadtimeAndCiMetrics` em `bin/lib/oxe-scorecard.cjs` calcula `first_pass_ci_green_rate`, `ci_rework_cycles` e `leadtime_breakdown` (`plan_to_verify_ms`, `verify_to_close_ms`, `post_verify_share_pct`) 100% offline a partir de `ci.ndjson` e `events.ndjson`, anexado sob `ci_telemetry` com `--with-ci` sem alterar o contrato padrão.
+- **Discovery nos workflows & detecção de vazamento `stripEnvPrefixes` (`OB-48`):** `oxe-cc doctor --project` reporta `leaked_env` (somente nomes) e emite aviso não-bloqueante quando variáveis do shell coincidem com `stripEnvPrefixes`; `oxe/workflows/lean/execute.md`, `oxe/workflows/ship.md` e `oxe/templates/CONFIG.md` documentam as novas capacidades da `1.22.2`.
+- **ADR `D-7` e sincronização `1.22.2` (`OB-49`):** decisão arquitetural formalizada em `docs/adr/D-7-*.md` preservando `D-1..D-6`, com versão `1.22.2` sincronizada nas 5 fontes.
+
+---
+
 ## [1.22.1] — 2026-11-26
 
 Construída ponta a ponta com o próprio `oxe-build v1.22.0` em perfil `lean` como bench controlado (`OB-21`..`OB-36`, 3 fases `F1`–`F3`, 12 entregas + 1 hotfix P0 descoberto no dogfooding).
