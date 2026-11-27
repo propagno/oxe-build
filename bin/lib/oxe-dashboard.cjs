@@ -357,6 +357,103 @@ function updatePlanReviewCommentStatus(projectRoot, input = {}) {
   return comments[idx];
 }
 
+function collectLiveTelemetry(projectRoot, activeSession) {
+  const rootAbs = path.resolve(projectRoot);
+  let activeAgents = [];
+  let agentMessages = [];
+  const agentCollisions = [];
+  try {
+    const coord = require('./oxe-agent-coord.cjs');
+    activeAgents = coord.listActiveAgents(rootAbs, { readOnly: true }) || [];
+    agentMessages = coord.readAgentMessages(rootAbs, { limit: 40 }) || [];
+    const seenPairs = new Set();
+    for (const a of activeAgents) {
+      const files = Array.isArray(a.write_set) ? a.write_set : [];
+      if (!files.length) continue;
+      const col = coord.detectWriteSetCollisions(rootAbs, files, { readOnly: true, excludeAgentId: a.agent_id });
+      for (const hit of (col && col.collisions) || []) {
+        const pairKey = [hit.file, ...[a.agent_id, hit.agent_id].sort()].join('|');
+        if (seenPairs.has(pairKey)) continue;
+        seenPairs.add(pairKey);
+        agentCollisions.push({
+          file: hit.file,
+          agents: [a.agent_id, hit.agent_id],
+          providers: [a.provider, hit.provider],
+          branches: [a.branch || null, hit.branch || null],
+          tasks: [a.task || null, hit.task || null],
+        });
+      }
+    }
+  } catch { /* auxiliary */ }
+
+  let worktreeHygiene = { ok: true, total: 0, clean: [], dirty: [], orphans: [], warnings: [] };
+  try {
+    const gc = require('./oxe-worktree-gc.cjs');
+    if (typeof gc.summarizeWorktreeHygiene === 'function') {
+      const h = gc.summarizeWorktreeHygiene(rootAbs);
+      if (h && typeof h === 'object') worktreeHygiene = h;
+    }
+  } catch { /* non-git or unavailable */ }
+
+  let reevaluate = {
+    ok: false,
+    overall_status: 'unavailable',
+    base: null,
+    since: null,
+    upstream_commits_count: 0,
+    upstream_changed_files: [],
+    tasks: [],
+    summary: { no_impact: 0, mechanical_sync: 0, contract_drift: 0 },
+  };
+  try {
+    const reev = require('./oxe-reevaluate.cjs').reevaluateAgainstBase(rootAbs);
+    if (reev && typeof reev === 'object') reevaluate = reev;
+  } catch { /* non-git or no base ref */ }
+
+  let scorecardRouting = { ok: false, tiers: { fast: 0, balanced: 0, powerful: 0 }, auto_route: false, scorecard: null };
+  try {
+    const cfg = health.loadOxeConfigMerged(rootAbs).config || {};
+    const autoRoute = Boolean(cfg.models && cfg.models.auto_route === true);
+    const tierCounts = { fast: 0, balanced: 0, powerful: 0 };
+    const planJsonPath = path.join(rootAbs, '.oxe', 'PLAN.json');
+    if (fs.existsSync(planJsonPath)) {
+      const pdoc = JSON.parse(fs.readFileSync(planJsonPath, 'utf8'));
+      for (const t of (pdoc && Array.isArray(pdoc.tasks) ? pdoc.tasks : [])) {
+        const hint = t.model_hint || t.suggested_model_hint || 'balanced';
+        if (Object.prototype.hasOwnProperty.call(tierCounts, hint)) tierCounts[hint] += 1;
+      }
+    }
+    let sc = null;
+    try {
+      sc = operational.runtimeScorecard(rootAbs, activeSession || null, { withCi: true, withRouting: true });
+    } catch { sc = null; }
+    scorecardRouting = { ok: true, auto_route: autoRoute, tiers: tierCounts, scorecard: sc };
+  } catch { /* auxiliary */ }
+
+  let onboardSummary = null;
+  try {
+    const pack = require('./oxe-onboard.cjs').buildOnboardingPack(rootAbs, { activeSession: activeSession || null });
+    onboardSummary = {
+      stacks: (pack.project && pack.project.stacks) || [],
+      ci_mode: pack.ci ? pack.ci.mode : 'local-only',
+      ci_providers: (pack.ci && pack.ci.providers) || [],
+      alm_provider: (pack.alm && pack.alm.provider) || 'none',
+      alm_project: (pack.alm && pack.alm.project) || null,
+      env_ok: pack.environment ? Boolean(pack.environment.ok) : true,
+    };
+  } catch { /* auxiliary */ }
+
+  return {
+    active_agents: activeAgents,
+    agent_messages: agentMessages,
+    agent_collisions: agentCollisions,
+    worktree_hygiene: worktreeHygiene,
+    reevaluate,
+    scorecard_routing: scorecardRouting,
+    onboard_summary: onboardSummary,
+  };
+}
+
 function loadDashboardContext(projectRoot, opts = {}) {
   const globalPaths = health.oxePaths(projectRoot);
   const stateText = readTextIfExists(globalPaths.state) || '';
@@ -530,84 +627,253 @@ function loadDashboardContext(projectRoot, opts = {}) {
     );
   }
   ctx.operationalGraph = ctx.activeRun ? operational.buildOperationalGraph(ctx.activeRun) : { nodes: [], edges: [] };
-  ctx.dashboard = { readOnly: false };
+  const live = collectLiveTelemetry(projectRoot, activeSession || null);
+  ctx.active_agents = live.active_agents;
+  ctx.agent_messages = live.agent_messages;
+  ctx.agent_collisions = live.agent_collisions;
+  ctx.worktree_hygiene = live.worktree_hygiene;
+  ctx.reevaluate = live.reevaluate;
+  ctx.scorecard_routing = live.scorecard_routing;
+  ctx.onboard_summary = live.onboard_summary;
+  ctx.dashboard = { readOnly: false, version: 'v2' };
   return ctx;
 }
 
 function dashboardHtml() {
-  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>OXE Dashboard</title><style>
-  :root{--bg:#f4efe6;--bg2:#edf4ed;--panel:#fff;--ink:#1d2f3e;--muted:#617787;--line:#dbe3e8;--brand:#173f58;--ok:#1f7a52;--warn:#9d6b12;--bad:#a53e3e;--info:#235f84;--okbg:#e4f3eb;--warnbg:#fbf0da;--badbg:#f8e8e8;--infobg:#e5eff7;--shadow:0 16px 40px rgba(17,32,44,.08);--radius:18px}*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,var(--bg),var(--bg2));font-family:"Segoe UI",Arial,sans-serif;color:var(--ink)}.page{max-width:1560px;margin:0 auto;padding:24px}.hero,.stats,.tabs,.grid2,.grid3,.layout{display:grid;gap:16px}.hero{grid-template-columns:1.2fr .8fr}.stats{grid-template-columns:repeat(5,minmax(0,1fr));margin:0 0 16px}.layout{grid-template-columns:1.45fr .95fr}.grid2{grid-template-columns:repeat(2,minmax(0,1fr))}.grid3{grid-template-columns:repeat(3,minmax(0,1fr))}.panel,.metric,.mini,.item,.entry{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}.panel{padding:18px}.metric,.mini,.item,.entry{padding:14px}.stack,.list,.rail{display:grid;gap:14px}.rail{grid-template-columns:repeat(8,minmax(100px,1fr))}.tabs{grid-template-columns:repeat(7,max-content)}.tab{padding:10px 14px;border:1px solid var(--line);border-radius:999px;background:#fff;cursor:pointer;font-weight:700}.tab.active{background:var(--brand);color:#fff;border-color:var(--brand)}.view{display:none}.view.active{display:block}.label{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}.value{font-size:24px;font-weight:800;margin-top:6px}.muted{color:var(--muted)}.small{font-size:13px}.badge{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;padding:6px 10px;font-size:11px;text-transform:uppercase;font-weight:800}.done{background:var(--okbg);color:var(--ok)}.active{background:var(--infobg);color:var(--info)}.warning{background:var(--warnbg);color:var(--warn)}.blocked{background:var(--badbg);color:var(--bad)}.pending{background:#edf1f4;color:#567181}.head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:12px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}button{border:0;border-radius:12px;padding:10px 12px;font-weight:700;cursor:pointer}.primary{background:var(--brand);color:#fff}.secondary{background:#edf2f5;color:var(--ink)}.warnbtn{background:#f2e3c5;color:#81540a}.danger{background:#f5dada;color:#8d3030}input,select,textarea{width:100%;border:1px solid var(--line);border-radius:12px;padding:10px;font:inherit}.form{display:grid;gap:10px}.raw{white-space:pre-wrap;background:#f8faf9;border:1px solid var(--line);border-radius:12px;padding:12px;max-height:220px;overflow:auto}.chip{display:inline-flex;border-radius:999px;padding:4px 8px;background:#eef3f6;color:#355267;font-size:12px;margin:4px 6px 0 0}.node{padding:12px;border:1px solid var(--line);border-radius:16px;background:#fff}.go{background:linear-gradient(180deg,#f2fbf5,#ebf7ef)}.nogo{background:linear-gradient(180deg,#fff5f5,#faeded)}@media (max-width:1200px){.hero,.layout{grid-template-columns:1fr}.rail{grid-template-columns:repeat(4,minmax(100px,1fr))}}@media (max-width:860px){.stats,.grid2,.grid3,.tabs,.rail{grid-template-columns:1fr}.page{padding:16px}}</style></head><body><div class="page"><div class="hero"><div class="panel"><h1 style="margin:0;font-size:42px">OXE Decision Control Room</h1><div class="muted" style="margin-top:10px">Control room para decisões reais de Go / No-Go, sem duplicar a fonte de verdade textual do OXE.</div></div><div class="grid2"><div class="mini"><div class="label">Projeto</div><div class="small" id="hero-project">—</div></div><div class="mini"><div class="label">Sessão</div><div class="value" id="hero-session">—</div></div><div class="mini"><div class="label">Próximo passo</div><div class="small" id="hero-next">—</div></div><div class="mini"><div class="label">Confiança</div><div class="value" id="hero-confidence">—</div></div></div></div><div id="app">Carregando…</div></div><script>
-  const app=document.getElementById('app');let ctx=null;let tab='decision';let session=null;
-  const esc=(s)=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); const cls=(s)=>{const v=String(s||'').toLowerCase();if(/(healthy|approved|done|go|well-calibrated|passed|ready|completed)/.test(v))return'done';if(/(running|in_review|active|mentioned|acceptable|controlled|replaying)/.test(v))return'active';if(/(rejected|needs_revision|blocked|failed|no-go|overconfident|do_not_execute|aborted|waiting_approval)/.test(v))return'blocked';if(/(risk|warning|underconfident|needs_refinement|paused)/.test(v))return'warning';return'pending';}; const badge=(s,l)=>'<span class="badge '+cls(s)+'">'+esc(l||s||'pending')+'</span>'; const list=(items,empty)=>items&&items.length?'<div class="list">'+items.join('')+'</div>':'<div class="entry small">'+esc(empty)+'</div>'; const runtimeDisabled=()=>ctx&&ctx.dashboard&&ctx.dashboard.readOnly;
-  async function api(url,opts={}){const res=await fetch(url,{headers:{'Content-Type':'application/json'},...opts});if(!res.ok)throw new Error(await res.text());return res.json();} async function refresh(){ctx=await api('/api/context'+(session?'?session='+encodeURIComponent(session):''));render();}
-  function render(){document.getElementById('hero-project').textContent=ctx.projectRoot||'—';document.getElementById('hero-session').textContent=ctx.activeSession||'modo legado';document.getElementById('hero-next').textContent=(ctx.nextStep.step||'—')+' · '+(ctx.nextStep.reason||'—');document.getElementById('hero-confidence').textContent=ctx.readiness.confidence!=null?ctx.readiness.confidence+'%':'—';
-    const flow=(ctx.visual.flow.nodes||[]).map((n)=>'<div class="node"><div class="label">Etapa</div><div style="font-weight:800;font-size:18px;margin-top:6px">'+esc(n.label)+'</div><div style="margin-top:10px">'+badge(n.status)+'</div></div>');
-    const graph=(ctx.visual.artifactGraph||[]).map((n)=>'<div class="item"><div class="head"><strong>'+esc(n.label)+'</strong>'+badge(n.status)+'</div><div class="small">'+esc(n.detail||'—')+'</div><div class="small muted" style="margin-top:8px">'+esc(n.path||'—')+'</div></div>');
-    const waves=(ctx.plan.waves||[]).map((w)=>'<div class="panel"><div class="head"><div><strong>Onda '+esc(w.wave)+'</strong><div class="small muted">'+esc(w.taskIds.length)+' tarefas</div></div>'+badge(String(ctx.runtime.parsed.currentWave)===String(w.wave)?'running':'planned')+'</div>'+w.tasks.map((t)=>'<div class="entry"><div style="font-weight:800">'+esc(t.id)+' — '+esc(t.title)+'</div><div class="small muted" style="margin-top:6px">Depende de: '+esc(t.dependsOn.length?t.dependsOn.join(', '):'—')+'</div><div class="small muted">Verificação: '+esc(t.verifyCommand||'—')+'</div><div class="small" style="margin-top:6px">'+(t.aceite||[]).map((x)=>'<span class="chip">'+esc(x)+'</span>').join('')+(t.decisions||[]).map((x)=>'<span class="chip">'+esc(x)+'</span>').join('')+'</div></div>').join('')+'</div>');
-    const coverage=(ctx.coverage||[]).map((c)=>'<div class="item"><div class="head"><strong>'+esc(c.id)+'</strong>'+badge(c.verifyStatus,c.verifyStatus)+'</div><div class="small">'+esc(c.criterion)+'</div><div class="small muted" style="margin-top:8px">Plano: '+esc(c.tasks.length?c.tasks.join(', '):'sem cobertura')+'</div><div class="small muted">Verify: '+esc(c.verifySummary||c.verifyHow||'sem evidência explícita')+'</div></div>');
-    const checkpoints=(ctx.checkpoints.parsed||[]).map((c)=>'<div class="item"><div class="head"><strong>'+esc(c.id)+'</strong>'+badge(c.status)+'</div><div class="small muted">Tipo: '+esc(c.type)+' · Fase: '+esc(c.phase||'—')+' · Escopo: '+esc(c.scope||'—')+'</div><div class="small" style="margin-top:8px">'+esc(c.notes||'—')+'</div></div>');
-    const agents=((ctx.runtime.parsed.agents&&ctx.runtime.parsed.agents.length)?ctx.runtime.parsed.agents:(ctx.blueprint&&ctx.blueprint.agents)||[]).map((a)=>'<div class="item"><div class="head"><strong>'+esc(a.id||a.name||'agent')+'</strong>'+badge(a.status||a.model_hint||'planned')+'</div><div class="small muted">'+esc(a.role||a.persona||'—')+'</div><div class="small">Tarefas: '+esc((a.tasks||[]).join(', ')||a.scope||'—')+'</div></div>');
+  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>OXE Control Room v2</title><style>
+  :root{
+    --bg:#0b0f19;--bg2:#0e1424;--sidebar:#0f172a;--panel:#131c2e;--card:#172238;--card2:#1c2944;
+    --ink:#f8fafc;--ink2:#cbd5e1;--muted:#94a3b8;
+    --line:#243350;--line-strong:#3b5280;
+    --brand:#1d4ed8;--brand-hi:#2563eb;--brand-light:#60a5fa;--brand-soft:rgba(37,99,235,.16);--brand-glow:rgba(37,99,235,.32);
+    --ok:#34d399;--okbg:rgba(16,185,129,.16);
+    --warn:#fbbf24;--warnbg:rgba(245,158,11,.16);
+    --bad:#fb7185;--badbg:rgba(244,63,94,.16);
+    --info:#38bdf8;--infobg:rgba(56,189,248,.16);
+    --shadow:0 18px 40px rgba(0,0,0,.38);--radius:14px
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(circle at top right,rgba(37,99,235,.18),transparent 42%),linear-gradient(180deg,var(--bg),var(--bg2));font-family:"Segoe UI",system-ui,-apple-system,sans-serif;color:var(--ink);min-height:100vh}
+  .shell{display:grid;grid-template-columns:256px minmax(0,1fr);min-height:100vh}
+  .nav{background:var(--sidebar);border-right:1px solid var(--line);padding:20px 14px;display:flex;flex-direction:column;gap:18px;position:sticky;top:0;height:100vh;overflow-y:auto}
+  .brand-box{padding:14px;border-radius:var(--radius);background:linear-gradient(135deg,rgba(29,78,216,.34),rgba(15,23,42,.9));border:1px solid var(--brand-hi);box-shadow:0 0 24px var(--brand-glow)}
+  .brand-title{font-size:18px;font-weight:900;letter-spacing:.02em;color:#fff;display:flex;align-items:center;justify-content:space-between}
+  .brand-sub{font-size:12px;color:var(--ink2);margin-top:4px}
+  .nav-group{display:grid;gap:6px}
+  .nav-label{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);padding:0 10px;margin-bottom:2px;font-weight:700}
+  .nav-btn{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:10px 12px;border-radius:10px;border:1px solid transparent;background:transparent;color:var(--ink2);font-size:13px;font-weight:700;cursor:pointer;text-align:left;transition:all .15s ease}
+  .nav-btn:hover{background:rgba(37,99,235,.12);border-color:var(--line-strong);color:#fff}
+  .nav-btn.active{background:linear-gradient(90deg,var(--brand),var(--brand-hi));border-color:var(--brand-light);color:#fff;box-shadow:0 6px 18px var(--brand-glow)}
+  .nav-pill{font-size:11px;padding:2px 8px;border-radius:999px;background:rgba(255,255,255,.12);color:#fff;font-weight:800}
+  .main{padding:22px 26px;max-width:1620px;width:100%;margin:0 auto}
+  .topbar{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:18px;padding:16px 20px;border-radius:var(--radius);background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow)}
+  .topbar h1{margin:0;font-size:24px;font-weight:900;color:#fff}
+  .topbar-meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .stats{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-bottom:18px}
+  .layout{display:grid;grid-template-columns:1.35fr 1fr;gap:16px}
+  .grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+  .grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+  .stack,.list{display:grid;gap:14px;align-content:start}
+  .rail{display:grid;grid-template-columns:repeat(8,minmax(92px,1fr));gap:10px}
+  .panel,.metric,.item,.entry,.node{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius)}
+  .panel{padding:18px;box-shadow:var(--shadow)}
+  .metric{padding:14px;background:linear-gradient(180deg,var(--card),var(--panel))}
+  .item,.entry,.node{padding:13px;background:var(--card)}
+  .node{text-align:center}
+  .view{display:none}.view.active{display:block}
+  .label{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700}
+  .value{font-size:22px;font-weight:900;margin-top:6px;color:#fff}
+  .muted{color:var(--muted)}.small{font-size:13px;color:var(--ink2)}
+  .head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:12px}
+  .head h2{margin:0;font-size:17px;color:#fff}.head h3,h3{margin:12px 0 8px;font-size:14px;color:var(--brand-light)}
+  .badge{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;padding:4px 10px;font-size:11px;text-transform:uppercase;font-weight:800;letter-spacing:.04em}
+  .done{background:var(--okbg);color:var(--ok);border:1px solid rgba(52,211,153,.35)}
+  .active{background:var(--brand-soft);color:var(--brand-light);border:1px solid rgba(96,165,250,.4)}
+  .warning{background:var(--warnbg);color:var(--warn);border:1px solid rgba(251,191,36,.35)}
+  .blocked{background:var(--badbg);color:var(--bad);border:1px solid rgba(251,113,133,.38)}
+  .pending{background:rgba(148,163,184,.14);color:var(--ink2);border:1px solid var(--line)}
+  .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  button{border:1px solid transparent;border-radius:10px;padding:8px 13px;font-weight:700;font-size:12px;cursor:pointer;transition:all .14s ease}
+  .primary{background:var(--brand-hi);color:#fff;border-color:var(--brand-light)}.primary:hover{background:var(--brand)}
+  .secondary{background:var(--card2);color:var(--ink);border-color:var(--line-strong)}.secondary:hover{border-color:var(--brand-light)}
+  .warnbtn{background:var(--warnbg);color:var(--warn);border-color:rgba(251,191,36,.4)}
+  .danger{background:var(--badbg);color:var(--bad);border-color:rgba(251,113,133,.4)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  input,select,textarea{width:100%;background:#0c1322;color:var(--ink);border:1px solid var(--line-strong);border-radius:10px;padding:10px;font:inherit;font-size:13px}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--brand-light);box-shadow:0 0 0 3px var(--brand-glow)}
+  .form{display:grid;gap:10px;margin-top:10px}
+  .raw{white-space:pre-wrap;font-family:Consolas,"Cascadia Code",monospace;font-size:12px;background:#0a0f1c;color:var(--ink2);border:1px solid var(--line);border-radius:10px;padding:12px;max-height:240px;overflow:auto}
+  .chip{display:inline-flex;border-radius:999px;padding:3px 9px;background:var(--brand-soft);color:var(--brand-light);border:1px solid rgba(96,165,250,.3);font-size:11px;font-weight:700;margin:4px 6px 0 0}
+  .go-card{background:linear-gradient(135deg,rgba(16,185,129,.16),rgba(29,78,216,.22));border:1px solid rgba(52,211,153,.45);border-radius:var(--radius);padding:18px}
+  .nogo-card{background:linear-gradient(135deg,rgba(244,63,94,.16),rgba(23,34,56,.95));border:1px solid rgba(251,113,133,.45);border-radius:var(--radius);padding:18px}
+  code{background:#0c1322;color:#93c5fd;padding:2px 6px;border-radius:6px;font-family:Consolas,monospace;font-size:12px}
+  @media (max-width:1280px){.stats{grid-template-columns:repeat(3,minmax(0,1fr))}.layout{grid-template-columns:1fr}.rail{grid-template-columns:repeat(4,minmax(90px,1fr))}}
+  @media (max-width:920px){.shell{grid-template-columns:1fr}.nav{position:static;height:auto}.stats,.grid2,.grid3,.rail{grid-template-columns:1fr}}
+  </style></head><body>
+  <div class="shell">
+    <aside class="nav">
+      <div class="brand-box">
+        <div class="brand-title"><span>OXE Control Room</span><span class="nav-pill">v2</span></div>
+        <div class="brand-sub" id="nav-project">Carregando…</div>
+      </div>
+      <div class="nav-group">
+        <div class="nav-label">Menu Completo</div>
+        <button class="nav-btn active" data-tab="overview" onclick="setTab('overview')"><span>Visão Geral & Go/No-Go</span><span class="nav-pill" id="pill-go">—</span></button>
+        <button class="nav-btn" data-tab="plan" onclick="setTab('plan')"><span>Plano, Ondas & Cobertura</span><span class="nav-pill" id="pill-plan">0</span></button>
+        <button class="nav-btn" data-tab="agents" onclick="setTab('agents')"><span>Agentes, Colisões & Inbox</span><span class="nav-pill" id="pill-agents">0</span></button>
+        <button class="nav-btn" data-tab="reevaluate" onclick="setTab('reevaluate')"><span>Reavaliação & Drift</span><span class="nav-pill" id="pill-drift">0</span></button>
+        <button class="nav-btn" data-tab="scorecard" onclick="setTab('scorecard')"><span>Scorecard & ROI</span><span class="nav-pill" id="pill-score">—</span></button>
+        <button class="nav-btn" data-tab="worktrees" onclick="setTab('worktrees')"><span>Worktrees & Ecossistema</span><span class="nav-pill" id="pill-wt">0</span></button>
+        <button class="nav-btn" data-tab="execution" onclick="setTab('execution')"><span>Execução, Gates & Verify</span><span class="nav-pill" id="pill-gates">0</span></button>
+        <button class="nav-btn" data-tab="sessions" onclick="setTab('sessions')"><span>Sessões & Contexto</span><span class="nav-pill" id="pill-sess">0</span></button>
+      </div>
+      <div class="item" style="margin-top:auto">
+        <div class="label">Sessão Ativa</div>
+        <div class="small" id="nav-session" style="margin-top:4px;font-weight:700;color:#fff">—</div>
+        <div class="actions" style="margin-top:10px">
+          <button class="primary" onclick="refresh()">Atualizar</button>
+          <button class="secondary" id="auto-btn" onclick="toggleAuto()">Auto: ON</button>
+        </div>
+      </div>
+    </aside>
+    <main class="main">
+      <div class="topbar">
+        <div>
+          <h1 id="top-title">OXE Decision Control Room</h1>
+          <div class="small" id="top-next" style="margin-top:4px">Sincronizando telemetria ao vivo via <code>/api/state</code>…</div>
+        </div>
+        <div class="topbar-meta">
+          <span class="chip" id="chip-phase">fase: —</span>
+          <span class="chip" id="chip-conf">confiança: —</span>
+          <span class="chip" id="chip-alm">ALM: —</span>
+          <span class="chip" id="chip-ci">CI: —</span>
+        </div>
+      </div>
+      <div id="app">Carregando…</div>
+    </main>
+  </div>
+  <script>
+  const app=document.getElementById('app');let ctx=null;let tab='overview';let session=null;let autoOn=true;let timer=null;
+  const esc=(s)=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const cls=(s)=>{const v=String(s||'').toLowerCase();if(/(healthy|approved|done|go|clean|well-calibrated|passed|ready|completed|no_impact|ok)/.test(v))return'done';if(/(running|in_review|active|mentioned|acceptable|controlled|replaying|planned)/.test(v))return'active';if(/(rejected|needs_revision|blocked|failed|no-go|overconfident|do_not_execute|aborted|waiting_approval|contract_drift|replan_recommended|broken)/.test(v))return'blocked';if(/(risk|warning|underconfident|needs_refinement|paused|mechanical_sync|stale)/.test(v))return'warning';return'pending';};
+  const badge=(s,l)=>'<span class="badge '+cls(s)+'">'+esc(l||s||'pending')+'</span>';
+  const list=(items,empty)=>items&&items.length?'<div class="list">'+items.join('')+'</div>':'<div class="entry small">'+esc(empty)+'</div>';
+  const kv=(k,v)=>'<div class="item"><div class="label">'+esc(k)+'</div><div class="small" style="margin-top:6px;font-weight:700;color:#fff">'+esc(v)+'</div></div>';
+  const runtimeDisabled=()=>ctx&&ctx.dashboard&&ctx.dashboard.readOnly;
+  async function api(url,opts={}){const res=await fetch(url,{headers:{'Content-Type':'application/json'},...opts});if(!res.ok)throw new Error(await res.text());return res.json();}
+  async function refresh(){ctx=await api('/api/state'+(session?'?session='+encodeURIComponent(session):''));render();}
+  function updateNav(){
+    document.querySelectorAll('.nav-btn').forEach((b)=>b.classList.toggle('active',b.dataset.tab===tab));
+    document.getElementById('nav-project').textContent=ctx.projectRoot||'—';
+    document.getElementById('nav-session').textContent=ctx.activeSession||'raiz (.oxe/)';
+    document.getElementById('top-next').innerHTML='Próximo: <strong>'+esc(ctx.nextStep&&ctx.nextStep.step||'—')+'</strong> · '+esc(ctx.nextStep&&ctx.nextStep.reason||'—');
+    document.getElementById('chip-phase').textContent='fase: '+(ctx.phase||'—');
+    document.getElementById('chip-conf').textContent='confiança: '+(ctx.readiness&&ctx.readiness.confidence!=null?ctx.readiness.confidence+'%':'—');
+    document.getElementById('chip-alm').textContent='ALM: '+((ctx.onboard_summary&&ctx.onboard_summary.alm_provider)||'none');
+    document.getElementById('chip-ci').textContent='CI: '+((ctx.onboard_summary&&ctx.onboard_summary.ci_providers&&ctx.onboard_summary.ci_providers.join(','))||'local');
+    document.getElementById('pill-go').textContent=ctx.readiness&&ctx.readiness.go?'GO':'HOLD';
+    document.getElementById('pill-plan').textContent=String((ctx.plan&&ctx.plan.totalTasks)||0);
+    document.getElementById('pill-agents').textContent=String((ctx.active_agents||[]).length);
+    document.getElementById('pill-drift').textContent=String((ctx.reevaluate&&ctx.reevaluate.summary&&ctx.reevaluate.summary.contract_drift)||0);
+    document.getElementById('pill-score').textContent=ctx.scorecard_routing&&ctx.scorecard_routing.auto_route?'AUTO':'STD';
+    document.getElementById('pill-wt').textContent=String((ctx.worktree_hygiene&&ctx.worktree_hygiene.total)||0);
+    document.getElementById('pill-gates').textContent=String((ctx.enterprise&&ctx.enterprise.gateQueue&&ctx.enterprise.gateQueue.pending&&ctx.enterprise.gateQueue.pending.length)||0);
+    document.getElementById('pill-sess').textContent=String((ctx.sessions&&ctx.sessions.items&&ctx.sessions.items.length)||0);
+  }
+  function render(){
+    updateNav();
+    const agentsLive=ctx.active_agents||[];
+    const collisions=ctx.agent_collisions||[];
+    const messages=ctx.agent_messages||[];
+    const wt=ctx.worktree_hygiene||{total:0,clean:[],dirty:[],orphans:[],warnings:[]};
+    const reev=ctx.reevaluate||{overall_status:'unavailable',summary:{no_impact:0,mechanical_sync:0,contract_drift:0},tasks:[]};
+    const scr=ctx.scorecard_routing||{auto_route:false,tiers:{fast:0,balanced:0,powerful:0},scorecard:null};
+    const ob=ctx.onboard_summary||{stacks:[],ci_providers:[],alm_provider:'none',env_ok:true};
+    const flow=(ctx.visual.flow.nodes||[]).map((n)=>'<div class="node"><div class="label">Etapa</div><div style="font-weight:800;font-size:14px;margin-top:6px;color:#fff">'+esc(n.label)+'</div><div style="margin-top:8px">'+badge(n.status)+'</div></div>');
+    const graph=(ctx.visual.artifactGraph||[]).map((n)=>'<div class="item"><div class="head"><strong>'+esc(n.label)+'</strong>'+badge(n.status)+'</div><div class="small">'+esc(n.detail||'—')+'</div><div class="small muted" style="margin-top:6px">'+esc(n.path||'—')+'</div></div>');
+    const waves=(ctx.plan.waves||[]).map((w)=>'<div class="panel"><div class="head"><div><h2>Onda '+esc(w.wave)+'</h2><div class="small muted">'+esc(w.taskIds.length)+' tarefa(s)</div></div>'+badge(String(ctx.runtime.parsed.currentWave)===String(w.wave)?'running':'planned')+'</div>'+w.tasks.map((t)=>'<div class="entry" style="margin-top:10px"><div style="font-weight:800;color:#fff">'+esc(t.id)+' — '+esc(t.title)+'</div><div class="small muted" style="margin-top:4px">Depende de: '+esc(t.dependsOn.length?t.dependsOn.join(', '):'—')+' · Verify: <code>'+esc(t.verifyCommand||'—')+'</code></div><div style="margin-top:6px">'+(t.aceite||[]).map((x)=>'<span class="chip">'+esc(x)+'</span>').join('')+(t.decisions||[]).map((x)=>'<span class="chip">'+esc(x)+'</span>').join('')+'</div></div>').join('')+'</div>');
+    const coverage=(ctx.coverage||[]).map((c)=>'<div class="item"><div class="head"><strong>'+esc(c.id)+'</strong>'+badge(c.verifyStatus,c.verifyStatus)+'</div><div class="small">'+esc(c.criterion)+'</div><div class="small muted" style="margin-top:6px">Plano: '+esc(c.tasks.length?c.tasks.join(', '):'sem cobertura')+' · Verify: '+esc(c.verifySummary||c.verifyHow||'pendente')+'</div></div>');
     const comments=(ctx.review.comments||[]).map((c)=>'<div class="item"><div class="small muted">'+esc(c.target)+' · '+esc(c.type)+' · '+esc(c.status)+' · '+esc(c.author)+'</div><div style="margin-top:6px">'+esc(c.text)+'</div>'+(c.status!=='resolved'?'<div class="actions"><button class="secondary" onclick="resolveComment(\\''+esc(c.id)+'\\')">Resolver</button></div>':'')+'</div>');
-    const sessions=(ctx.sessions.items||[]).map((s)=>'<div class="item"><div class="head"><div><strong>'+esc(s.id)+' · '+esc(s.name)+'</strong><div class="small muted">Criada: '+esc(s.createdAt)+' · Última atividade: '+esc(s.lastActivity)+'</div></div>'+badge(s.status)+'</div><div class="small">'+esc(s.summary||'—')+'</div><div class="small muted" style="margin-top:8px">'+esc(s.path||'—')+'</div><div class="actions"><button class="secondary" onclick="openSession(\\''+esc(s.path)+'\\')">Abrir sessão</button></div></div>');
-    const repo=Object.entries(ctx.repositoryContext||{}).map(([k,v])=>'<div class="item"><strong>'+esc(k.toUpperCase())+'</strong><div class="small" style="margin-top:8px">'+esc(v.summary||'Sem resumo disponível.')+'</div><div class="small muted" style="margin-top:8px">'+esc(v.path||'—')+'</div></div>');
-    const contextSelected=((ctx.context&&ctx.context.pack&&ctx.context.pack.selected_artifacts)||[]).map((artifact)=>'<div class="item"><div class="head"><strong>'+esc(artifact.alias)+'</strong>'+badge(artifact.exists?(artifact.using_fallback?'fallback':'selected'):'missing',artifact.exists?(artifact.using_fallback?'fallback':'selected'):'missing')+'</div><div class="small">'+esc(artifact.summary||'—')+'</div><div class="small muted" style="margin-top:8px">'+esc(artifact.path||'—')+'</div></div>');
-    const contextGaps=((ctx.context&&ctx.context.pack&&ctx.context.pack.gaps)||[]).map((gap)=>'<div class="entry small">['+esc(gap.severity)+'] '+esc(gap.alias)+': '+esc(gap.reason)+'</div>');
-    const contextConflicts=((ctx.context&&ctx.context.pack&&ctx.context.pack.conflicts)||[]).map((conflict)=>'<div class="entry small">'+esc(conflict.alias)+': '+esc(conflict.reason)+'</div>');
-    const semanticsWarnings=((ctx.context&&ctx.context.semantics&&ctx.context.semantics.audit&&ctx.context.semantics.audit.warnings)||[]).map((warning)=>'<div class="entry small">'+esc(warning)+'</div>');
-  const blockers=(ctx.readiness.blockers||[]).map((x)=>'<div class="entry small">'+esc(x)+'</div>'); const warnings=(ctx.readiness.warnings||[]).concat((ctx.diagnostics.enterpriseWarnings||[])).slice(0,10).map((x)=>'<div class="entry small">'+esc(x)+'</div>'); const evidence=(ctx.runtime.parsed.evidence||[]).map((x)=>'<div class="entry small">'+esc(x)+'</div>'); const blockages=(ctx.runtime.parsed.blockages||[]).map((x)=>'<div class="entry small">'+esc(x)+'</div>'); const history=((ctx.sessions.current&&ctx.sessions.current.history)||[]).map((x)=>'<div class="entry small">'+esc(x.date)+' · '+esc(x.event)+'</div>');
-  const enterpriseGates=((ctx.enterprise&&ctx.enterprise.pendingGates&&ctx.enterprise.pendingGates.pending)||[]).map((gate)=>'<div class="entry small">'+esc(gate.gate_id)+' · '+esc(gate.scope)+' · '+esc(gate.work_item_id||'run')+'</div>');
-    app.innerHTML='<div class="stats"><div class="metric"><div class="label">Saúde lógica</div><div class="value">'+badge(ctx.healthStatus)+'</div></div><div class="metric"><div class="label">Go / No-Go</div><div class="value">'+badge(ctx.readiness.decision,ctx.readiness.decision)+'</div></div><div class="metric"><div class="label">Review</div><div class="value">'+badge(ctx.planReviewStatus)+'</div></div><div class="metric"><div class="label">Checkpoints</div><div class="value">'+badge(ctx.readiness.checkpointPending?'pending_approval':'clear',ctx.readiness.checkpointPending?'pendente':'ok')+'</div></div><div class="metric"><div class="label">Runtime</div><div class="value">'+badge(ctx.runtime.parsed.status||ctx.state.parsed.runtimeStatus||'pending')+'</div></div></div>'
-    +'<div class="tabs">'+['decision','plan','execution','evidence','sessions','context','repository'].map((t)=>'<button class="tab'+(tab===t?' active':'')+'" onclick="setTab(\\''+t+'\\')">'+(t==='repository'?'repository context':t)+'</button>').join('')+'</div>'
-    +'<div class="view'+(tab==='decision'?' active':'')+'"><div class="layout"><div class="stack"><div class="panel"><div class="head"><div><h2 style="margin:0">Decision Control</h2><div class="muted">A pergunta principal: podemos executar agora?</div></div></div><div class="'+(ctx.readiness.go?'panel go':'panel nogo')+'" style="padding:18px"><div class="label">Decisão operacional</div><div style="font-size:38px;font-weight:900;margin-top:8px">'+(ctx.readiness.go?'GO':'NO-GO')+'</div><div class="small muted" style="margin-top:8px">'+esc(ctx.nextStep.reason||'—')+'</div><div class="actions">'+badge(ctx.planReviewStatus,'review:'+ctx.planReviewStatus)+badge(ctx.readiness.confidenceBand,'confiança:'+ctx.readiness.confidenceBand)+(ctx.readiness.checkpointPending?badge('pending_approval','checkpoint pendente'):'')+'</div></div></div><div class="panel"><div class="head"><div><h2 style="margin:0">Decision Rail</h2><div class="muted">Spec → Plan → Review → Execute → Verify → Lessons.</div></div></div><div class="rail">'+flow.join('')+'</div></div><div class="panel"><div class="head"><div><h2 style="margin:0">Readiness Map</h2><div class="muted">Bloqueios e sinais ativos antes do execute.</div></div></div><div class="grid2"><div><h3>Bloqueios</h3>'+list(blockers,'Sem bloqueios formais para executar.')+'</div><div><h3>Warnings</h3>'+list(warnings,'Sem warnings relevantes.')+'</div></div></div><div class="panel"><div class="head"><div><h2 style="margin:0">Review e aprovação</h2><div class="muted">Persistida em STATE.md, PLAN-REVIEW.md e comentários.</div></div></div><div class="grid2"><div><div class="actions"><button class="primary" onclick="changeReview(\\'approved\\')">Aprovar</button><button class="warnbtn" onclick="changeReview(\\'needs_revision\\')">Pedir revisão</button><button class="secondary" onclick="changeReview(\\'in_review\\')">Marcar em revisão</button><button class="danger" onclick="changeReview(\\'rejected\\')">Rejeitar</button></div><div class="form"><input id="comment-target" placeholder="target ex.: wave:1, T2, checkpoint:CP-01"/><select id="comment-type"><option value="note">note</option><option value="risk">risk</option><option value="question">question</option><option value="approval">approval</option></select><textarea id="comment-text" rows="6" placeholder="Comentário de revisão"></textarea><button class="primary" onclick="addComment()">Adicionar comentário</button></div></div><div><h3>Comentários</h3>'+list(comments,'Nenhum comentário de revisão.')+'</div></div></div></div><div class="stack"><div class="panel"><div class="head"><div><h2 style="margin:0">Mapa de artefatos</h2><div class="muted">Fonte de verdade visual do ciclo atual.</div></div></div><div class="grid3">'+graph.join('')+'</div></div><div class="panel"><div class="head"><div><h2 style="margin:0">Calibração do plano</h2><div class="muted">Confiança prevista versus resultado real.</div></div>'+badge(ctx.calibration.status)+'</div><div class="small">'+esc(ctx.calibration.summary)+'</div></div></div></div></div>'
-    +'<div class="view'+(tab==='plan'?' active':'')+'"><div class="layout"><div class="stack"><div class="panel"><div class="head"><div><h2 style="margin:0">Trilha do plano</h2><div class="muted">Ondas, dependências e vínculos com aceite e decisões.</div></div>'+badge(ctx.planReviewStatus)+'</div>'+list(waves,'PLAN.md ausente ou sem tarefas estruturadas.')+'</div><div class="panel"><div class="head"><div><h2 style="margin:0">Matriz de cobertura</h2><div class="muted">SPEC → PLAN → VERIFY em um único quadro.</div></div></div><div class="grid2">'+coverage.join('')+'</div></div></div><div class="stack"><div class="panel"><div class="head"><div><h2 style="margin:0">Autoavaliação do plano</h2><div class="muted">Melhor plano atual e faixa de confiança.</div></div></div><div class="grid3"><div class="item"><strong>Melhor plano atual</strong><div class="small muted" style="margin-top:8px">'+esc((ctx.plan.selfEvaluation&&ctx.plan.selfEvaluation.bestPlan)||'—')+'</div></div><div class="item"><strong>Confiança</strong><div class="small muted" style="margin-top:8px">'+esc(ctx.readiness.confidence!=null?ctx.readiness.confidence+'%':'—')+'</div></div><div class="item"><strong>Faixa</strong><div class="small muted" style="margin-top:8px">'+esc(ctx.readiness.confidenceBand)+'</div></div></div></div><div class="panel"><div class="head"><div><h2 style="margin:0">Lacunas da SPEC</h2><div class="muted">Critérios sem cobertura explícita no plano.</div></div></div>'+list((ctx.spec.uncoveredCriteria||[]).map((c)=>'<div class="entry small">'+esc(c.id)+' · '+esc(c.criterion)+'</div>'),'Sem lacunas detectadas.')+'</div></div></div></div>'
-  +'<div class="view'+(tab==='execution'?' active':'')+'"><div class="layout"><div class="stack"><div class="panel"><div class="head"><div><h2 style="margin:0">Runtime operacional</h2><div class="muted">Estado tático da execução.</div></div>'+badge(ctx.runtime.parsed.status||'pending')+'</div><div class="grid3"><div class="item"><strong>Onda atual</strong><div class="small muted" style="margin-top:8px">'+esc(ctx.runtime.parsed.currentWave||'—')+'</div></div><div class="item"><strong>Tarefas ativas</strong><div class="small muted" style="margin-top:8px">'+esc((ctx.runtime.parsed.activeTasks||[]).join(', ')||'—')+'</div></div><div class="item"><strong>Próxima ação</strong><div class="small muted" style="margin-top:8px">'+esc(ctx.runtime.parsed.nextAction||'—')+'</div></div><div class="item"><strong>Motivo</strong><div class="small muted" style="margin-top:8px">'+esc(ctx.runtime.parsed.nextReason||'—')+'</div></div><div class="item"><strong>Modo runtime</strong><div class="small muted" style="margin-top:8px">'+esc((ctx.enterprise&&ctx.enterprise.runtimeMode&&ctx.enterprise.runtimeMode.runtime_mode)||'—')+'</div></div><div class="item"><strong>Fallback</strong><div class="small muted" style="margin-top:8px">'+esc((ctx.enterprise&&ctx.enterprise.fallbackMode)||'—')+'</div></div></div></div><div class="panel"><div class="head"><div><h2 style="margin:0">Checkpoints</h2><div class="muted">Gates humanos formais.</div></div></div>'+list(checkpoints,'CHECKPOINTS.md ausente ou sem gates formais.')+'</div><div class="panel"><div class="head"><div><h2 style="margin:0">Gates pendentes</h2><div class="muted">Fila operacional persistida por run/work item.</div></div></div>'+list(enterpriseGates,'Sem gates pendentes no runtime.')+'</div><div class="panel"><div class="head"><div><h2 style="margin:0">Agentes</h2><div class="muted">Blueprint e runtime multiagente.</div></div></div>'+list(agents,'Sem blueprint de agentes ou runtime multiagente ativo.')+'</div></div><div class="stack"><div class="panel"><div class="head"><div><h2 style="margin:0">Evidências</h2><div class="muted">Artefatos e sinais da execução atual.</div></div></div>'+list(evidence,'Sem evidência operacional registrada.')+'</div><div class="panel"><div class="head"><div><h2 style="margin:0">Enterprise verify</h2><div class="muted">Manifest, risco residual, governança e promoção.</div></div></div><div class="grid3">'+kvItem('Checks',(ctx.enterprise&&ctx.enterprise.verificationSummary&&ctx.enterprise.verificationSummary.total)||'—')+kvItem('Fail',(ctx.enterprise&&ctx.enterprise.verificationSummary&&ctx.enterprise.verificationSummary.fail)||0)+kvItem('Coverage',(ctx.enterprise&&ctx.enterprise.evidenceCoverage&&String(ctx.enterprise.evidenceCoverage.coverage_percent)+'%')||'—')+kvItem('Residual risks',(ctx.enterprise&&ctx.enterprise.residualRiskSummary&&ctx.enterprise.residualRiskSummary.total)||0)+kvItem('High/Critical',(ctx.enterprise&&ctx.enterprise.residualRiskSummary&&ctx.enterprise.residualRiskSummary.highOrCritical)||0)+kvItem('Policy decisions',(ctx.enterprise&&ctx.enterprise.policyDecisionSummary&&ctx.enterprise.policyDecisionSummary.total)||0)+kvItem('Policy coverage',(ctx.enterprise&&ctx.enterprise.policyCoverage&&String(ctx.enterprise.policyCoverage.coveragePercent)+'%')||'—')+kvItem('Quota retries',(ctx.enterprise&&ctx.enterprise.quotaSummary&&ctx.enterprise.quotaSummary.consumed&&String(ctx.enterprise.quotaSummary.consumed.retries)+'/'+((ctx.enterprise.quotaSummary.limits&&ctx.enterprise.quotaSummary.limits.maxRetriesPerRun)!=null?ctx.enterprise.quotaSummary.limits.maxRetriesPerRun:'∞'))||'—')+kvItem('Audit critical',(ctx.enterprise&&ctx.enterprise.auditSummary&&ctx.enterprise.auditSummary.critical)||0)+kvItem('Promotion',(ctx.enterprise&&ctx.enterprise.promotionSummary&&ctx.enterprise.promotionSummary.status)||'—')+kvItem('Promotion readiness',(ctx.enterprise&&ctx.enterprise.promotionReadiness&&ctx.enterprise.promotionReadiness.status)||'—')+kvItem('Recovery',(ctx.enterprise&&ctx.enterprise.recoveryState&&ctx.enterprise.recoveryState.status)||'—')+kvItem('Providers',((ctx.enterprise&&ctx.enterprise.providerCatalog&&ctx.enterprise.providerCatalog.summary&&((ctx.enterprise.providerCatalog.summary.pluginsCount!=null?ctx.enterprise.providerCatalog.summary.pluginsCount:ctx.enterprise.providerCatalog.summary.total_plugins)!=null?(ctx.enterprise.providerCatalog.summary.pluginsCount!=null?ctx.enterprise.providerCatalog.summary.pluginsCount:ctx.enterprise.providerCatalog.summary.total_plugins):Array.isArray(ctx.enterprise.providerCatalog.summary.plugins)?ctx.enterprise.providerCatalog.summary.plugins.length:0)))||0)+'</div></div><div class="panel"><div class="head"><div><h2 style="margin:0">Bloqueios</h2><div class="muted">O que impede avanço agora.</div></div></div>'+list(blockages,'Sem bloqueios explícitos.')+'</div><div class="panel"><div class="head"><div><h2 style="margin:0">Runtime bruto</h2><div class="muted">Leitura direta do artefato operacional.</div></div></div><div class="raw">'+esc(ctx.runtime.summary||'EXECUTION-RUNTIME.md ausente.')+'</div></div></div></div></div>'
-    +'<div class="view'+(tab==='evidence'?' active':'')+'"><div class="layout"><div class="stack"><div class="panel"><div class="head"><div><h2 style="margin:0">Verify</h2><div class="muted">Evidência final e validação.</div></div>'+badge(ctx.calibration.status)+'</div><div class="raw">'+esc(ctx.verify.summary||'VERIFY.md ausente.')+'</div></div><div class="panel"><div class="head"><div><h2 style="margin:0">Critérios no verify</h2><div class="muted">Evidências detectadas por critério A*.</div></div></div><div class="grid2">'+coverage.join('')+'</div></div></div><div class="stack"><div class="panel"><div class="head"><div><h2 style="margin:0">Investigações</h2><div class="muted">Base de evidência antes do plano.</div></div></div><div class="raw">'+esc(ctx.support.investigationsSummary||'INVESTIGATIONS.md ausente.')+'</div></div><div class="panel"><div class="head"><div><h2 style="margin:0">Capabilities</h2><div class="muted">Recursos nativos do projeto.</div></div></div><div class="raw">'+esc(ctx.support.capabilitiesSummary||'CAPABILITIES.md ausente.')+'</div></div></div></div></div>'
-    +'<div class="view'+(tab==='sessions'?' active':'')+'"><div class="layout"><div class="stack"><div class="panel"><div class="head"><div><h2 style="margin:0">Sessão ativa</h2><div class="muted">Contexto atual resolvido pelo STATE global.</div></div></div><div class="grid2"><div class="item"><strong>ID</strong><div class="small muted" style="margin-top:8px">'+esc((ctx.sessions.current&&ctx.sessions.current.id)||'—')+'</div></div><div class="item"><strong>Nome</strong><div class="small muted" style="margin-top:8px">'+esc((ctx.sessions.current&&ctx.sessions.current.name)||ctx.activeSession||'—')+'</div></div><div class="item"><strong>Status</strong><div class="small muted" style="margin-top:8px">'+esc((ctx.sessions.current&&ctx.sessions.current.status)||'—')+'</div></div><div class="item"><strong>Última atividade</strong><div class="small muted" style="margin-top:8px">'+esc((ctx.sessions.current&&ctx.sessions.current.lastActivity)||'—')+'</div></div></div><div class="item" style="margin-top:14px"><strong>Resumo</strong><div class="small muted" style="margin-top:8px">'+esc((ctx.sessions.current&&ctx.sessions.current.summary)||'Sem SESSION.md ativo ou modo legado.')+'</div><div class="small muted" style="margin-top:8px">'+esc(ctx.sessions.currentPath||'—')+'</div></div><div class="item" style="margin-top:14px"><strong>Tags</strong><div class="small" style="margin-top:8px">'+((ctx.sessions.current&&ctx.sessions.current.tags)||[]).map((x)=>'<span class="chip">'+esc(x)+'</span>').join('')+'</div></div><h3>Histórico</h3>'+list(history,'Sem histórico de sessão disponível.')+'</div></div><div class="stack"><div class="panel"><div class="head"><div><h2 style="margin:0">Lista de sessões</h2><div class="muted">Índice real lido de .oxe/SESSIONS.md.</div></div></div>'+list(sessions,'SESSIONS.md ausente ou sem sessões registradas.')+'</div><div class="panel"><div class="head"><div><h2 style="margin:0">Índice bruto</h2><div class="muted">Leitura direta do artefato global.</div></div></div><div class="raw">'+esc(ctx.sessions.raw||'SESSIONS.md ausente.')+'</div></div></div></div></div>'
-    +'<div class="view'+(tab==='context'?' active':'')+'"><div class="layout"><div class="stack"><div class="panel"><div class="head"><div><h2 style="margin:0">Context Pack</h2><div class="muted">Seleção determinística de artefatos para este estado do OXE.</div></div>'+badge((ctx.context&&ctx.context.quality&&ctx.context.quality.primaryStatus)||((ctx.context&&ctx.context.pack&&ctx.context.pack.context_quality&&ctx.context.pack.context_quality.status)||'pending'))+'</div><div class="grid3"><div class="item"><strong>Workflow primário</strong><div class="small muted" style="margin-top:8px">'+esc((ctx.context&&ctx.context.quality&&ctx.context.quality.primaryWorkflow)||'dashboard')+'</div></div><div class="item"><strong>Score</strong><div class="small muted" style="margin-top:8px">'+esc((ctx.context&&ctx.context.quality&&ctx.context.quality.primaryScore)!=null?String(ctx.context.quality.primaryScore):'—')+'</div></div><div class="item"><strong>Freshness</strong><div class="small muted" style="margin-top:8px">'+esc((ctx.context&&ctx.context.pack&&ctx.context.pack.freshness&&ctx.context.pack.freshness.reason)||'—')+'</div></div></div><div class="small muted" style="margin-top:12px">Pack: '+esc((ctx.context&&ctx.context.pack&&ctx.context.pack.path)||'—')+' · semantics hash: '+esc((ctx.context&&ctx.context.pack&&ctx.context.pack.semantics_hash)||'—')+'</div></div><div class="panel"><div class="head"><div><h2 style="margin:0">Artefatos selecionados</h2><div class="muted">Contexto efetivamente priorizado pelo pack.</div></div></div><div class="grid2">'+contextSelected.join('')+'</div></div></div><div class="stack"><div class="panel"><div class="head"><div><h2 style="margin:0">Gaps e conflitos</h2><div class="muted">Lacunas e divergências entre raiz e sessão.</div></div></div><h3>Gaps</h3>'+list(contextGaps,'Sem gaps no pack atual.')+'<h3>Conflitos</h3>'+list(contextConflicts,'Sem conflitos detectados.')+'</div><div class="panel"><div class="head"><div><h2 style="margin:0">Summaries ativos</h2><div class="muted">Referências persistidas para compressão de contexto.</div></div></div><div class="grid2">'+kvItem('Project summary',(ctx.context&&ctx.context.summaries&&ctx.context.summaries.project)||'—')+kvItem('Session summary',(ctx.context&&ctx.context.summaries&&ctx.context.summaries.session)||'—')+kvItem('Phase summary',(ctx.context&&ctx.context.summaries&&ctx.context.summaries.phase)||'—')+'</div></div><div class="panel"><div class="head"><div><h2 style="margin:0">Semântica multi-runtime</h2><div class="muted">Drift auditável entre workflow, wrapper e prompt renderizado.</div></div>'+badge(ctx.context&&ctx.context.semantics&&ctx.context.semantics.ok?'healthy':'warning',ctx.context&&ctx.context.semantics&&ctx.context.semantics.ok?'ok':'drift')+'</div><div class="small muted">Manifest: '+esc((ctx.context&&ctx.context.semantics&&ctx.context.semantics.manifestPath)||'—')+' · mismatch count: '+esc((ctx.context&&ctx.context.semantics&&ctx.context.semantics.audit&&ctx.context.semantics.audit.mismatchCount)||0)+'</div>'+list(semanticsWarnings,'Sem warnings semânticos ativos.')+'</div></div></div></div>'
-    +'<div class="view'+(tab==='repository'?' active':'')+'"><div class="panel"><div class="head"><div><h2 style="margin:0">Repository Context</h2><div class="muted">Contexto de repositório como suporte de decisão.</div></div></div><div class="grid3">'+repo.join('')+'</div></div></div>'; enhanceExecutionView();}
-  function executionViewElement(){return Array.from(app.querySelectorAll('.view')).find((view)=>view.textContent.includes('Runtime operacional'));}
-    function panel(title,body){return '<div class="panel"><div class="head"><div><h2 style="margin:0">'+esc(title)+'</h2></div></div>'+body+'</div>';}
-    function kvItem(label,value){return '<div class="item"><strong>'+esc(label)+'</strong><div class="small muted" style="margin-top:8px">'+esc(value)+'</div></div>';}
-    function actionButton(label,action,klass){return '<button class="'+klass+'" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeAction(\\''+action+'\\')">'+label+'</button>';}
-    function enhanceExecutionView(){
-      const view=executionViewElement();
-    if(!view||!ctx)return;
-    const stacks=view.querySelectorAll('.stack');
-    if(stacks.length<2)return;
+    const blockers=(ctx.readiness.blockers||[]).map((x)=>'<div class="entry small">'+esc(x)+'</div>');
+    const warnings=(ctx.readiness.warnings||[]).concat((ctx.diagnostics.enterpriseWarnings||[])).slice(0,12).map((x)=>'<div class="entry small">'+esc(x)+'</div>');
+    const activeAgentsCards=agentsLive.map((a)=>'<div class="item"><div class="head"><div><strong>'+esc(a.agent_id)+'</strong><div class="small muted">'+esc(a.provider||'—')+' · '+esc(a.role||'executor')+' · branch: '+esc(a.branch||'—')+'</div></div>'+badge('active',a.task||'ativo')+'</div><div class="small">Worktree: <code>'+esc(a.worktree||'—')+'</code></div><div style="margin-top:6px">'+((a.write_set||[]).length?(a.write_set||[]).map((f)=>'<span class="chip">'+esc(f)+'</span>').join(''):'<span class="small muted">write_set vazio</span>')+'</div><div class="small muted" style="margin-top:6px">Visto: '+esc(a.last_seen||'—')+' · Expira: '+esc(a.expires_at||'—')+'</div></div>');
+    const collisionCards=collisions.map((c)=>'<div class="item" style="border-color:rgba(251,113,133,.5)"><div class="head"><strong>'+esc(c.file)+'</strong>'+badge('blocked','colisão')+'</div><div class="small">Agentes: <strong>'+esc((c.agents||[]).join(' × '))+'</strong> ('+esc((c.providers||[]).join(' / '))+')</div><div class="small muted" style="margin-top:4px">Tarefas: '+esc((c.tasks||[]).filter(Boolean).join(', ')||'—')+'</div></div>');
+    const inboxCards=messages.slice().reverse().map((m)=>'<div class="entry"><div class="head"><strong>'+esc(m.from)+' → '+esc(m.to)+'</strong>'+badge('active',m.topic||'general')+'</div><div class="small">'+esc(m.body)+'</div><div class="small muted" style="margin-top:4px">'+esc(m.at||'')+'</div></div>');
+    const reevTasks=(reev.tasks||[]).map((t)=>'<div class="item"><div class="head"><strong>'+esc(t.id)+' — '+esc(t.title||'')+'</strong>'+badge(t.classification,t.classification)+'</div><div class="small">Ação: <code>'+esc(t.recommended_action||'—')+'</code></div>'+((t.overlapping_files&&t.overlapping_files.length)?'<div style="margin-top:6px">'+t.overlapping_files.map((f)=>'<span class="chip">'+esc(f)+'</span>').join('')+'</div>':'')+'</div>');
+    const gateQueue=(ctx.enterprise&&ctx.enterprise.gateQueue)||{pending:[],stalePending:[],resolvedRecent:[],gateSlaHours:24};
+    const pendingGates=(gateQueue.pending||[]).map((g)=>'<div class="entry"><div class="head"><strong>'+esc(g.gate_id)+'</strong>'+badge(g.status||'pending')+'</div><div class="small muted">scope='+esc(g.scope||'—')+' · task='+esc(g.work_item_id||'—')+'</div><div class="actions"><button class="primary" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeGateResolve(\\''+esc(g.gate_id)+'\\',\\'approve\\')">Aprovar</button><button class="warnbtn" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeGateResolve(\\''+esc(g.gate_id)+'\\',\\'waive\\')">Dispensar</button><button class="danger" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeGateResolve(\\''+esc(g.gate_id)+'\\',\\'reject\\')">Rejeitar</button></div></div>');
+    const checkpoints=(ctx.checkpoints.parsed||[]).map((c)=>'<div class="item"><div class="head"><strong>'+esc(c.id)+'</strong>'+badge(c.status)+'</div><div class="small muted">'+esc(c.type)+' · '+esc(c.phase||'—')+' · '+esc(c.scope||'—')+'</div><div class="small" style="margin-top:6px">'+esc(c.notes||'—')+'</div></div>');
+    const trace=((ctx.tracing&&ctx.tracing.events)||[]).slice(-10).reverse().map((e)=>'<div class="entry"><div class="head"><strong>'+esc(e.type)+'</strong>'+badge('active',e.timestamp?e.timestamp.slice(11,19):'—')+'</div><div class="small muted">run='+esc(e.run_id||'—')+' · task='+esc(e.work_item_id||e.task_id||'—')+'</div></div>');
+    const sessions=(ctx.sessions.items||[]).map((s)=>'<div class="item"><div class="head"><div><strong>'+esc(s.id)+' · '+esc(s.name)+'</strong><div class="small muted">'+esc(s.createdAt)+' · '+esc(s.lastActivity)+'</div></div>'+badge(s.status)+'</div><div class="small">'+esc(s.summary||'—')+'</div><div class="actions"><button class="secondary" onclick="openSession(\\''+esc(s.path)+'\\')">Abrir sessão</button></div></div>');
+    const repo=Object.entries(ctx.repositoryContext||{}).map(([k,v])=>'<div class="item"><strong>'+esc(k.toUpperCase())+'</strong><div class="small" style="margin-top:6px">'+esc(v.summary||'Sem resumo.')+'</div></div>');
     const activeRun=ctx.activeRun||{};
-    const graph=ctx.operationalGraph||{nodes:[],edges:[]};
-    const trace=((ctx.tracing&&ctx.tracing.events)||[]).slice(-8).reverse().map((event)=>'<div class="entry"><div class="head"><strong>'+esc(event.type)+'</strong>'+badge(event.timestamp?event.timestamp.slice(11,19):'—',event.timestamp?event.timestamp.slice(11,19):'—')+'</div><div class="small muted">run='+esc(event.run_id||'—')+' · wave='+esc(event.wave_id||'—')+' · task='+esc(event.task_id||'—')+'</div><div class="small" style="margin-top:8px">'+esc(JSON.stringify(event.payload||{}))+'</div></div>').join('')||'<div class="entry small">Sem eventos registrados.</div>';
-    const nodes=(graph.nodes||[]).map((node)=>'<div class="item"><div class="head"><strong>'+esc(node.label||node.id)+'</strong>'+badge(node.status||'pending')+'</div><div class="small muted">'+esc(node.kind||'node')+'</div><div class="small" style="margin-top:8px">'+esc(node.detail||'—')+'</div></div>').join('')||'<div class="entry small">Sem nós operacionais.</div>';
-    const edges=(graph.edges||[]).map((edge)=>'<div class="entry"><div class="small"><strong>'+esc(edge.from)+'</strong> → <strong>'+esc(edge.to)+'</strong></div><div class="small muted" style="margin-top:6px">'+esc(edge.type||'link')+' · '+esc(edge.status||'—')+'</div><div class="small" style="margin-top:6px">'+esc(edge.reason||edge.label||'—')+'</div></div>').join('')||'<div class="entry small">Sem handoffs ou dependências registradas.</div>';
-      const memory=Object.entries(ctx.memoryLayers||{}).filter(([key])=>key!=='readOrder').map(([key,val])=>kvItem(key,Array.isArray(val.source)?val.source.join(' | '):val.source||'—')).join('')||'<div class="entry small">Sem contrato de memória disponível.</div>';
-      const enterprise=ctx.enterprise||{};
-      const gateQueue=enterprise.gateQueue||{pending:[],stalePending:[],resolvedRecent:[],gateSlaHours:24};
-      const pendingGates=(gateQueue.pending||[]).map((gate)=>'<div class="entry"><div class="head"><strong>'+esc(gate.gate_id)+'</strong>'+badge(gate.status||'pending')+'</div><div class="small muted">scope='+esc(gate.scope||'—')+' · task='+esc(gate.work_item_id||'—')+' · actor='+(gate.actor?esc(gate.actor):'—')+'</div><div class="small" style="margin-top:8px">'+esc((gate.context&&gate.context.description)||gate.action||'Sem descrição')+'</div><div class="actions" style="margin-top:12px"><button class="primary" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeGateResolve(\\''+esc(gate.gate_id)+'\\',\\'approve\\')">Approve</button><button class="warnbtn" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeGateResolve(\\''+esc(gate.gate_id)+'\\',\\'waive\\')">Waive</button><button class="danger" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeGateResolve(\\''+esc(gate.gate_id)+'\\',\\'reject\\')">Reject</button></div></div>').join('')||'<div class="entry small">Sem gates pendentes.</div>';
-      const staleGates=(gateQueue.stalePending||[]).map((gate)=>'<div class="entry"><div class="head"><strong>'+esc(gate.gate_id)+'</strong>'+badge('stale','warning')+'</div><div class="small muted">requested_at='+esc(gate.requested_at||'—')+' · scope='+esc(gate.scope||'—')+'</div></div>').join('')||'<div class="entry small">Sem gates stale.</div>';
-      const recentResolved=(gateQueue.resolvedRecent||[]).map((gate)=>'<div class="entry"><div class="head"><strong>'+esc(gate.gate_id)+'</strong>'+badge(gate.decision||'resolved','ok')+'</div><div class="small muted">actor='+esc(gate.actor||'—')+' · reason='+esc(gate.reason||'—')+'</div></div>').join('')||'<div class="entry small">Sem resoluções recentes.</div>';
-      const gatePanel=panel('Runtime gates','<div class="grid3">'+kvItem('Pending',String((gateQueue.pending||[]).length))+kvItem('Stale',String(gateQueue.staleCount||0))+kvItem('SLA (h)',String(gateQueue.gateSlaHours||24))+'</div><h3>Pendentes</h3>'+pendingGates+'<h3>Stale</h3>'+staleGates+'<h3>Resolvidos nas últimas 24h</h3>'+recentResolved);
-      const multiAgent=enterprise.multiAgent||null;
-      const multiAgentPanel=multiAgent&&multiAgent.enabled?panel('Multi-agent','<div class="grid3">'+kvItem('Mode',multiAgent.mode||'—')+kvItem('Isolation',multiAgent.workspaceIsolationEnforced?'isolated':'shared')+kvItem('Agents',String((multiAgent.agents||[]).length))+'</div><h3>Ownership</h3>'+((multiAgent.ownership||[]).map((item)=>'<div class="entry"><div class="head"><strong>'+esc(item.work_item_id||'—')+'</strong>'+badge(item.owner_agent_id||'unassigned')+'</div></div>').join('')||'<div class="entry small">Sem ownership ativo.</div>')+'<h3>Handoffs</h3>'+((multiAgent.handoffs||[]).map((handoff)=>'<div class="entry"><div class="small"><strong>'+esc(handoff.from_agent_id||'—')+'</strong> → <strong>'+esc(handoff.to_agent_id||'—')+'</strong></div><div class="small muted" style="margin-top:6px">'+esc(handoff.work_item_id||'—')+'</div></div>').join('')||'<div class="entry small">Sem handoffs registrados.</div>')):'';
-      const recovery=enterprise.recoveryState||null;
-      const recoveryPanel=recovery?panel('Recovery','<div class="grid3">'+kvItem('Status',recovery.status||'—')+kvItem('Last recovery',recovery.lastRecoveredAt||'—')+kvItem('Issues',String((recovery.issues||[]).length))+'</div><h3>Issues</h3>'+((recovery.issues||[]).map((issue)=>'<div class="entry"><div class="small"><strong>'+esc(issue.code||'issue')+'</strong></div><div class="small muted" style="margin-top:6px">'+esc(issue.message||issue.reason||'—')+'</div></div>').join('')||'<div class="entry small">Sem inconsistências abertas.</div>')):'';
-      const promotion=enterprise.promotionReadiness||null;
-      const promotionPanel=promotion?panel('Promotion readiness','<div class="grid3">'+kvItem('Status',promotion.status||'—')+kvItem('Coverage',String(promotion.coveragePercent==null?'—':promotion.coveragePercent+'%'))+kvItem('Policy',String(promotion.policyCoveragePercent==null?'—':promotion.policyCoveragePercent+'%'))+'</div><h3>Blockers</h3>'+((promotion.reasons||promotion.blockers||[]).map((reason)=>'<div class="entry small">'+esc(reason)+'</div>').join('')||'<div class="entry small">Sem blockers ativos.</div>')):'';
-      const azure=ctx.azure||null;
-    const azureInventory=azure&&azure.inventorySummary?azure.inventorySummary:{total:0,servicebus:0,eventgrid:0,sql:0,other:0};
-      const azurePanel=azure?panel('Azure context operacional','<div class="grid3">'+kvItem('Login',azure.authStatus&&azure.authStatus.login_active?'ativo':'ausente')+kvItem('Subscription',azure.profile&&(azure.profile.subscription_name||azure.profile.subscription_id)||'—')+kvItem('Último sync',azure.inventorySyncedAt||'—')+kvItem('Service Bus',String(azureInventory.servicebus||0))+kvItem('Event Grid',String(azureInventory.eventgrid||0))+kvItem('Azure SQL',String(azureInventory.sql||0))+'</div><div class="small muted" style="margin-top:12px">Inventário: total '+esc(azureInventory.total||0)+' · pending operations: '+esc(azure.pendingOperations||0)+' · '+esc(azure.inventoryStale&&azure.inventoryStale.stale?'stale':'fresh')+'</div>'+(azure.lastOperation?'<div class="entry" style="margin-top:12px"><div class="head"><strong>Última operação</strong>'+badge(azure.lastOperation.phase||'pending')+'</div><div class="small">'+esc(azure.lastOperation.summary||azure.lastOperation.operation_id||'—')+'</div><div class="small muted" style="margin-top:8px">'+esc(azure.lastOperation.operation_id||'—')+'</div></div>':'')):'';
-      stacks[0].insertAdjacentHTML('afterbegin',panel('Run control','<div class="grid3">'+kvItem('Run ID',activeRun.run_id||'—')+kvItem('Status',activeRun.status||'pending')+kvItem('Cursor',(activeRun.cursor&&((activeRun.cursor.wave!=null?'wave '+activeRun.cursor.wave:'')+(activeRun.cursor.task?' · '+activeRun.cursor.task:'')+(activeRun.cursor.mode?' · '+activeRun.cursor.mode:'')))||'—')+'</div><div class="actions">'+actionButton('Start','start','primary')+actionButton('Pause','pause','warnbtn')+actionButton('Resume','resume','secondary')+actionButton('Replay','replay','danger')+'</div><div class="small muted" style="margin-top:12px">Transitions: '+esc((activeRun.metrics&&activeRun.metrics.transitions)||0)+' · pause_count: '+esc((activeRun.metrics&&activeRun.metrics.pause_count)||0)+' · replay_count: '+esc((activeRun.metrics&&activeRun.metrics.replay_count)||0)+'</div>'));
-      stacks[0].insertAdjacentHTML('beforeend',panel('Mapa operacional','<div class="grid3">'+nodes+'</div><h3>Handoffs e dependências</h3>'+edges)+(gatePanel||'')+(multiAgentPanel||'')+(azurePanel||''));
-      stacks[1].insertAdjacentHTML('afterbegin',panel('Trace operacional','<div class="small muted" style="margin-bottom:12px">Arquivo: '+esc((ctx.tracing&&ctx.tracing.path)||'—')+' · total: '+esc((ctx.tracing&&ctx.tracing.summary&&ctx.tracing.summary.total)||0)+' evento(s)</div>'+trace));
-      stacks[1].insertAdjacentHTML('beforeend',panel('Camadas de memória','<div class="small muted" style="margin-bottom:12px">'+esc(((ctx.memoryLayers&&ctx.memoryLayers.readOrder)||[]).join(' → ')||'—')+'</div><div class="grid2">'+memory+'</div>')+(recoveryPanel||'')+(promotionPanel||''));
-    }
-  function setTab(next){tab=next;render();}
-  async function openSession(path){session=path||null;await refresh();tab='sessions';render();}
+
+    app.innerHTML='<div class="stats">'
+      +'<div class="metric"><div class="label">Saúde</div><div class="value">'+badge(ctx.healthStatus)+'</div></div>'
+      +'<div class="metric"><div class="label">Go / No-Go</div><div class="value">'+badge(ctx.readiness.decision,ctx.readiness.decision)+'</div></div>'
+      +'<div class="metric"><div class="label">Agentes Ativos</div><div class="value">'+esc(agentsLive.length)+'</div></div>'
+      +'<div class="metric"><div class="label">Colisões Write-Set</div><div class="value">'+badge(collisions.length?'blocked':'done',String(collisions.length))+'</div></div>'
+      +'<div class="metric"><div class="label">Reavaliação Base</div><div class="value">'+badge(reev.overall_status||'pending',reev.overall_status||'n/a')+'</div></div>'
+      +'<div class="metric"><div class="label">Worktrees</div><div class="value">'+esc(wt.total||0)+'</div></div>'
+    +'</div>'
+    +'<div class="view'+(tab==='overview'?' active':'')+'"><div class="layout"><div class="stack">'
+      +'<div class="panel"><div class="head"><div><h2>Decision Control</h2><div class="small muted">Podemos executar / promover agora?</div></div>'+badge(ctx.planReviewStatus,'review:'+ctx.planReviewStatus)+'</div><div class="'+(ctx.readiness.go?'go-card':'nogo-card')+'"><div class="label">Veredito Operacional</div><div style="font-size:34px;font-weight:900;margin-top:6px">'+(ctx.readiness.go?'GO — PRONTO':'HOLD — ATENÇÃO')+'</div><div class="small" style="margin-top:8px">'+esc(ctx.nextStep&&ctx.nextStep.reason||'—')+'</div></div></div>'
+      +'<div class="panel"><div class="head"><div><h2>Decision Rail</h2><div class="small muted">Fluxo completo STATE → SPEC → PLAN → REVIEW → EXECUTE → CHECKPOINTS → VERIFY → LESSONS</div></div></div><div class="rail">'+flow.join('')+'</div></div>'
+      +'<div class="panel"><div class="head"><div><h2>Bloqueios & Avisos</h2><div class="small muted">Sinais ativos antes do execute / ship</div></div></div><div class="grid2"><div><h3>Bloqueios</h3>'+list(blockers,'Nenhum bloqueio formal.')+'</div><div><h3>Avisos</h3>'+list(warnings,'Nenhum aviso relevante.')+'</div></div></div>'
+      +'<div class="panel"><div class="head"><div><h2>Review & Aprovação do Plano</h2><div class="small muted">Persistido em STATE.md, PLAN-REVIEW.md e comentários</div></div></div><div class="grid2"><div><div class="actions"><button class="primary" onclick="changeReview(\\'approved\\')">Aprovar</button><button class="warnbtn" onclick="changeReview(\\'needs_revision\\')">Pedir revisão</button><button class="secondary" onclick="changeReview(\\'in_review\\')">Em revisão</button><button class="danger" onclick="changeReview(\\'rejected\\')">Rejeitar</button></div><div class="form"><input id="comment-target" placeholder="target ex.: wave:1, T2"/><select id="comment-type"><option value="note">note</option><option value="risk">risk</option><option value="question">question</option><option value="approval">approval</option></select><textarea id="comment-text" rows="4" placeholder="Comentário de revisão"></textarea><button class="primary" onclick="addComment()">Adicionar comentário</button></div></div><div><h3>Comentários</h3>'+list(comments,'Sem comentários.')+'</div></div></div>'
+    +'</div><div class="stack">'
+      +'<div class="panel"><div class="head"><div><h2>Mapa de Artefatos</h2><div class="small muted">Fonte da verdade em .oxe/</div></div></div><div class="grid2">'+graph.join('')+'</div></div>'
+      +'<div class="panel"><div class="head"><div><h2>Calibração do Plano</h2><div class="small muted">Confiança prevista vs. resultado</div></div>'+badge(ctx.calibration.status)+'</div><div class="small">'+esc(ctx.calibration.summary)+'</div></div>'
+    +'</div></div></div>'
+    +'<div class="view'+(tab==='plan'?' active':'')+'"><div class="layout"><div class="stack">'
+      +'<div class="panel"><div class="head"><div><h2>Ondas & Tarefas do Plano</h2><div class="small muted">Dependências, verificação e vínculos</div></div>'+badge(ctx.planReviewStatus)+'</div>'+list(waves,'PLAN.md ausente ou sem tarefas.')+'</div>'
+      +'<div class="panel"><div class="head"><div><h2>Matriz de Cobertura SPEC → PLAN → VERIFY</h2></div></div><div class="grid2">'+coverage.join('')+'</div></div>'
+    +'</div><div class="stack">'
+      +'<div class="panel"><div class="head"><div><h2>Autoavaliação & Prontidão Racional</h2></div></div><div class="grid3">'+kv('Melhor plano',(ctx.plan.selfEvaluation&&ctx.plan.selfEvaluation.bestPlan)||'—')+kv('Confiança',ctx.readiness.confidence!=null?ctx.readiness.confidence+'%':'—')+kv('Pack Racional',ctx.executionRationality&&ctx.executionRationality.executionRationalityReady?'ready':'pendente')+'</div></div>'
+      +'<div class="panel"><div class="head"><div><h2>Lacunas da SPEC</h2></div></div>'+list((ctx.spec.uncoveredCriteria||[]).map((c)=>'<div class="entry small">'+esc(c.id)+' · '+esc(c.criterion)+'</div>'),'100% dos critérios cobertos no plano.')+'</div>'
+    +'</div></div></div>'
+    +'<div class="view'+(tab==='agents'?' active':'')+'"><div class="layout"><div class="stack">'
+      +'<div class="panel"><div class="head"><div><h2>Agentes Ativos Multi-Worktree</h2><div class="small muted">Ledger compartilhado em &lt;git-common-dir&gt;/oxe/active-agents.json</div></div>'+badge(agentsLive.length?'active':'pending',agentsLive.length+' ativo(s)')+'</div>'+list(activeAgentsCards,'Nenhum lease de agente ativo agora.')+'</div>'
+      +'<div class="panel"><div class="head"><div><h2>Detector de Colisões de Write-Set</h2><div class="small muted">Sobreposições reais entre worktrees simultâneos</div></div>'+badge(collisions.length?'blocked':'done',collisions.length?collisions.length+' colisão(ões)':'limpo')+'</div>'+list(collisionCards,'Zero colisões de write_set detectadas.')+'</div>'
+    +'</div><div class="stack">'
+      +'<div class="panel"><div class="head"><div><h2>Inbox Inter-Worktree</h2><div class="small muted">Mensagens de coordenação entre agentes (oxe-cc agents send/inbox)</div></div>'+badge('active',messages.length+' msg(s)')+'</div>'+list(inboxCards,'Nenhuma mensagem registrada no inbox.')+'</div>'
+    +'</div></div></div>'
+    +'<div class="view'+(tab==='reevaluate'?' active':'')+'"><div class="panel"><div class="head"><div><h2>Reavaliação Contínua Contra Base</h2><div class="small muted">Base: '+esc(reev.base||'—')+' · Commits upstream: '+esc(reev.upstream_commits_count||0)+'</div></div>'+badge(reev.overall_status||'pending',reev.overall_status||'unavailable')+'</div><div class="grid3" style="margin-bottom:14px">'+kv('Sem Impacto (no_impact)',String((reev.summary&&reev.summary.no_impact)||0))+kv('Sync Mecânico (mechanical_sync)',String((reev.summary&&reev.summary.mechanical_sync)||0))+kv('Drift de Contrato (contract_drift)',String((reev.summary&&reev.summary.contract_drift)||0))+'</div>'+list(reevTasks,'Nenhuma tarefa pendente com drift contra a base.')+'</div></div>'
+    +'<div class="view'+(tab==='scorecard'?' active':'')+'"><div class="layout"><div class="stack">'
+      +'<div class="panel"><div class="head"><div><h2>Scorecard & Roteamento Empírico (ROI)</h2><div class="small muted">models.auto_route + distribuição por tier + telemetria local</div></div>'+badge(scr.auto_route?'done':'active',scr.auto_route?'auto_route ON':'auto_route OFF')+'</div><div class="grid3">'+kv('Tier Fast',String((scr.tiers&&scr.tiers.fast)||0))+kv('Tier Balanced',String((scr.tiers&&scr.tiers.balanced)||0))+kv('Tier Powerful',String((scr.tiers&&scr.tiers.powerful)||0))+'</div><div class="raw" style="margin-top:12px">'+esc(JSON.stringify(scr.scorecard||{note:'Sem telemetria de scorecard acumulada ainda.'},null,2))+'</div></div>'
+    +'</div><div class="stack">'
+      +'<div class="panel"><div class="head"><div><h2>Enterprise Verify & Governança</h2></div></div><div class="grid2">'+kv('Checks',(ctx.enterprise&&ctx.enterprise.verificationSummary&&ctx.enterprise.verificationSummary.total)||0)+kv('Coverage',(ctx.enterprise&&ctx.enterprise.evidenceCoverage&&String(ctx.enterprise.evidenceCoverage.coverage_percent)+'%')||'—')+kv('Riscos Residuais',(ctx.enterprise&&ctx.enterprise.residualRiskSummary&&ctx.enterprise.residualRiskSummary.total)||0)+kv('Promoção',(ctx.enterprise&&ctx.enterprise.promotionSummary&&ctx.enterprise.promotionSummary.status)||'—')+'</div></div>'
+    +'</div></div></div>'
+    +'<div class="view'+(tab==='worktrees'?' active':'')+'"><div class="layout"><div class="stack">'
+      +'<div class="panel"><div class="head"><div><h2>Higiene de Worktrees</h2><div class="small muted">oxe-cc gc-worktrees · proteção automática de junctions ativas</div></div>'+badge(wt.ok?'done':'warning',wt.ok?'saudável':'atenção')+'</div><div class="grid3">'+kv('Total',String(wt.total||0))+kv('Sujas',String((wt.dirty||[]).length))+kv('Órfãs / Pendentes',String((wt.orphans||[]).length))+'</div>'+list((wt.warnings||[]).map((w)=>'<div class="entry small">'+esc(w)+'</div>'),'Sem pendências de higiene de worktrees.')+'</div>'
+      +'<div class="panel"><div class="head"><div><h2>Ecossistema: Onboarding, CI, ALM & MCP</h2><div class="small muted">Core 100% agnóstico (D-5) · servidor nativo oxe-cc mcp</div></div></div><div class="grid2">'+kv('Stacks',(ob.stacks||[]).join(', ')||'—')+kv('CI Providers',(ob.ci_providers||[]).join(', ')||'local-only')+kv('ALM Provider',ob.alm_provider||'none')+kv('MCP Server','oxe-cc mcp (JSON-RPC 2.0 stdio)')+'</div></div>'
+    +'</div><div class="stack">'
+      +'<div class="panel"><div class="head"><div><h2>Repository Context</h2></div></div><div class="grid2">'+repo.join('')+'</div></div>'
+    +'</div></div></div>'
+    +'<div class="view'+(tab==='execution'?' active':'')+'"><div class="layout"><div class="stack">'
+      +'<div class="panel"><div class="head"><div><h2>Run Control</h2><div class="small muted">Controle operacional do runtime</div></div>'+badge(activeRun.status||'pending')+'</div><div class="grid3">'+kv('Run ID',activeRun.run_id||'—')+kv('Status',activeRun.status||'pending')+kv('Onda Atual',ctx.runtime.parsed.currentWave||'—')+'</div><div class="actions"><button class="primary" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeAction(\\'start\\')">Start</button><button class="warnbtn" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeAction(\\'pause\\')">Pause</button><button class="secondary" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeAction(\\'resume\\')">Resume</button><button class="danger" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeAction(\\'replay\\')">Replay</button></div></div>'
+      +'<div class="panel"><div class="head"><div><h2>Gates Pendentes & Checkpoints</h2></div></div>'+list(pendingGates,'Sem gates pendentes.')+'<h3>Checkpoints</h3>'+list(checkpoints,'Sem checkpoints registrados.')+'</div>'
+    +'</div><div class="stack">'
+      +'<div class="panel"><div class="head"><div><h2>Trace Operacional</h2><div class="small muted">Últimos eventos em OXE-EVENTS.ndjson</div></div></div>'+list(trace,'Sem eventos registrados.')+'</div>'
+      +'<div class="panel"><div class="head"><div><h2>Verify & Evidências</h2></div></div><div class="raw">'+esc(ctx.verify.summary||'VERIFY.md ausente.')+'</div></div>'
+    +'</div></div></div>'
+    +'<div class="view'+(tab==='sessions'?' active':'')+'"><div class="layout"><div class="stack">'
+      +'<div class="panel"><div class="head"><div><h2>Sessão Ativa</h2></div></div><div class="grid2">'+kv('ID',(ctx.sessions.current&&ctx.sessions.current.id)||'—')+kv('Nome',(ctx.sessions.current&&ctx.sessions.current.name)||ctx.activeSession||'—')+kv('Status',(ctx.sessions.current&&ctx.sessions.current.status)||'—')+kv('Última Atividade',(ctx.sessions.current&&ctx.sessions.current.lastActivity)||'—')+'</div></div>'
+      +'<div class="panel"><div class="head"><div><h2>Semântica Multi-Runtime & Context Packs</h2></div></div><div class="grid2">'+kv('Semântica',ctx.context&&ctx.context.semantics&&ctx.context.semantics.ok?'alinhada':'drift')+kv('Workflow Primário',(ctx.context&&ctx.context.quality&&ctx.context.quality.primaryWorkflow)||'dashboard')+'</div></div>'
+    +'</div><div class="stack">'
+      +'<div class="panel"><div class="head"><div><h2>Sessões Registradas</h2></div></div>'+list(sessions,'SESSIONS.md ausente ou vazio.')+'</div>'
+    +'</div></div></div>';
+  }
+  function setTab(next){tab=next;if(ctx)render();}
+  function toggleAuto(){autoOn=!autoOn;document.getElementById('auto-btn').textContent='Auto: '+(autoOn?'ON':'OFF');if(timer){clearInterval(timer);timer=null;}if(autoOn)timer=setInterval(()=>{refresh().catch(()=>{});},10000);}
+  async function openSession(p){session=p||null;await refresh();tab='sessions';render();}
   async function changeReview(status){const note=prompt('Justificativa curta para o novo estado do plano:',status==='approved'?'Plano aprovado para execução.':'');if(note==null)return;await api('/api/review/status',{method:'POST',body:JSON.stringify({status,note,author:'user',activeSession:session})});await refresh();}
   async function addComment(){const target=document.getElementById('comment-target').value||'plan';const type=document.getElementById('comment-type').value||'note';const text=document.getElementById('comment-text').value.trim();if(!text)return alert('Escreva um comentário.');await api('/api/review/comment',{method:'POST',body:JSON.stringify({target,type,text,author:'user',activeSession:session})});document.getElementById('comment-text').value='';await refresh();}
-    async function resolveComment(id){await api('/api/review/comment-status',{method:'POST',body:JSON.stringify({commentId:id,status:'resolved',activeSession:session})});await refresh();}
-    async function runtimeAction(action){if(runtimeDisabled())return;const reason=prompt('Motivo da transição de runtime:',action==='start'?'iniciar execução':'');if(reason==null)return;const wave=prompt('Onda atual (opcional):',ctx.activeRun&&ctx.activeRun.current_wave!=null?String(ctx.activeRun.current_wave):'');if(wave===null)return;const task=prompt('Tarefa atual (opcional):',ctx.activeRun&&ctx.activeRun.cursor&&ctx.activeRun.cursor.task?String(ctx.activeRun.cursor.task):'');if(task===null)return;await api('/api/runtime/action',{method:'POST',body:JSON.stringify({action,reason,activeSession:session,wave:wave?Number(wave):null,task:task||null})});await refresh();}
-    async function runtimeGateResolve(gateId,decision){if(runtimeDisabled())return;const needsReason=decision==='reject'||decision==='waive';const reason=needsReason?prompt('Justificativa obrigatória para '+decision+':',''):'';if(needsReason&&(!reason||!reason.trim()))return alert('Justificativa é obrigatória para '+decision+'.');await api('/api/runtime/gates/resolve',{method:'POST',body:JSON.stringify({gateId,decision,actor:'dashboard',reason:reason&&reason.trim()?reason.trim():undefined,activeSession:session})});await refresh();}
-    window.setTab=setTab;window.openSession=openSession;window.changeReview=changeReview;window.addComment=addComment;window.resolveComment=resolveComment;window.runtimeAction=runtimeAction;window.runtimeGateResolve=runtimeGateResolve;refresh().catch((err)=>{app.innerHTML='<div class="panel"><h2>Erro</h2><div class="muted">'+esc(err.message)+'</div></div>';});
+  async function resolveComment(id){await api('/api/review/comment-status',{method:'POST',body:JSON.stringify({commentId:id,status:'resolved',activeSession:session})});await refresh();}
+  async function runtimeAction(action){if(runtimeDisabled())return;const reason=prompt('Motivo da transição:',action==='start'?'iniciar execução':'');if(reason==null)return;await api('/api/runtime/action',{method:'POST',body:JSON.stringify({action,reason,activeSession:session})});await refresh();}
+  async function runtimeGateResolve(gateId,decision){if(runtimeDisabled())return;const needsReason=decision==='reject'||decision==='waive';const reason=needsReason?prompt('Justificativa obrigatória para '+decision+':',''):'';if(needsReason&&(!reason||!reason.trim()))return alert('Justificativa obrigatória.');await api('/api/runtime/gates/resolve',{method:'POST',body:JSON.stringify({gateId,decision,actor:'dashboard',reason:reason&&reason.trim()?reason.trim():undefined,activeSession:session})});await refresh();}
+  window.setTab=setTab;window.toggleAuto=toggleAuto;window.refresh=refresh;window.openSession=openSession;window.changeReview=changeReview;window.addComment=addComment;window.resolveComment=resolveComment;window.runtimeAction=runtimeAction;window.runtimeGateResolve=runtimeGateResolve;
+  refresh().then(()=>{if(autoOn)timer=setInterval(()=>{refresh().catch(()=>{});},10000);}).catch((err)=>{app.innerHTML='<div class="panel"><h2>Erro</h2><div class="small">'+esc(err.message)+'</div></div>';});
   </script></body></html>`;
 }
 
@@ -659,9 +925,14 @@ function createDashboardServer(projectRoot, opts = {}) {
         return;
       }
 
-      if (req.method === 'GET' && reqUrl.pathname === '/api/context') {
+      if (req.method === 'GET' && (reqUrl.pathname === '/api/context' || reqUrl.pathname === '/api/state')) {
         const activeSession = reqUrl.searchParams.get('session') || opts.activeSession || null;
-        sendJson(res, 200, { ...loadDashboardContext(root, { activeSession }), dashboard: { readOnly: Boolean(opts.readOnly) } });
+        sendJson(res, 200, {
+          oxeDashboardStateSchema: 2,
+          generated_at: new Date().toISOString(),
+          ...loadDashboardContext(root, { activeSession }),
+          dashboard: { readOnly: Boolean(opts.readOnly), version: 'v2' },
+        });
         return;
       }
 
