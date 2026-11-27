@@ -17,10 +17,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '20'
           cache: npm
@@ -46,7 +46,7 @@ jobs:
           cat .oxe/release/quality-gates-report.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload quality evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: oxe-release-quality-gates
           path: |
@@ -61,10 +61,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '20'
           cache: npm
@@ -77,7 +77,7 @@ jobs:
           FILE="vscode-extension/oxe-agents-${VERSION}.vsix"
           test -f "$FILE"
           echo "path=$FILE" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: oxe-agents-vsix
           path: ${{ steps.current-vsix.outputs.path }}
@@ -91,7 +91,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Extract changelog entry
@@ -100,7 +100,7 @@ jobs:
           VERSION="${TAG#v}"
           awk "/^## \[${VERSION}\]/{found=1; next} found && /^## \[/{exit} found{print}" CHANGELOG.md > CHANGELOG_EXTRACT.md
           test -s CHANGELOG_EXTRACT.md
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: oxe-agents-vsix
           path: dist/
@@ -128,12 +128,12 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '20'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
           cache: npm
       - run: npm ci
@@ -147,5 +147,15 @@ jobs:
       - name: Verify published version on npm registry
         run: |
           VERSION="$(node -p "require('./package.json').version")"
-          PUBLISHED="$(npm view oxe-cc@"${VERSION}" version)"
-          test "$PUBLISHED" = "$VERSION"
+          PUBLISHED=""
+          for i in $(seq 1 20); do
+            PUBLISHED="$(npm view oxe-cc@"${VERSION}" version 2>/dev/null || true)"
+            if [ "$PUBLISHED" = "$VERSION" ]; then
+              echo "Verified oxe-cc@${VERSION} on npm registry (attempt ${i}/20)"
+              exit 0
+            fi
+            echo "Waiting for oxe-cc@${VERSION} on npm registry (attempt ${i}/20)..."
+            sleep 15
+          done
+          echo "Timed out waiting for oxe-cc@${VERSION} on npm registry" >&2
+          exit 1
