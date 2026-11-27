@@ -8575,16 +8575,17 @@ async function main() {
 `);
       return;
     }
-    const o = { dir: process.cwd(), json: false };
+    const o = { dir: process.cwd(), json: false, session: null };
     for (let i = argv[0] === 'lint' ? 1 : 0; i < argv.length; i += 1) {
       const a = argv[i];
       if (a === '--json') o.json = true;
+      else if (a === '--session' && argv[i + 1]) o.session = String(argv[++i]).replace(/\\/g, '/');
       else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
       else if (!a.startsWith('-')) o.dir = path.resolve(a);
       else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
     }
     try {
-      const out = oxeOperational.runtimePrd(o.dir, null);
+      const out = oxeOperational.runtimePrd(o.dir, o.session);
       if (o.json) { console.log(JSON.stringify({ oxePrdSchema: 1, ...out }, null, 2)); }
       else {
         console.log(out.exists ? `  PRD ${out.file} (v${out.version}): ${out.stories} história(s), ${out.metrics} métrica(s)` : `  ${yellow}Sem PRD${reset} (${out.file}) — o /oxe-spec gera a partir de oxe/templates/PRD.template.md`);

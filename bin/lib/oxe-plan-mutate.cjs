@@ -29,6 +29,105 @@ function spread(list, n) {
   return Array.from({ length: n }, (_, i) => list[Math.floor(((i + 0.5) * list.length) / n)]);
 }
 
+/**
+ * OXB-222-07: Prioritizes mutants inside changed diff lines and declared task symbols before falling back
+ * to evenly spread sampling across the rest of the file.
+ */
+function findSymbolLineRanges(source, symbolNames) {
+  const names = [...new Set((Array.isArray(symbolNames) ? symbolNames : []).map((s) => String(s || '').trim()).filter(Boolean))];
+  if (!names.length) return [];
+  const lines = String(source || '').split(/\r?\n/);
+  const ranges = [];
+  for (const name of names) {
+    const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const declRe = new RegExp(`(?:^|[^\\w$])(?:(?:async\\s+)?function\\s+${esc}\\b|(?:const|let|var)\\s+${esc}\\s*=|class\\s+${esc}\\b|${esc}\\s*:\\s*(?:async\\s+)?function\\b|${esc}\\s*\\([^)]*\\)\\s*\\{)`);
+    for (let i = 0; i < lines.length; i += 1) {
+      if (!declRe.test(lines[i])) continue;
+      let depth = 0;
+      let sawBrace = false;
+      let end = Math.min(lines.length - 1, i + 60);
+      for (let j = i; j < lines.length; j += 1) {
+        for (const ch of lines[j]) {
+          if (ch === '{') { depth += 1; sawBrace = true; }
+          else if (ch === '}') depth -= 1;
+        }
+        if (sawBrace && depth <= 0) { end = j; break; }
+      }
+      ranges.push([i + 1, end + 1]);
+    }
+  }
+  return ranges;
+}
+
+function prioritizeMutants(mutants, original, hints = {}) {
+  const list = Array.isArray(mutants) ? mutants : [];
+  const limit = Number(hints.limit) > 0 ? Math.floor(Number(hints.limit)) : list.length;
+  if (!list.length || limit <= 0) return [];
+  const changedSet = new Set((Array.isArray(hints.changedLines) ? hints.changedLines : []).map((n) => Number(n)).filter(Number.isFinite));
+  const ranges = findSymbolLineRanges(original, hints.symbols);
+  const inRange = (line) => ranges.some(([a, b]) => line >= a && line <= b);
+
+  const tier1 = []; // exact changed lines
+  const tier2 = []; // inside declared task symbol bodies
+  const tier3 = []; // rest of the file
+  for (const m of list) {
+    if (changedSet.has(m.line)) tier1.push(m);
+    else if (inRange(m.line)) tier2.push(m);
+    else tier3.push(m);
+  }
+  const picked = [];
+  for (const bucket of [tier1, tier2, tier3]) {
+    const remaining = limit - picked.length;
+    if (remaining <= 0) break;
+    if (!bucket.length) continue;
+    picked.push(...spread(bucket, remaining));
+  }
+  return picked;
+}
+
+function changedLinesByFile(root, baseRef = 'HEAD') {
+  const byFile = new Map();
+  try {
+    const r = spawnSync('git', ['diff', '-U0', baseRef], { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
+    if (r.status !== 0 || !r.stdout) return byFile;
+    let cur = null;
+    for (const line of r.stdout.split(/\r?\n/)) {
+      if (line.startsWith('+++ b/')) { cur = norm(line.slice(6).trim()); continue; }
+      const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
+      if (cur && hunk) {
+        const start = Number(hunk[1]);
+        const count = hunk[2] == null ? 1 : Number(hunk[2]);
+        if (!byFile.has(cur)) byFile.set(cur, []);
+        for (let k = 0; k < count; k += 1) byFile.get(cur).push(start + k);
+      }
+    }
+  } catch { /* ignore */ }
+  return byFile;
+}
+
+function packSymbolsByFile(root, options = {}) {
+  const byFile = new Map();
+  const addSym = (s) => {
+    if (!s || typeof s !== 'object' || !s.name || !s.path) return;
+    const f = norm(s.path);
+    if (!byFile.has(f)) byFile.set(f, []);
+    byFile.get(f).push(String(s.name));
+  };
+  if (Array.isArray(options.symbols)) for (const s of options.symbols) addSym(s);
+  const packPaths = [options.packPath, path.join(root, '.oxe', 'IMPLEMENTATION-PACK.json')].filter(Boolean);
+  for (const p of packPaths) {
+    try {
+      if (!fs.existsSync(p)) continue;
+      const pack = JSON.parse(fs.readFileSync(p, 'utf8'));
+      for (const t of Array.isArray(pack && pack.tasks) ? pack.tasks : []) {
+        for (const s of Array.isArray(t && t.symbols) ? t.symbols : []) addSym(s);
+      }
+      break;
+    } catch { /* ignore */ }
+  }
+  return byFile;
+}
+
 function declares(declared, file) {
   return declared.some((d) => {
     if (d === file) return true;
@@ -145,6 +244,8 @@ async function measure(root, doc, options = {}) {
     const measurable = rows.filter((r) => !r.unmeasured).sort((a, b) => Number(b.risk === 'P0') - Number(a.risk === 'P0'));
     const files = [...new Set(measurable.flatMap((r) => r.targets))];
     const perFile = Math.max(1, Math.floor(max / Math.max(1, files.length)));
+    const diffLinesMap = changedLinesByFile(root, options.diffBase || 'HEAD');
+    const symbolsMap = packSymbolsByFile(root, options);
     const survived = [];
     let total = 0;
     for (const file of files) {
@@ -154,7 +255,12 @@ async function measure(root, doc, options = {}) {
       const original = fs.readFileSync(abs, 'utf8');
       const lines = original.split('\n');
       const usable = [];
-      for (const m of spread(mutantsOf(original, Infinity), perFile * 2)) {
+      const candidates = prioritizeMutants(mutantsOf(original, Infinity), original, {
+        limit: perFile * 2,
+        symbols: symbolsMap.get(norm(file)) || [],
+        changedLines: diffLinesMap.get(norm(file)) || [],
+      });
+      for (const m of candidates) {
         if (usable.length >= perFile || total + usable.length >= max) break;
         const text = lines.map((l, i) => (i === m.line - 1 ? m.after : l)).join('\n');
         // A mutant that does not parse would be "killed" by any test.
@@ -211,4 +317,4 @@ async function measure(root, doc, options = {}) {
   }
 }
 
-module.exports = { measure, targetsOf, spread };
+module.exports = { measure, targetsOf, spread, prioritizeMutants };

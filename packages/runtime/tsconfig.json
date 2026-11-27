@@ -10,6 +10,7 @@
     "sourceMap": false,
     "outDir": "../../lib/runtime",
     "rootDir": "src",
+    "newLine": "lf",
     "skipLibCheck": true
   },
   "include": [

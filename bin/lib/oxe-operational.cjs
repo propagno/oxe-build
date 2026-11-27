@@ -1417,6 +1417,28 @@ function runtimeDocsCheck(projectRoot, activeSession, options = {}) {
   return out;
 }
 
+function knownRootDecisionIds(projectRoot, adrDirRel) {
+  const ids = new Set();
+  const rootProgramDir = path.join(projectRoot, '.oxe', 'program');
+  try {
+    for (const d of require('./oxe-decisions.cjs').list(rootProgramDir)) {
+      if (d && d.id) ids.add(String(d.id));
+    }
+  } catch { /* ignore */ }
+  if (adrDirRel) {
+    try {
+      const adrAbs = path.resolve(projectRoot, adrDirRel);
+      if (fs.existsSync(adrAbs)) {
+        for (const f of fs.readdirSync(adrAbs)) {
+          const m = /^(D-(?:(?:F\d+(?:\.\d+)?|SPIKE)-)?\d+)(?:-|\.md$)/.exec(f);
+          if (m) ids.add(m[1]);
+        }
+      }
+    } catch { /* ignore */ }
+  }
+  return [...ids];
+}
+
 function runtimeDecision(projectRoot, activeSession, options = {}) {
   const lib = require('./oxe-decisions.cjs');
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
@@ -1427,14 +1449,16 @@ function runtimeDecision(projectRoot, activeSession, options = {}) {
   let program = null;
   if (!cardLedger) { try { program = require('./oxe-program.cjs').readProgram(programDir); } catch { program = null; } }
   const activePhase = (program && program.active_phase) || null;
+  const resolvedAdrDir = options.adrDir || require('./oxe-adr.cjs').adrDir(readProjectConfig(projectRoot) || {});
   // ADRs (docs/adr by default; config `adr: false` turns them off) follow every change to the ledger.
   const publishAdrs = () => {
-    const dir = options.adrDir || require('./oxe-adr.cjs').adrDir(readProjectConfig(projectRoot) || {});
+    const dir = resolvedAdrDir;
     if (!dir) return null;
-    try { return require('./oxe-adr.cjs').publish(projectRoot, dir, decisionsForAdr(programDir), { allowOxeDir: Boolean(options.allowOxeAdrDir) }); } catch (err) { return { error: err.message }; }
+    try { return require('./oxe-adr.cjs').publish(projectRoot, dir, decisionsForAdr(programDir, cardLedger ? null : projectRoot), { allowOxeDir: Boolean(options.allowOxeAdrDir) }); } catch (err) { return { error: err.message }; }
   };
   if (options.action === 'add') {
-    const rec = lib.add(programDir, { ...options, phase: options.phase || activePhase });
+    const knownIds = cardLedger ? [] : knownRootDecisionIds(projectRoot, resolvedAdrDir);
+    const rec = lib.add(programDir, { ...options, phase: options.phase || activePhase, knownIds });
     appendEvent(projectRoot, activeSession, { type: 'DecisionRecorded', payload: { id: rec.id, title: rec.title, phase: rec.phase, ...(rec.supersedes ? { supersedes: rec.supersedes } : {}), ...(options.card ? { card: options.card } : {}) } });
     if (!cardLedger) { try { autoExportProgram(projectRoot, activeSession); } catch { /* */ } }
     return { decision: rec, adr: publishAdrs() };
@@ -1452,15 +1476,29 @@ function runtimeDecision(projectRoot, activeSession, options = {}) {
     return { ...out, adr: publishAdrs() };
   }
   if (options.action === 'publish') {
-    const dir = options.adrDir || require('./oxe-adr.cjs').adrDir(readProjectConfig(projectRoot) || {}) || 'docs/adr';
-    return { adr: require('./oxe-adr.cjs').publish(projectRoot, dir, decisionsForAdr(programDir)) };
+    const dir = resolvedAdrDir || 'docs/adr';
+    return { adr: require('./oxe-adr.cjs').publish(projectRoot, dir, decisionsForAdr(programDir, cardLedger ? null : projectRoot)) };
   }
   return { decisions: lib.list(programDir) };
 }
 
 /** The decisions as the ADRs show them: each story with its ALM card key (US-2 (OXE-12)), from the ledger of links. */
-function decisionsForAdr(programDir) {
-  const list = require('./oxe-decisions.cjs').list(programDir);
+function decisionsForAdr(programDir, projectRoot = null) {
+  const decisionsLib = require('./oxe-decisions.cjs');
+  const byId = new Map();
+  // OXB-222-07: when publishing ADRs from a session programDir, merge existing root decisions so root ADRs D-1..D-N are preserved.
+  if (projectRoot) {
+    const rootProgramDir = path.join(projectRoot, '.oxe', 'program');
+    if (path.resolve(rootProgramDir) !== path.resolve(programDir)) {
+      for (const d of decisionsLib.list(rootProgramDir)) {
+        if (d && d.id) byId.set(d.id, d);
+      }
+    }
+  }
+  for (const d of decisionsLib.list(programDir)) {
+    if (d && d.id) byId.set(d.id, d);
+  }
+  const list = [...byId.values()];
   let links = new Map();
   try { links = require('./oxe-alm.cjs').links(programDir); } catch { links = new Map(); }
   return list.map((d) => (Array.isArray(d.stories) && d.stories.some((u) => links.has(u)) ? { ...d, story_keys: Object.fromEntries(d.stories.filter((u) => links.has(u)).map((u) => [u, links.get(u).key])) } : d));
@@ -2555,6 +2593,15 @@ function reduceCanonicalRunState(projectRoot, activeSession, options = {}) {
 
 function prdPathFor(projectRoot, activeSession) {
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  if (activeSession) {
+    const clean = String(activeSession).replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').replace(/^\.oxe\//, '');
+    const sessRel = /^(?:sessions|workstreams)\//.test(clean) ? clean : `sessions/${clean}`;
+    const direct = path.join(projectRoot, '.oxe', sessRel, 'PRD.md');
+    if (fs.existsSync(direct)) return direct;
+    const nested = path.join(projectRoot, '.oxe', sessRel, 'spec', 'PRD.md');
+    if (fs.existsSync(nested)) return nested;
+    return direct;
+  }
   return path.join(paths.spec ? path.dirname(paths.spec) : path.join(projectRoot, '.oxe'), 'PRD.md');
 }
 
@@ -2575,18 +2622,20 @@ function productDocsLint(projectRoot, activeSession, ctx = {}) {
   const prdLib = require('./oxe-prd.cjs');
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const prdFile = prdPathFor(projectRoot, activeSession);
+  const prdDir = path.dirname(prdFile);
   const prd = fs.existsSync(prdFile) ? prdLib.readPrd(prdFile) : null;
   const required = Boolean(config.prd && typeof config.prd === 'object' && config.prd.required === true);
   if (prd || required) {
-    const specText = ctx.specText != null ? ctx.specText : readTextIfExists(paths.spec);
-    const r = prdLib.lintPrd(prd, { criteria: ctx.specCriteria || [], requirements: prdLib.requirementIds(specText, readTextIfExists(paths.roadmap)), required });
+    const specText = ctx.specText != null ? ctx.specText : (readTextIfExists(paths.spec) || readTextIfExists(path.join(prdDir, 'SPEC.md')));
+    const roadmapText = readTextIfExists(paths.roadmap) || readTextIfExists(path.join(prdDir, 'ROADMAP.md'));
+    const r = prdLib.lintPrd(prd, { criteria: ctx.specCriteria || [], requirements: prdLib.requirementIds(specText, roadmapText), required });
     errors.push(...r.errors.map((e) => `PRD: ${e}`));
     warnings.push(...r.warnings.map((w) => `PRD: ${w}`));
   }
   const phase = activeProgramPhase(projectRoot, activeSession);
   if (phase) {
     const rfcLib = require('./oxe-rfc.cjs');
-    const risks = require('./oxe-risk-decision.cjs').criterionRisks(ctx.specText != null ? ctx.specText : readTextIfExists(paths.spec));
+    const risks = require('./oxe-risk-decision.cjs').criterionRisks(ctx.specText != null ? ctx.specText : (readTextIfExists(paths.spec) || readTextIfExists(path.join(prdDir, 'SPEC.md'))));
     const r = rfcLib.lintPhaseRfc(projectRoot, { phase: phase.id, phaseCriteria: phase.acceptance || [], risks, mode: rfcLib.rfcMode(config) });
     errors.push(...r.errors);
     warnings.push(...r.warnings);
@@ -2603,7 +2652,7 @@ function productDocsLint(projectRoot, activeSession, ctx = {}) {
 function runtimePrd(projectRoot, activeSession) {
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const prdFile = prdPathFor(projectRoot, activeSession);
-  const specText = readTextIfExists(paths.spec);
+  const specText = readTextIfExists(paths.spec) || readTextIfExists(path.join(path.dirname(prdFile), 'SPEC.md'));
   let criteria = [];
   try { const parsers = loadSdkParsers(); criteria = specText && parsers ? (parsers.parseSpec(specText).criteria || []).map((c) => c.id) : []; } catch { criteria = []; }
   const prd = fs.existsSync(prdFile) ? require('./oxe-prd.cjs').readPrd(prdFile) : null;
