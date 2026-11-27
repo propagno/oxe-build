@@ -4,6 +4,35 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.23.0] — 2026-11-27
+
+Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-61`..`OB-72`, 4 fases `F1`–`F4`, 11 entregas `OXB-230-01`..`OXB-230-11`, ADR `D-8`) eliminando os atritos reais observados no corte de `v1.22.2`, fechando os loops automáticos da `1.22.2` e inaugurando o ecossistema aberto com servidor MCP nativo, ALM GitHub/GitLab Issues, Dashboard v2 multi-agente ao vivo e Strangler Fig Fatia 3 (`D-6`) — com **zero novas dependências npm de produção**.
+
+### Hardening CI/Release, Paridade Local & Fim do Flake de PID (`OB-62`..`OB-64`)
+
+- **Pipeline de release endurecido (`OB-62`):** `.github/workflows/release.yml` executa `publish-npm` em **Node 24** (OIDC Trusted Publishing nativo + fallback `NPM_TOKEN`) com loop de retry/backoff no `npm view` para absorver respostas `202 Accepted` assíncronas do registry; todas as GitHub Actions em `release.yml` e `ci.yml` foram atualizadas para SHAs pinadas em Node 24 (`checkout@v7.0.1`, `setup-node@v7.1.0`, `upload-artifact@v7.0.2`, `download-artifact@v8.0.2`).
+- **Isolamento `.oxe/` em `product_package` e gate `oxe-cc doctor --ci-parity` (`OB-63`):** `oxe-project-health.cjs` tolera `active_session` local gitignored em checkouts limpos de `product_package` sem reportar `broken` (preservando `broken` para projetos `oxe_project` comuns); novo módulo `bin/lib/oxe-ci-parity.cjs` + CLI `oxe-cc doctor --ci-parity [--json]` + `runtimeCiParity` validam checkout limpo (`git read-tree`/`checkout-index`), paridade de `engines.node` em sub-pacotes/templates e higiene de symlinks/`.gitignore` POSIX antes do push.
+- **Fim determinístico do flake de PID no Windows (`OB-64`):** `findGuaranteedDeadPid()` em `bin/lib/oxe-agent-coord.cjs` localiza PID inativo (`ESRCH`) sem criar processo filho efêmero, adotado em `tests/oxe-1212-promote-fixtures.test.cjs`.
+
+### Fechamento dos Loops Automáticos da 1.22.2 (`OB-65`..`OB-67`)
+
+- **Auto-lease multi-agente automático (`OB-65`):** `quick` (`start`/`done`/`cancel`), `runtime commit-task` e `runtime execute` gerenciam leases automaticamente em `<git-common-dir>/oxe/active-agents.json`, desativável por `agents.auto_lease: false` (`isAutoLeaseEnabled` / `tryAutoLease`).
+- **Reavaliação contínua integrada a `execute` e `promote` (`OB-66`):** `buildRuntimeExecutePreflight` e `runtimePromote` executam `reevaluateAgainstBase` automaticamente, anexando o diagnóstico `reevaluate` e avisos acionáveis por padrão, e bloqueando apenas quando `reevaluate.block_on_drift: true`.
+- **Roteamento empírico opt-in (`models.auto_route: true`, `OB-67`):** `createModelSelector` em `bin/lib/oxe-model-tiers.cjs` consome `task.suggested_model_hint` quando `models.auto_route: true`, preservando precedência estrita `override > model_hint > suggested_model_hint > default_tier > 'balanced'` e escalonamento em falhas de lógica.
+
+### Ecossistema Aberto — Servidor MCP Nativo & ALM GitHub/GitLab Issues (`OB-68`..`OB-69`)
+
+- **Servidor MCP local nativo (`oxe-cc mcp`, `OB-68`):** `bin/lib/oxe-mcp-server.cjs` + CLI `oxe-cc mcp` + `runtimeMcpServer` implementam JSON-RPC 2.0 stdio puro (framing `Content-Length` e NDJSON, zero dependências externas) expondo 11 ferramentas OXE tipadas (`oxe_status`, `oxe_onboard`, `oxe_agents_list`, `oxe_agents_register`, `oxe_agents_collisions`, `oxe_agents_send`, `oxe_agents_inbox`, `oxe_reevaluate`, `oxe_plan_lint`, `oxe_doctor_ci_parity`, `oxe_scorecard`).
+- **ALM nativo para GitHub Issues (`gh`) e GitLab Issues (`glab`) (`OB-69`):** novo `bin/lib/oxe-alm-vcs.cjs` integrado a `oxe-alm.cjs` (`almConfig`, `almDoctor`, `almPush`, `almMove`, `almDefect`) e `oxe-onboard.cjs` (`detectAlmProfile`), com labels `stage:<etapa>`, fechamento em `integrated`/`released`, `--dry-run` seguro por padrão e zero chamadas a Jira.
+
+### Dashboard v2 Multi-Agente, Strangler Fig Fatia 3 & ADR `D-8` (`OB-70`..`OB-72`)
+
+- **Dashboard v2 ao vivo (`OB-70`):** `bin/lib/oxe-dashboard.cjs` oferece interface completa de controle em tema escuro azul/obsidiana com navegação lateral por 8 seções cobrindo todo o ecossistema OXE e rota `GET /api/state` expondo `active_agents`, `agent_messages`, `agent_collisions`, `worktree_hygiene`, `reevaluate`, `scorecard_routing` e `onboard_summary`.
+- **Strangler Fig Fatia 3 (`OB-71`, ADR `D-6`):** extração de `bin/lib/operational/plan-lint-runtime.cjs` (`-1.007` linhas em `bin/lib/oxe-operational.cjs`) e `bin/lib/commands/status-doctor-commands.cjs` (`-1.076` linhas em `bin/oxe-cc.js`) com zero ciclos e 0 drift de SDK (`test:sdk-types`).
+- **ADR `D-8` e sincronização `1.23.0` (`OB-72`):** formalização em `docs/adr/D-8-*.md` (preservando `D-1..D-7`), sincronização de versão `1.23.0` nas 5 fontes + `package-lock.json` e atualização de `oxe/templates/CONFIG.md`, `oxe/workflows/help.md`, `oxe/workflows/ship.md`, `oxe/workflows/lean/execute.md` e `AGENTS.md`.
+
+---
+
 ## [1.22.2] — 2026-11-27
 
 Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-37`..`OB-60`, 9 fases `F1`–`F9`, 21 entregas + `RFC-1`) incorporando os achados de uso real no OXESpace `v1.6.3`, as fricções catalogadas no bench `v1.22.0`, gates mecânicos de qualidade de specs/cards, onboarding agnóstico multi-CI/multi-ALM com auto-proposta de config, higiene operacional segura de worktrees, `runtime verify` paralelo + cache incremental, coordenação multi-agente local, reavaliação contínua, `CiAdapter` multi-provedor e roteamento empírico de modelos (`OXB-222-01`..`OXB-222-21`).
