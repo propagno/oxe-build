@@ -1,14 +1,36 @@
 # PLAN
 
-> Gerado por `oxe-cc plan build` a partir de F6.role.json. A fonte é o PLAN.json; este arquivo é a leitura humana.
+> Gerado por `oxe-cc plan build` a partir de F7.role.json. A fonte é o PLAN.json; este arquivo é a leitura humana.
 
 ## Onda 1
 
-### T1 — OB-52: Implementar higiene operacional segura de worktrees (protecao de junctions, doctor/onboard e worktree.auto_gc)
+### T1 — OB-53: Sessao unificada em spec/program/prd, resolveProjectGitRoot anti-HOME/.git e verify.allow_oxe_refs
 
-- **Arquivos prováveis:** `bin/lib/oxe-worktree-gc.cjs`, `bin/lib/oxe-project-env.cjs`, `bin/lib/oxe-onboard.cjs`, `bin/lib/commands/ops-commands.cjs`, `bin/lib/oxe-operational.cjs`, `lib/sdk/index.d.ts`, `oxe/templates/CONFIG.md`, `oxe/workflows/ship.md`, `.cursor/commands/`, `.cursor/commands/oxe-discuss.md`, `.cursor/commands/oxe-execute.md`, `.cursor/commands/oxe-help.md`, `.cursor/commands/oxe-next.md`, `.cursor/commands/oxe-plan.md`, `.cursor/commands/oxe-quick.md`, `.cursor/commands/oxe-review-pr.md`, `.cursor/commands/oxe-scan.md`, `.cursor/commands/oxe-ship.md`, `.cursor/commands/oxe-spec.md`, `.cursor/commands/oxe-verify.md`, `.cursor/commands/oxe.md`, `.github/prompts/`, `.github/prompts/oxe-alm.prompt.md`, `.github/prompts/oxe-ask.prompt.md`, `.github/prompts/oxe-capabilities.prompt.md`, `.github/prompts/oxe-checkpoint.prompt.md`, `.github/prompts/oxe-compact.prompt.md`, `.github/prompts/oxe-dashboard.prompt.md`, `.github/prompts/oxe-debug.prompt.md`, `.github/prompts/oxe-discuss.prompt.md`, `.github/prompts/oxe-execute.prompt.md`, `.github/prompts/oxe-forensics.prompt.md`, `.github/prompts/oxe-help.prompt.md`, `.github/prompts/oxe-loop.prompt.md`, `.github/prompts/oxe-milestone.prompt.md`, `.github/prompts/oxe-next.prompt.md`, `.github/prompts/oxe-obs.prompt.md`, `.github/prompts/oxe-plan-agent.prompt.md`, `.github/prompts/oxe-plan.prompt.md`, `.github/prompts/oxe-project.prompt.md`, `.github/prompts/oxe-quick.prompt.md`, `.github/prompts/oxe-research.prompt.md`, `.github/prompts/oxe-retro.prompt.md`, `.github/prompts/oxe-review-pr.prompt.md`, `.github/prompts/oxe-route.prompt.md`, `.github/prompts/oxe-scan.prompt.md`, `.github/prompts/oxe-security.prompt.md`, `.github/prompts/oxe-session.prompt.md`, `.github/prompts/oxe-ship.prompt.md`, `.github/prompts/oxe-skill.prompt.md`, `.github/prompts/oxe-spec.prompt.md`, `.github/prompts/oxe-ui-review.prompt.md`, `.github/prompts/oxe-ui-spec.prompt.md`, `.github/prompts/oxe-update.prompt.md`, `.github/prompts/oxe-validate-gaps.prompt.md`, `.github/prompts/oxe-verify.prompt.md`, `.github/prompts/oxe-workstream.prompt.md`, `.github/prompts/oxe.prompt.md`, `commands/oxe/`, `commands/oxe/alm.md`, `commands/oxe/ask.md`, `commands/oxe/capabilities.md`, `commands/oxe/checkpoint.md`, `commands/oxe/compact.md`, `commands/oxe/dashboard.md`, `commands/oxe/debug.md`, `commands/oxe/discuss.md`, `commands/oxe/execute.md`, `commands/oxe/forensics.md`, `commands/oxe/help.md`, `commands/oxe/loop.md`, `commands/oxe/milestone.md`, `commands/oxe/next.md`, `commands/oxe/obs.md`, `commands/oxe/oxe.md`, `commands/oxe/plan-agent.md`, `commands/oxe/plan.md`, `commands/oxe/project.md`, `commands/oxe/quick.md`, `commands/oxe/research.md`, `commands/oxe/retro.md`, `commands/oxe/review-pr.md`, `commands/oxe/route.md`, `commands/oxe/scan.md`, `commands/oxe/security.md`, `commands/oxe/session.md`, `commands/oxe/ship.md`, `commands/oxe/skill.md`, `commands/oxe/spec.md`, `commands/oxe/ui-review.md`, `commands/oxe/ui-spec.md`, `commands/oxe/update.md`, `commands/oxe/validate-gaps.md`, `commands/oxe/verify-audit.md`, `commands/oxe/verify.md`, `commands/oxe/workflow-authoring.md`, `commands/oxe/workstream.md`, `CHANGELOG.md`
+- **Arquivos prováveis:** `bin/lib/oxe-git-root.cjs`, `bin/lib/oxe-project-env.cjs`, `bin/lib/oxe-worktree-gc.cjs`, `bin/lib/oxe-origin.cjs`, `bin/lib/oxe-preflight.cjs`, `bin/lib/oxe-onboard.cjs`, `bin/lib/oxe-operational.cjs`, `packages/runtime/src/verification/verification-compiler.ts`
 - **Depende de:** —
 - **Onda:** 1
 - **Verificar:**
-  - Comando: `node --test tests/acceptance/oxe-1222-a13-worktree-hygiene.test.cjs tests/oxe-1230-lote1-stability.test.cjs tests/acceptance/oxe-1222-a12-agnostic-onboard.test.cjs tests/acceptance/oxe-1222-a9-discovery-env-doctor.test.cjs`
-- **Aceite vinculado:** A13
+  - Comando: `node --test tests/acceptance/oxe-1222-a14-session-gitroot-oxerefs.test.cjs`
+- **Aceite vinculado:** A14
+
+## Onda 2
+
+### T2 — OB-54: Pool paralelo de regressao no runtime verify (verify.concurrency) e cache incremental seguro
+
+- **Arquivos prováveis:** `bin/lib/oxe-verify-cache.cjs`, `bin/lib/oxe-operational.cjs`, `packages/runtime/src/verification/verification-compiler.ts`
+- **Depende de:** T1
+- **Onda:** 2
+- **Verificar:**
+  - Comando: `node --test tests/acceptance/oxe-1222-a15-parallel-verify.test.cjs`
+- **Aceite vinculado:** A15
+
+## Onda 3
+
+### T3 — OB-55: Decomposicao Strangler Fig Fatia 2 (ADR D-6) de oxe-operational.cjs e bin/oxe-cc.js
+
+- **Arquivos prováveis:** `bin/lib/operational/promote-runtime.cjs`, `bin/lib/commands/spec-program-commands.cjs`, `bin/lib/oxe-operational.cjs`, `bin/oxe-cc.js`, `lib/sdk/index.d.ts`
+- **Depende de:** T1, T2
+- **Onda:** 3
+- **Verificar:**
+  - Comando: `node --test tests/acceptance/oxe-1222-a16-strangler-slice2.test.cjs tests/acceptance/oxe-1221-a8-cli-commands-extract.test.cjs tests/acceptance/oxe-1221-a9-operational-slice1.test.cjs`
+- **Aceite vinculado:** A16
