@@ -26,15 +26,18 @@ function createModelSelector(config, tasksById) {
   if (!tiers && !m.overrides) return null;
   const escalateOn = new Set(Array.isArray(m.escalate_on) ? m.escalate_on : ['logic']);
   const max = Number.isInteger(m.max_escalations) ? m.max_escalations : 1;
-  const state = new Map(); // task → { tierIndex, escalations }
+  const autoRoute = m.auto_route === true;
+  const state = new Map(); // task → { tierIndex, escalations, autoRouted }
   return (taskId, attempt, lastFailureClass) => {
     const task = tasksById.get(taskId) || {};
     const override = (m.overrides && m.overrides[taskId]) || task.model || null;
     if (override) return { model: String(override), tier: 'override', escalated: false };
     if (!tiers) return null;
-    const startTier = ORDER.includes(task.model_hint) ? task.model_hint : ORDER.includes(m.default_tier) ? m.default_tier : 'balanced';
+    const explicitHint = ORDER.includes(task.model_hint) ? task.model_hint : null;
+    const suggestedHint = !explicitHint && autoRoute && ORDER.includes(task.suggested_model_hint) ? task.suggested_model_hint : null;
+    const startTier = explicitHint || suggestedHint || (ORDER.includes(m.default_tier) ? m.default_tier : 'balanced');
     let st = state.get(taskId);
-    if (!st || attempt === 1) { st = { tierIndex: ORDER.indexOf(startTier), escalations: 0 }; state.set(taskId, st); }
+    if (!st || attempt === 1) { st = { tierIndex: ORDER.indexOf(startTier), escalations: 0, autoRouted: Boolean(suggestedHint) }; state.set(taskId, st); }
     let escalated = false;
     if (attempt > 1 && escalateOn.has(failureKind(lastFailureClass)) && st.escalations < max && st.tierIndex < ORDER.length - 1) {
       st.tierIndex += 1;
@@ -42,7 +45,7 @@ function createModelSelector(config, tasksById) {
       escalated = true;
     }
     const tier = ORDER[st.tierIndex];
-    return { model: tiers[tier] || null, tier, escalated };
+    return { model: tiers[tier] || null, tier, escalated, ...(st.autoRouted ? { auto_routed: true } : {}) };
   };
 }
 
