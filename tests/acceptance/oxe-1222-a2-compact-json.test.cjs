@@ -27,7 +27,10 @@ function mkVerifyRepo(prefix = 'oxe-1222-a2-') {
   fs.mkdirSync(path.join(dir, '.oxe'), { recursive: true });
   fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'src', 'app.js'), 'module.exports = { ok: () => true };\n');
+  fs.writeFileSync(path.join(dir, '.oxe', 'STATE.md'), '# STATE\n');
   fs.writeFileSync(path.join(dir, '.oxe', 'config.json'), JSON.stringify({ profile: 'lean' }, null, 2));
+  fs.mkdirSync(path.join(dir, 'tests'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'tests', 'a1.test.cjs'), 'console.log("x".repeat(12000));\n');
   fs.writeFileSync(path.join(dir, '.oxe', 'SPEC.md'), [
     '---',
     'oxe_doc: spec',
@@ -37,7 +40,7 @@ function mkVerifyRepo(prefix = 'oxe-1222-a2-') {
     '## Critérios de aceite',
     '| ID | Critério | Risco | Como verificar |',
     '|---|---|---|---|',
-    '| A1 | noisy check passes | P1 | `node -e "console.log(\'x\'.repeat(12000))"` |',
+    '| A1 | noisy check passes | P1 | `node tests/a1.test.cjs` |',
   ].join('\n'));
   fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.json'), JSON.stringify({
     schema_version: 1,
@@ -48,14 +51,14 @@ function mkVerifyRepo(prefix = 'oxe-1222-a2-') {
         wave: 1,
         files: ['src/app.js'],
         acceptance: ['A1'],
-        verify: { commands: ['node -e "console.log(\'x\'.repeat(12000))"'] },
+        verify: { commands: ['node tests/a1.test.cjs'] },
       },
     ],
     acceptance_tests: [
-      { criterion: 'A1', command: 'node -e "console.log(\'x\'.repeat(12000))"', files: [] },
+      { criterion: 'A1', command: 'node tests/a1.test.cjs', files: ['tests/a1.test.cjs'] },
     ],
   }, null, 2));
-  fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.md'), '# PLAN\n## Onda 1\n### T1 — app ok\n- **Verificar:**\n  - Comando: `node -e "console.log(\'x\'.repeat(12000))"`\n- **Aceite vinculado:** A1\n');
+  fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.md'), '# PLAN\n## Onda 1\n### T1 — app ok\n- **Verificar:**\n  - Comando: `node tests/a1.test.cjs`\n- **Aceite vinculado:** A1\n');
 
   execFileSync('git', ['add', '.'], { cwd: dir, stdio: 'ignore' });
   execFileSync('git', ['commit', '-m', 'init'], { cwd: dir, stdio: 'ignore' });

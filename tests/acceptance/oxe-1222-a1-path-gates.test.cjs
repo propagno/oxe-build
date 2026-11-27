@@ -108,13 +108,14 @@ describe('A1 — OXB-222-01: Path-aware phase_gates, preflight.triggers in verif
         },
       ],
       acceptance_tests: [
-        { criterion: 'A1', command: 'node -e "process.exit(0)"', files: [] },
+        { criterion: 'A1', command: 'node -e "process.exit(0)"', files: ['README.md'] },
       ],
     }, null, 2));
 
+    fs.writeFileSync(path.join(dir, '.oxe', 'STATE.md'), '# STATE\n');
     fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.md'), '# PLAN\n## Onda 1\n### T1 — edit css\n- **Verificar:**\n  - Comando: `node -e "process.exit(0)"`\n- **Aceite vinculado:** A1\n');
 
-    op.compileRuntimeGraph(dir, null);
+    op.compileExecutionGraphFromArtifacts(dir, null);
     const verified = await op.runRuntimeVerify(dir, null, {
       changedFiles: ['src/ui/App.css'],
     });
