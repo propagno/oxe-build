@@ -63,6 +63,8 @@ const STAGE_INFO = {
 const DEFAULT_STATES = {
   jira: { intake: 'To Do', in_progress: 'In Progress', review: 'In Review', integrated: 'Done', released: 'Done' },
   'azure-devops': { intake: 'New', in_progress: 'Active', review: 'Resolved', integrated: 'Resolved', released: 'Closed' },
+  'github-issues': { intake: 'stage:intake', in_progress: 'stage:in_progress', review: 'stage:review', integrated: 'closed', released: 'closed' },
+  'gitlab-issues': { intake: 'stage:intake', in_progress: 'stage:in_progress', review: 'stage:review', integrated: 'closed', released: 'closed' },
 };
 const canonStates = (st) => Object.fromEntries(Object.entries(st || {}).map(([k, v]) => [canonStage(k), v]));
 
@@ -73,10 +75,19 @@ function almConfig(config, options = {}) {
   if (!a || typeof a !== 'object') return null;
   const provider = String(a.provider || 'none').toLowerCase().replace('_', '-');
   if (provider === 'none' || provider === 'false') return null;
-  if (!['jira', 'azure-devops'].includes(provider)) throw new Error(`alm.provider "${a.provider}" desconhecido (jira | azure-devops | none)`);
-  const p = provider === 'jira' ? (a.jira || {}) : (a.azure_devops || a['azure-devops'] || {});
-  const transport = String(a.transport || 'rest').toLowerCase();
-  if (!['rest', 'mcp'].includes(transport)) throw new Error(`alm.transport "${a.transport}" desconhecido (rest | mcp)`);
+  if (!['jira', 'azure-devops', 'github-issues', 'gitlab-issues'].includes(provider)) {
+    throw new Error(`alm.provider "${a.provider}" desconhecido (jira | azure-devops | github-issues | gitlab-issues | none)`);
+  }
+  const p = provider === 'jira'
+    ? (a.jira || {})
+    : provider === 'azure-devops'
+      ? (a.azure_devops || a['azure-devops'] || {})
+      : provider === 'github-issues'
+        ? (a.github_issues || a['github-issues'] || {})
+        : (a.gitlab_issues || a['gitlab-issues'] || {});
+  const isVcs = provider === 'github-issues' || provider === 'gitlab-issues';
+  const transport = String(a.transport || (isVcs ? 'cli' : 'rest')).toLowerCase();
+  if (!['rest', 'mcp', 'cli'].includes(transport)) throw new Error(`alm.transport "${a.transport}" desconhecido (rest | mcp | cli)`);
   return {
     provider,
     // rest: the oxe-cc talks to the API (token in the environment). mcp: the oxe-cc decides WHAT to do and queues it;
@@ -156,7 +167,12 @@ function withWriteLock(programDir, fn) {
 
 function checkConfig(cfg, env = process.env) {
   const problems = [];
-  if (!cfg) return ['alm não configurado (alm.provider: "jira" | "azure-devops" no .oxe/config.json)'];
+  if (!cfg) return ['alm não configurado (alm.provider: "jira" | "azure-devops" | "github-issues" | "gitlab-issues" no .oxe/config.json)'];
+  if (cfg.provider === 'github-issues' || cfg.provider === 'gitlab-issues') {
+    const key = cfg.provider === 'github-issues' ? 'github_issues' : 'gitlab_issues';
+    if (!cfg.p.repo && !cfg.p.project) problems.push(`alm.${key}.repo ausente (ex.: "owner/repo")`);
+    return problems;
+  }
   if (!cfg.p.project) problems.push(`alm.${cfg.provider === 'jira' ? 'jira' : 'azure_devops'}.project ausente`);
   if (cfg.transport === 'mcp') return problems; // the MCP server holds the login: no variable needed
   const vars = cfg.provider === 'jira'
@@ -164,6 +180,22 @@ function checkConfig(cfg, env = process.env) {
     : [cfg.p.org_env || 'AZURE_DEVOPS_ORG', cfg.p.token_env || 'AZURE_DEVOPS_EXT_PAT'];
   for (const v of vars) if (!env[v]) problems.push(`variável de ambiente ${v} não definida`);
   return problems;
+}
+
+/**
+ * 1.23.0 (OXB-230-08): Validates ALM configuration and CLI prerequisites (`gh` / `glab` for VCS issue trackers).
+ */
+function almDoctor(cfg, options = {}) {
+  const env = options.env || process.env;
+  const problems = checkConfig(cfg, env);
+  if (!cfg) return { ok: false, provider: 'none', cli: null, cli_version: null, problems };
+  if (cfg.provider === 'github-issues' || cfg.provider === 'gitlab-issues') {
+    const cli = cfg.provider === 'github-issues' ? 'gh' : 'glab';
+    const chk = require('./oxe-alm-vcs.cjs').checkVcsCli(cli, options);
+    if (!chk.ok) problems.push(`${cli} indisponível: ${chk.error || 'instale e autentique o CLI'}`);
+    return { ok: problems.length === 0, provider: cfg.provider, cli, cli_version: chk.version, problems };
+  }
+  return { ok: problems.length === 0, provider: cfg.provider, cli: null, cli_version: null, problems };
 }
 
 // ── http with retry and backoff ──────────────────────────────────────────────────────────────────────────────────
@@ -525,6 +557,12 @@ const isDry = (cfg, options = {}) => Boolean(options.dryRun || options.readOnly 
 
 function provider(cfg, options = {}) {
   if (cfg.transport === 'mcp') return queueProvider(cfg);
+  if (cfg.provider === 'github-issues') {
+    return require('./oxe-alm-vcs.cjs').githubIssuesProvider(cfg, { ...options, readOnly: isDry(cfg, options) });
+  }
+  if (cfg.provider === 'gitlab-issues') {
+    return require('./oxe-alm-vcs.cjs').gitlabIssuesProvider(cfg, { ...options, readOnly: isDry(cfg, options) });
+  }
   const env = options.env || process.env;
   const ctx = { http: options.http || fetchHttp, sleep: options.sleep || ((ms) => new Promise((r) => setTimeout(r, ms))), retries: options.retries, readOnly: isDry(cfg, options), userEnv: options.userEnv };
   return cfg.provider === 'jira' ? jiraProvider(cfg, env, ctx) : azureProvider(cfg, env, ctx);
@@ -1023,8 +1061,11 @@ async function move(programDir, cfg, refOrKey, stage, options = {}) {
  * (OXE-12 in Jira, 123 in Azure), the way refine and grill publish take it (OXB-G17). "US-1" is never a key.
  */
 function resolveItem(programDir, cfg, refOrKey) {
-  // Azure DevOps keys come as "AB#123" from PR text; the ledger and the API use "123" (R42)
-  const s = cfg && cfg.provider === 'azure-devops' ? String(refOrKey || '').trim().replace(/^AB#/i, '') : String(refOrKey || '').trim();
+  // Azure DevOps keys come as "AB#123" from PR text; VCS issues may come as "#123"
+  const raw = String(refOrKey || '').trim();
+  const s = cfg && cfg.provider === 'azure-devops'
+    ? raw.replace(/^AB#/i, '')
+    : (cfg && (cfg.provider === 'github-issues' || cfg.provider === 'gitlab-issues') ? raw.replace(/^#/, '') : raw);
   const all = links(programDir);
   const known = all.get(s) || [...all.values()].find((l) => l.key === s || l.key === s.toUpperCase());
   if (known) return known;
@@ -1283,7 +1324,9 @@ async function comment(programDir, cfg, refOrKey, text, options = {}) {
 function keyFor(programDir, cfg, phase, taskId) {
   const l = links(programDir).get(taskRef(phase, taskId));
   if (!l) return null;
-  return cfg && cfg.provider === 'azure-devops' ? `AB#${l.key}` : l.key;
+  if (cfg && cfg.provider === 'azure-devops') return `AB#${l.key}`;
+  if (cfg && (cfg.provider === 'github-issues' || cfg.provider === 'gitlab-issues')) return `#${l.key}`;
+  return l.key;
 }
 
-module.exports = { almConfig, checkConfig, jiraRest, isWriter, writerError, withWriteLock, comment, provider, readQueue, pendingOps, enqueue, ack, dropEnsure, push, sync, move, stagesFromEvents, reportDefect, links, addLink, readState, keyFor, refLabel, taskRef, oldRefs, perPhase, STAGES, STAGE_INFO, STAGE_ALIASES, canonStage, adf, request, isDry, warnApply, resolveItem, linkPr, labelItem, relateItems, setItemVersion, setItemSummary, supersede, moveForward, stageAtOrPast, addPending, listPending, applyPending, pendingFile };
+module.exports = { almConfig, checkConfig, almDoctor, jiraRest, isWriter, writerError, withWriteLock, comment, provider, readQueue, pendingOps, enqueue, ack, dropEnsure, push, almPush: push, sync, move, almMove: move, stagesFromEvents, reportDefect, almDefect: reportDefect, links, addLink, readState, keyFor, refLabel, taskRef, oldRefs, perPhase, STAGES, STAGE_INFO, STAGE_ALIASES, canonStage, adf, request, isDry, warnApply, resolveItem, linkPr, labelItem, relateItems, setItemVersion, setItemSummary, supersede, moveForward, stageAtOrPast, addPending, listPending, applyPending, pendingFile };

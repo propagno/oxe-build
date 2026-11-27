@@ -242,7 +242,8 @@ function detectAlmProfile(projectRoot, config = {}, env = process.env) {
     };
   }
 
-  const transport = raw.transport ? String(raw.transport).trim().toLowerCase() : 'rest';
+  const isVcsAlm = provider === 'github-issues' || provider === 'gitlab-issues';
+  const transport = raw.transport ? String(raw.transport).trim().toLowerCase() : (isVcsAlm ? 'cli' : 'rest');
   let project = null;
   const envVarNames = [];
 
@@ -261,6 +262,12 @@ function detectAlmProfile(projectRoot, config = {}, env = process.env) {
       if (!az.org && !raw.org) envVarNames.push(az.org_env || 'AZURE_DEVOPS_ORG');
       envVarNames.push(az.token_env || 'AZURE_DEVOPS_EXT_PAT');
     }
+  } else if (provider === 'github-issues') {
+    const gh = (raw.github_issues || raw['github-issues']) || {};
+    project = gh.repo || gh.project || raw.repo || raw.project || null;
+  } else if (provider === 'gitlab-issues') {
+    const gl = (raw.gitlab_issues || raw['gitlab-issues']) || {};
+    project = gl.repo || gl.project || raw.repo || raw.project || null;
   } else {
     project = raw.project || null;
     if (raw.token_env) envVarNames.push(String(raw.token_env));
@@ -286,9 +293,11 @@ function detectAlmProfile(projectRoot, config = {}, env = process.env) {
     require_apply: Boolean(raw.require_apply),
     env_vars: envVars,
     missing_env_vars: missingEnvVars,
-    note: transport === 'mcp'
-      ? `ALM ${provider} via MCP (sem tokens locais; operações passam por oxe-cc alm queue).`
-      : `ALM ${provider} via REST (somente leitura até --apply; nunca exponha tokens).`,
+    note: isVcsAlm
+      ? `ALM ${provider} via CLI ${provider === 'github-issues' ? 'gh' : 'glab'} (sem dependência de Jira; --dry-run padrão até --apply).`
+      : transport === 'mcp'
+        ? `ALM ${provider} via MCP (sem tokens locais; operações passam por oxe-cc alm queue).`
+        : `ALM ${provider} via REST (somente leitura até --apply; nunca exponha tokens).`,
   };
 }
 
