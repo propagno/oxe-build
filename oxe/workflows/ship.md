@@ -44,7 +44,8 @@ Levar o trabalho verificado até produção, um passo verde por vez: **PR → CI
 - PR fora de fase, de um card ou o repositório inteiro: `oxe-cc ship status --pr <n>` · `--card <KEY>` · `--repo` (com os rótulos do trem); `--comment --apply` põe o veredito no PR, onde o trem e a CI leem.
 - Antes do merge: `oxe-cc ship check-origin <#PR>`. Todo commit vem do `runtime execute` (`OXE-Task`) ou de um quick registrado (`OXE-Quick`); as isenções são só as de `origin.exempt`.
 - O merge é do usuário ou do trem de merge do repositório. O OXE detecta o merge (`gh pr view`) e registra.
-- Fase com CI exigido no close: `oxe-cc runtime ci --attach <run> --head <sha>`. Para medir retrabalho pós-verify e taxa de CI verde de primeira offline a partir dos registros locais, rode `oxe-cc runtime scorecard --with-ci [--json]`.
+- Fase com CI exigido no close: `oxe-cc runtime ci --attach <run> --head <sha>`. Para medir retrabalho pós-verify, taxa de CI verde de primeira e roteamento empírico de modelos offline a partir dos registros locais, rode `oxe-cc runtime scorecard --with-ci --with-routing [--json]`.
+- Provedores de CI/VCS: `ship status` e `release` usam o `CiAdapter` provider-agnóstico (`github`/`gh`, `gitlab`/`glab`, `azure-devops`/`az` ou `local` 100% offline). Quando novos commits pousam na base durante uma fase longa, rode `oxe-cc reevaluate --against <ref> --json` para classificar tarefas pendentes em `no_impact`, `mechanical_sync` ou `contract_drift`.
 
 ### Passo 3 — Deploy
 - Depois do merge, e quando houver ambiente: `oxe-cc runtime deploy --attach <env> --version <v> --ref <tag|url> --check "<smoke>"`. Isso só registra e roda as checagens pós-deploy; o deploy em si é de quem é dono.

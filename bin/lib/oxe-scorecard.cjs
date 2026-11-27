@@ -435,4 +435,193 @@ function scorecardForProject(projectRoot, readEvents, options = {}) {
   return computeScorecard({ events, changeLines, ledgers: readLedgers(projectRoot), since: options.since || null });
 }
 
-module.exports = { TARGETS, computeScorecard, scorecardForProject, foldChanges, computeLeadtimeAndCiMetrics };
+const DOC_CFG_FILE_RE = /\.(md|txt|json|ya?ml|toml|ini|cfg|conf)$|^(docs|\.oxe|\.github)\//i;
+const TEST_ONLY_FILE_RE = /(^|\/)(tests?|__tests__|spec|e2e)\/|\.(test|spec)\.[cm]?[jt]sx?$/i;
+const HEURISTIC_TIER_BY_CATEGORY = Object.freeze({
+  'docs-config': 'fast',
+  'test-only': 'fast',
+  'small-edit': 'balanced',
+  'multi-file-refactor': 'powerful',
+  architecture: 'powerful',
+  general: 'balanced',
+});
+
+/**
+ * 1.22.2 (OXB-222-21): Classifies a task into a coarse routing category from its kind, files and title.
+ */
+function classifyTaskCategory(task = {}) {
+  const kind = String(task.kind || '').toLowerCase();
+  const files = (Array.isArray(task.files) ? task.files : []).map((f) => String(f || '').replace(/\\/g, '/'));
+  const title = String(task.title || '');
+  if (kind === 'test-only' || (files.length > 0 && files.every((f) => TEST_ONLY_FILE_RE.test(f)))) return 'test-only';
+  if (kind === 'config-only' || (files.length > 0 && files.every((f) => DOC_CFG_FILE_RE.test(f)))) return 'docs-config';
+  if (files.length >= 4 || /\b(refactor|refator|migrat|modulariz|strangler|arquitetura|architecture)\b/i.test(title)) return 'multi-file-refactor';
+  return 'small-edit';
+}
+
+/**
+ * 1.22.2 (OXB-222-21): Offline empirical model-routing statistics per task category and tier.
+ * Reads historical `ExecutorUsage`, `RetryScheduled`, and `WorkItemCompleted` events (zero network calls).
+ */
+function computeModelRoutingStats(events = [], options = {}) {
+  let since = null;
+  if (options.since) {
+    const d = new Date(options.since);
+    if (!Number.isNaN(d.getTime())) since = d.toISOString();
+  }
+  const combined = Array.isArray(events) ? [...events] : [];
+  if (options.projectRoot) {
+    const evCandidates = [];
+    if (options.activeSession) {
+      evCandidates.push(path.join(options.projectRoot, '.oxe', options.activeSession, 'events', 'events.ndjson'));
+      evCandidates.push(path.join(options.projectRoot, '.oxe', options.activeSession, 'OXE-EVENTS.ndjson'));
+    }
+    evCandidates.push(path.join(options.projectRoot, '.oxe', 'events', 'events.ndjson'));
+    evCandidates.push(path.join(options.projectRoot, '.oxe', 'OXE-EVENTS.ndjson'));
+    const seenPaths = new Set();
+    for (const c of evCandidates) {
+      const abs = path.resolve(c);
+      if (seenPaths.has(abs)) continue;
+      seenPaths.add(abs);
+      combined.push(...readNdjsonQuiet(abs));
+    }
+  }
+  const seenKey = new Set();
+  const list = [];
+  for (const e of combined) {
+    if (!e || typeof e !== 'object') continue;
+    const ts = String(e.timestamp || e.at || '');
+    if (since && ts < since) continue;
+    const dk = `${e.type || ''}|${e.run_id || ''}|${e.work_item_id || ''}|${ts}|${JSON.stringify(e.payload || {})}`;
+    if (seenKey.has(dk)) continue;
+    seenKey.add(dk);
+    list.push(e);
+  }
+
+  const taskState = new Map();
+  const ensure = (key) => {
+    if (!taskState.has(key)) {
+      taskState.set(key, { category: 'general', firstTier: null, finalTier: null, turns: 0, costUsd: 0, retried: false, completed: false, attempt1: false, tierAttempts: [] });
+    }
+    return taskState.get(key);
+  };
+
+  for (const e of list) {
+    const wid = e.work_item_id || (e.payload && e.payload.task);
+    if (!wid) continue;
+    const key = `${e.run_id || 'default'}::${wid}`;
+    const p = e.payload || {};
+    const st = ensure(key);
+    const cat = p.category || p.task_category || null;
+    if (cat) st.category = String(cat);
+    const tier = p.tier || p.model_tier || p.model_hint || null;
+    if (e.type === 'ExecutorUsage') {
+      if (tier && !st.firstTier) st.firstTier = String(tier);
+      if (tier) st.finalTier = String(tier);
+      st.turns += Number(p.turns) || 0;
+      st.costUsd += Number(p.cost_usd) || 0;
+      if (p.success === false) st.retried = true;
+      st.tierAttempts.push({ tier: String(tier || 'balanced'), success: p.success !== false });
+    } else if (e.type === 'RetryScheduled') {
+      st.retried = true;
+    } else if (e.type === 'WorkItemCompleted') {
+      if (tier && !st.finalTier) st.finalTier = String(tier);
+      if (tier && !st.firstTier) st.firstTier = String(tier);
+      st.completed = true;
+      const attempt = Number(p.attempt_number ?? p.attempt ?? 1);
+      if (attempt === 1 && !st.retried) st.attempt1 = true;
+    }
+  }
+
+  const byCatRaw = new Map();
+  for (const st of taskState.values()) {
+    const cat = st.category || 'general';
+    if (!byCatRaw.has(cat)) byCatRaw.set(cat, []);
+    byCatRaw.get(cat).push(st);
+  }
+
+  const byCategory = {};
+  let totalSamples = 0;
+  for (const [cat, items] of byCatRaw.entries()) {
+    const samples = items.length;
+    totalSamples += samples;
+    const firstPass = items.filter((x) => x.attempt1).length;
+    const firstAttemptRate = samples ? Math.round((firstPass / samples) * 100) / 100 : null;
+    const avgTurns = samples ? Math.round((items.reduce((a, b) => a + b.turns, 0) / samples) * 100) / 100 : 0;
+    const avgCost = samples ? Math.round((items.reduce((a, b) => a + b.costUsd, 0) / samples) * 10000) / 10000 : 0;
+
+    const tierAgg = {};
+    for (const tierName of ['fast', 'balanced', 'powerful']) {
+      const attempts = items.flatMap((x) => x.tierAttempts.filter((a) => a.tier === tierName));
+      if (!attempts.length) continue;
+      const okCount = attempts.filter((a) => a.success).length;
+      tierAgg[tierName] = {
+        attempts: attempts.length,
+        successes: okCount,
+        success_rate: Math.round((okCount / attempts.length) * 100) / 100,
+      };
+    }
+
+    let recommended = HEURISTIC_TIER_BY_CATEGORY[cat] || 'balanced';
+    if (tierAgg.fast && tierAgg.fast.attempts >= 1 && tierAgg.fast.success_rate >= 0.8) {
+      recommended = 'fast';
+    } else if (tierAgg.balanced && tierAgg.balanced.attempts >= 1 && tierAgg.balanced.success_rate < 0.7) {
+      recommended = 'powerful';
+    } else if (tierAgg.balanced && tierAgg.balanced.attempts >= 1 && tierAgg.balanced.success_rate >= 0.8) {
+      recommended = 'balanced';
+    } else if (tierAgg.powerful && tierAgg.powerful.attempts >= 1 && tierAgg.powerful.success_rate >= 0.7) {
+      recommended = 'powerful';
+    }
+
+    byCategory[cat] = {
+      samples,
+      first_attempt_rate: firstAttemptRate,
+      avg_turns: avgTurns,
+      avg_cost_usd: avgCost,
+      tiers: tierAgg,
+      recommended_tier: recommended,
+    };
+  }
+
+  return {
+    offline: true,
+    total_samples: totalSamples,
+    by_category: byCategory,
+  };
+}
+
+/**
+ * Suggests a `model_hint` (`fast` | `balanced` | `powerful`) for a task using empirical stats when
+ * available, falling back deterministically to category heuristics. Never overrides an explicit `model_hint`.
+ */
+function suggestModelHint(task = {}, routingStats = null) {
+  const category = classifyTaskCategory(task);
+  const catStats = routingStats && routingStats.by_category && routingStats.by_category[category];
+  if (catStats && catStats.samples >= 1 && catStats.recommended_tier) {
+    const pct = catStats.first_attempt_rate != null ? `${Math.round(catStats.first_attempt_rate * 100)}%` : 'n/a';
+    return {
+      category,
+      suggested_model_hint: catStats.recommended_tier,
+      routing_reason: `empírico (${category}: ${catStats.samples} amostra(s), first-attempt ${pct})`,
+      source: 'empirical',
+    };
+  }
+  const fallback = HEURISTIC_TIER_BY_CATEGORY[category] || 'balanced';
+  return {
+    category,
+    suggested_model_hint: fallback,
+    routing_reason: `heurístico (${category}, sem amostras históricas suficientes)`,
+    source: 'heuristic',
+  };
+}
+
+module.exports = {
+  TARGETS,
+  computeScorecard,
+  scorecardForProject,
+  foldChanges,
+  computeLeadtimeAndCiMetrics,
+  classifyTaskCategory,
+  computeModelRoutingStats,
+  suggestModelHint,
+};

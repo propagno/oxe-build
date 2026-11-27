@@ -1188,7 +1188,20 @@ function expandRolePaths(root, ref, list) {
   return uniq(expanded);
 }
 
-function build(inputs, ctx = {}) {
+function build(first, second = {}, third = {}) {
+  let rawInputs = first;
+  let ctx = second || {};
+  if (typeof first === 'string' && Array.isArray(second)) {
+    rawInputs = second;
+    ctx = { ...(third || {}), root: first };
+  }
+  const inputs = (Array.isArray(rawInputs) ? rawInputs : []).map((entry, idx) => {
+    if (entry && typeof entry === 'object' && entry.doc && typeof entry.file === 'string') return entry;
+    if (entry && typeof entry === 'object' && Array.isArray(entry.tasks)) {
+      return { file: `${entry.role || `role-${idx + 1}`}.role.json`, doc: entry };
+    }
+    return entry;
+  });
   const root = ctx.root || process.cwd();
   const ref = ctx.ref || 'HEAD';
   const coupledRules = loadCoupledScope(root, ctx);
@@ -1406,6 +1419,27 @@ function build(inputs, ctx = {}) {
       warnings.push(...fsg.fileSizeHeadroomMessages(annotated.findings).warnings);
     }
   } catch { /* */ }
+  // OXB-222-21: annotate empirical/heuristic `suggested_model_hint` + `routing_reason` while preserving any explicit `model_hint`.
+  try {
+    const scorecardMod = require('./oxe-scorecard.cjs');
+    const histEvents = [];
+    const evCandidates = [
+      path.join(root, '.oxe', 'events', 'events.ndjson'),
+      path.join(root, '.oxe', 'OXE-EVENTS.ndjson'),
+    ];
+    for (const evFile of evCandidates) {
+      if (!fs.existsSync(evFile)) continue;
+      for (const line of fs.readFileSync(evFile, 'utf8').split(/\r?\n/).filter(Boolean)) {
+        try { histEvents.push(JSON.parse(line)); } catch { /* skip corrupt */ }
+      }
+    }
+    const routingStats = scorecardMod.computeModelRoutingStats(histEvents);
+    for (const t of plan.tasks) {
+      const suggestion = scorecardMod.suggestModelHint(t, routingStats);
+      t.suggested_model_hint = suggestion.suggested_model_hint;
+      t.routing_reason = suggestion.routing_reason;
+    }
+  } catch { /* sugestão de roteamento auxiliar */ }
   // OXB-C25: the preflight needs `ready: true`; without it, execute stopped on execution_rationality:not_ready with an
   // empty gap list while plan lint said ok. The build's own checks decide it.
   pack.ready = errors.length === 0;

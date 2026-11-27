@@ -4,9 +4,9 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
-## [1.22.2] — 2026-11-26
+## [1.22.2] — 2026-11-27
 
-Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-37`..`OB-52`, 6 fases `F1`–`F6`, 13 entregas + `RFC-1`) incorporando os achados de uso real no OXESpace `v1.6.3`, as fricções catalogadas no bench `v1.22.0`, gates mecânicos de qualidade de specs/cards, onboarding agnóstico multi-CI/multi-ALM e higiene operacional segura de worktrees (`OXB-222-01`..`OXB-222-13`).
+Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-37`..`OB-60`, 9 fases `F1`–`F9`, 21 entregas + `RFC-1`) incorporando os achados de uso real no OXESpace `v1.6.3`, as fricções catalogadas no bench `v1.22.0`, gates mecânicos de qualidade de specs/cards, onboarding agnóstico multi-CI/multi-ALM com auto-proposta de config, higiene operacional segura de worktrees, `runtime verify` paralelo + cache incremental, coordenação multi-agente local, reavaliação contínua, `CiAdapter` multi-provedor e roteamento empírico de modelos (`OXB-222-01`..`OXB-222-21`).
 
 ### Paridade pré-push, contexto compacto & coordenação de recursos (`OB-40`..`OB-43`, ADR `D-7`)
 
@@ -41,6 +41,23 @@ Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-37`..
   - `bin/lib/oxe-worktree-gc.cjs` protege por fecho transitivo qualquer worktree cujo diretório ou `node_modules` seja destino de junction/symlink usado por worktrees mantidas (`reason: "junction_target_in_use"`, `dependents`), desfaz junctions rasas (`depth <= 3`) antes de remover, sinaliza `has_real_node_modules` e `nested_agent`, e aceita `--include-nested` e `--ignore-agent-settings` (`.claude/worktrees/*` com apenas `.claude/settings.local.json` modificado).
   - `oxe-cc doctor --project` (`bin/lib/oxe-project-env.cjs`) e `oxe-cc onboard` (`bin/lib/oxe-onboard.cjs`) reportam `worktrees` (`summarizeWorktreeHygiene`) com aviso não-bloqueante acima de `worktree.warn_above` (padrão `5`, silenciável por `worktree.hygiene: false`).
   - `runtimeProgramClose` (`bin/lib/oxe-operational.cjs`) executa `runPostCloseWorktreeHygiene` conforme `worktree.auto_gc` (`"warn"` padrão, `"prune"`, `"apply"` ou `false`) e expõe `runtimeWorktreeHygiene` no SDK.
+
+### Velocidade, sessão única, segurança git & modularização Strangler Fig Fatia 2 (`OB-53`..`OB-55`, ADR `D-6`)
+
+- **Sessão unificada, proteção contra `$HOME/.git` e `verify.allow_oxe_refs` (`OB-53`):** `resolveEffectiveSession` unifica resolução da sessão ativa em `spec`/`program`/`prd` (com busca direta em `sessionRoot/SPEC.md` e `ROADMAP.md`); `bin/lib/oxe-git-root.cjs` (`resolveProjectGitRoot`, `detectHomeGitHazard`) impede herança acidental de `$HOME/.git` em pastas temporárias e avisa em `doctor --project`; `verify.allow_oxe_refs: true` elimina falso positivo `oxe_internal_reference` em projetos que manipulam `.oxe/`.
+- **Pool paralelo e cache incremental seguro no `runtime verify` (`OB-54`):** `packages/runtime/src/verification/verification-compiler.ts` executa checks independentes com pool concorrente não-bloqueante (`verify.concurrency`, ordem determinística preservada) e `bin/lib/oxe-verify-cache.cjs` armazena passes verdes válidos por `(check_id, command, tree_fingerprint)` em `.oxe/runs/verify-regression-cache.json` sem nunca cachear falhas ou arquivos adulterados (ganho medido `~4,6×` no próprio `oxe-build`: `3m50s → 50s`).
+- **Decomposição Strangler Fig Fatia 2 (`OB-55`, ADR `D-6`):** extração de `bin/lib/operational/promote-runtime.cjs` (`-1.089` linhas em `bin/lib/oxe-operational.cjs`) e `bin/lib/commands/spec-program-commands.cjs` (`-290` linhas em `bin/oxe-cc.js`) com 0 ciclos e 0 drift de SDK.
+
+### Coordenação multi-agente local & reavaliação contínua (`OB-56`..`OB-57`)
+
+- **Coordenação multi-agente agnóstica de IDE (`oxe-cc agents`, `OB-56`):** `bin/lib/oxe-agent-coord.cjs` mantém leases com TTL/PID em `<git-common-dir>/oxe/active-agents.json` e inbox cross-worktree em `agent-messages.ndjson`, com subcomandos `register|heartbeat|release|list|collisions|send|inbox`, aviso de colisão de `write_set` no `plan lint` e visibilidade `active_agents` em `status --all-worktrees`.
+- **Reavaliação contínua de solução (`oxe-cc reevaluate`, `OB-57`):** `bin/lib/oxe-reevaluate.cjs` (`reevaluateAgainstBase`, `runtimeReevaluate`) compara commits recentes na base (`--against <ref>`) contra tarefas pendentes do `PLAN.json`, classificando cada tarefa em `no_impact`, `mechanical_sync` (`oxe-cc sync`) ou `contract_drift` (CR focado).
+
+### Agnosticismo fim-a-fim (`CiAdapter`), auto-proposta no `onboard` & roteamento empírico (`OB-58`..`OB-60`)
+
+- **Auto-configuração assistida (`oxe-cc onboard --propose-config [--apply]`, `OB-58`):** `proposeOnboardingConfig` traduz comandos de CI detectados (GitHub/GitLab/Azure/Bitbucket/CircleCI/Jenkins) em proposta declarativa de `phase_gates`, `profile: "lean"` e `worktree.auto_gc` em `--dry-run` padrão (0 escritas) e mescla de forma não-destrutiva em `.oxe/config.json` com `--apply`.
+- **`CiAdapter` provider-agnóstico (`bin/lib/oxe-ci-adapter.cjs`, `OB-59`):** `detectCiProvider`, `resolveCiAdapter`, `inspectCiStatus`, `listReleaseAssets` e `runtimeCiAdapterStatus` abstraem `github` (`gh`), `gitlab` (`glab`), `azure-devops` (`az`) e `local` (100% offline sem `gh`), integrados a `oxe-ship-pr.cjs` e `oxe-release-ops.cjs`.
+- **Roteamento empírico de modelos (`OB-60`):** `computeModelRoutingStats` e `suggestModelHint` em `bin/lib/oxe-scorecard.cjs` expõem `oxe-cc runtime scorecard --with-routing` offline por categoria de tarefa e anotam `suggested_model_hint` + `routing_reason` no `plan build` preservando sempre qualquer `model_hint` explícito do usuário.
 
 ---
 

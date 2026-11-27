@@ -147,6 +147,11 @@ Os checks pesados (e2e, build empacotado, Android) rodam no CI do repositório n
 - **Espera leve e retomável:** sem `gh run watch` de longa duração. São consultas curtas (`poll_seconds`, padrão 30) com o estado em `.oxe/program/remote-verify.json`; o verify seguinte retoma o mesmo run. Com `detach: true`, o verify dispara o run e retorna na hora.
 - **Trace da CI:** quando um job falha, os artefatos (`artifacts`, padrão `*trace*`, `*playwright-report*`, `*test-results*`, `*screenshot*`; `[]` desliga) são baixados para `.oxe/evidence/remote/`. Com `where: "both"`, o check roda aqui e na CI; vermelho só na CI vira `ci_only`, e a leitura certa é o trace da CI, não uma reprodução local.
 - **`verify.min_free_mb`:** com menos memória livre que isso, nenhum check pesado roda na máquina. Ele vai para a CI quando há `verify.remote`; sem ela, fica como "não verificado (memória baixa)" e o verify termina parcial.
+- **`verify.concurrency`:** número máximo de checks independentes executados em paralelo no `runtime verify` (padrão `1`; recomendado `4` em máquinas modernas), preservando ordem determinística dos resultados.
+- **`verify.incremental_regression`:** quando `true`, ativa cache incremental seguro em `.oxe/runs/verify-regression-cache.json` por `(check_id, command, tree_fingerprint)` para reutilizar passes verdes válidos sem nunca cachear falhas ou testes adulterados.
+- **`verify.allow_oxe_refs`:** quando `true`, desativa o falso positivo `oxe_internal_reference` em projetos que manipulam artefatos `.oxe/` (como o próprio `oxe-build`).
+- **`ci.provider`:** opcional (`"github"` | `"gitlab"` | `"azure-devops"` | `"local"`) para o `CiAdapter` usado por `ship` e `release`; quando omitido, é detectado automaticamente pelo remote git e pelos arquivos de pipeline com fallback `"local"` offline.
+- **`oxe-cc onboard --propose-config [--apply]`:** traduz pipelines detectados (GitHub Actions, GitLab CI, Azure Pipelines, Bitbucket, CircleCI, Jenkins) em proposta declarativa de `phase_gates`, `profile: "lean"` e `worktree.auto_gc` (`--dry-run` padrão, `--apply` mescla sem sobrescrever chaves do usuário).
 
 ## Retomada automática do execute (`autoresume`)
 
