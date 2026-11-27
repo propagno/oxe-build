@@ -263,7 +263,7 @@ function scaffold(def, dir, pyBin = null) {
     writeFile(path.join(dir, 'package.json'), `${JSON.stringify({
       name: def.name, version: '0.1.0', private: true, description: def.description,
       scripts: { test: 'node --test', lint: 'node scripts/lint.cjs' },
-      engines: { node: '>=20' },
+      engines: { node: '>=18' },
     }, null, 2)}\n`);
     writeFile(path.join(dir, '.gitignore'), '.oxe/\nnode_modules/\n');
     writeFile(path.join(dir, 'scripts', 'lint.cjs'), LINT_SCRIPT);

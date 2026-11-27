@@ -219,6 +219,46 @@ function isOnlyAgentSettingsDirty(porcelainStdout) {
 }
 
 /**
+ * On POSIX (Linux/macOS), `.gitignore` rules with a trailing slash (e.g. `node_modules/`, `e2e/out/`)
+ * do not match symlinks to directories, so `git status --porcelain` reports them as untracked (`??`).
+ * This helper checks if an untracked path is strictly a directory-symlink (or a directory containing
+ * only such symlinks) whose directory form (`<rel>/`) IS ignored by git.
+ */
+function isIgnoredDirSymlinkTree(wtPath, relPath, spawn, depth = 0) {
+  if (depth > 3) return false;
+  const cleanRel = String(relPath || '').replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+  if (!cleanRel) return false;
+  const abs = path.join(wtPath, cleanRel);
+  let lst;
+  try { lst = fs.lstatSync(abs); } catch { return false; }
+  if (lst.isSymbolicLink()) {
+    return runGit(wtPath, ['check-ignore', '-q', `${cleanRel}/`], spawn).ok;
+  }
+  if (lst.isDirectory()) {
+    let ents;
+    try { ents = fs.readdirSync(abs); } catch { return false; }
+    if (!ents.length || ents.length > 32) return false;
+    return ents.every((name) => isIgnoredDirSymlinkTree(wtPath, `${cleanRel}/${name}`, spawn, depth + 1));
+  }
+  return false;
+}
+
+function filterIgnoredSymlinkStatus(wtPath, porcelainStdout, spawn) {
+  const kept = [];
+  for (const rawLine of String(porcelainStdout || '').split(/\r?\n/)) {
+    const line = rawLine.replace(/\r$/, '');
+    if (!line.trim()) continue;
+    if (line.startsWith('?? ')) {
+      let p = line.slice(3).trim();
+      if ((p.startsWith('"') && p.endsWith('"')) || (p.startsWith("'") && p.endsWith("'"))) p = p.slice(1, -1);
+      if (p && isIgnoredDirSymlinkTree(wtPath, p, spawn, 0)) continue;
+    }
+    kept.push(line);
+  }
+  return kept.join('\n');
+}
+
+/**
  * Inspects and optionally removes merged clean git worktrees, protecting active junction targets.
  * @param {string} projectRoot
  * @param {{
@@ -282,16 +322,17 @@ function gcWorktrees(projectRoot, options = {}) {
       });
       continue;
     }
-    // Check dirty working tree
+    // Check dirty working tree (ignoring POSIX symlinks whose `<path>/` form is gitignored)
     const stRes = runGit(wt.path, ['status', '--porcelain'], spawn);
     if (!stRes.ok) {
       skipped.push({ path: wt.path, branch: wt.branch, reason: 'status_failed', nested_agent: nestedAgent });
       continue;
     }
-    const dirtyOut = stRes.stdout.trim();
+    const filteredStatus = filterIgnoredSymlinkStatus(wt.path, stRes.stdout, spawn);
+    const dirtyOut = filteredStatus.trim();
     let agentSettingsOnlyDirty = false;
     if (dirtyOut) {
-      const canIgnoreSettings = ignoreAgentSettings && (!nestedAgent || includeNested) && isOnlyAgentSettingsDirty(stRes.stdout);
+      const canIgnoreSettings = ignoreAgentSettings && (!nestedAgent || includeNested) && isOnlyAgentSettingsDirty(filteredStatus);
       if (canIgnoreSettings) {
         agentSettingsOnlyDirty = true;
       } else {

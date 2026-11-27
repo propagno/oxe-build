@@ -221,8 +221,13 @@ describe('A12 — OXB-222-12: Agnostic read-only oxe-cc onboard (multi-CI, multi
     assert.equal(payload.ok, true);
     assert.equal(payload.read_only, true);
     assert.ok(payload.ci.providers.includes('github-actions'));
-    assert.equal(payload.alm.provider, 'jira');
-    assert.equal(payload.oxe.profile, 'lean');
+    // .oxe/config.json is gitignored on clean CI checkouts; match actual local config when present, agnostic defaults otherwise
+    let localCfg = null;
+    try { localCfg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, '.oxe', 'config.json'), 'utf8')); } catch { localCfg = null; }
+    const expectedAlm = (localCfg && localCfg.alm && localCfg.alm.provider) ? String(localCfg.alm.provider).toLowerCase() : 'none';
+    const expectedProfile = (localCfg && localCfg.profile) ? String(localCfg.profile) : 'balanced';
+    assert.equal(payload.alm.provider, expectedAlm);
+    assert.equal(payload.oxe.profile, expectedProfile);
     assert.ok(typeof payload.prompt_markdown === 'string' && payload.prompt_markdown.length > 100);
   });
 });
