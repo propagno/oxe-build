@@ -7,7 +7,7 @@ status: approved
 
 ## Objetivo
 
-Entregar a versão `1.22.2` do `oxe-build` em 4 fases (`F1`, `F2`, `F3`, `F4`), incorporando todas as melhorias aprovadas do uso real no OXESpace `v1.6.3`, as correções catalogadas no bench controlado `v1.22.0 → v1.22.1` e os gates mecânicos de qualidade de specs e cards no upstream, preservando o núcleo 100% agnóstico (ADR `D-5`), zero novas dependências externas e 100% de compatibilidade do SDK.
+Entregar a versão `1.22.2` do `oxe-build` em 6 fases (`F1`..`F6`), incorporando todas as melhorias aprovadas do uso real no OXESpace `v1.6.3`, as correções catalogadas no bench controlado `v1.22.0 → v1.22.1`, os gates mecânicos de qualidade de specs e cards no upstream, o onboarding agnóstico multi-CI/multi-ALM e a higiene operacional segura de worktrees, preservando o núcleo 100% agnóstico (ADR `D-5`), zero novas dependências externas e 100% de compatibilidade do SDK.
 
 ## Requisitos
 
@@ -25,6 +25,7 @@ Entregar a versão `1.22.2` do `oxe-build` em 4 fases (`F1`, `F2`, `F3`, `F4`), 
 | R10 | ADR `D-7` preservando `D-1..D-6`, versão `1.22.2` sincronizada nas 5 fontes e `CHANGELOG.md` atualizado (`OXB-222-10`) | v1 | A10 |
 | R11 | Gates mecânicos de qualidade no upstream: validação de paths/ADRs/símbolos e coesão anti-"combo" em `alm refine lint`, e validação de profundidade (Bordas/Proibições) + paths reais em `spec check` (`OXB-222-11`) | v1 | A11 |
 | R12 | Comando agnóstico `oxe-cc onboard [--json] [--write]` para onboarding read-only multi-CI, multi-ALM e multi-stack com análise de lacunas de gates (`OXB-222-12`) | v1 | A12 |
+| R13 | Higiene operacional segura de worktrees: proteção de destinos de junctions NTFS em `gc-worktrees`, detecção/limpeza opcional de worktrees aninhados de agentes (`.claude/worktrees`), diagnóstico em `doctor --project` + `onboard` e hook configurável `worktree.auto_gc` no `runtimeProgramClose` (`OXB-222-13`) | v1 | A13 |
 
 ## Critérios de aceite
 
@@ -42,6 +43,7 @@ Entregar a versão `1.22.2` do `oxe-build` em 4 fases (`F1`, `F2`, `F3`, `F4`), 
 | A10 | ADR `D-7` existe em `docs/adr/` preservando `D-1..D-6`, versão `1.22.2` está sincronizada nas 5 fontes + `CHANGELOG.md` e `inspectReleaseReadiness` reporta `manifest.versions.rootPackage.version === "1.22.2"` com zero blockers de divergência de versão (`OXB-222-10`) | P2 | `node --test tests/acceptance/oxe-1222-a10-release-1222.test.cjs` |
 | A11 | `lintSpec` (quando recebe `projectRoot`) reprova paths inexistentes citados em `Referências`/`Arquitetura e fluxo`, alerta símbolos citados como existentes ausentes no arquivo e alerta cards `story`/`task` "combo" pouco coesos; `checkSpec` alerta SPEC sem seção de Bordas/Proibições, critérios sobrecarregados e paths de documentação/workflow inexistentes no disco (`OXB-222-11`) | P1 | `node --test tests/acceptance/oxe-1222-a11-spec-card-quality.test.cjs` |
 | A12 | Comando `onboard` (`--json` / `--write`) gera dossiê 100% read-only e agnóstico detectando CI (GitHub/GitLab/Azure/Bitbucket/CircleCI/Jenkins/none), ALM (Jira/Azure DevOps/none), stack, `leaked_env` e lacunas vs `phase_gates`, sem vazar segredos (`OXB-222-12`) | P1 | `node --test tests/acceptance/oxe-1222-a12-agnostic-onboard.test.cjs` |
+| A13 | `gcWorktrees` protege destinos de junctions usados por worktrees mantidas (`junction_target_in_use`), desfaz junctions rasas antes de remover e suporta worktrees aninhados (`--include-nested`/`--ignore-agent-settings`); `doctor --project` e `onboard` reportam `worktrees` e avisam excesso; `runtimeProgramClose` aplica `worktree.auto_gc` (`warn`/`prune`/`apply`/`false`) (`OXB-222-13`) | P1 | `node --test tests/acceptance/oxe-1222-a13-worktree-hygiene.test.cjs` |
 
 ## Contratos observáveis (I/O e casos de erro)
 
@@ -76,6 +78,15 @@ Entregar a versão `1.22.2` do `oxe-build` em 4 fases (`F1`, `F2`, `F3`, `F4`), 
    - Modo `--write`: grava `.oxe/ONBOARDING.md` (opt-in explícito).
    - Detecta automaticamente provedor(es) de CI (`github-actions`, `gitlab-ci`, `azure-pipelines`, `bitbucket-pipelines`, `circleci`, `jenkins`, ou `none`), provedor de ALM (`jira`, `azure-devops`, `none`, ou provedor customizado declarado), stack(s) (`node`, `python`, `go`, `rust`, `java`, `dotnet`, `legacy`), políticas de `delivery`/`origin`/`sync.version_pins` e compara checks do CI contra `phase_gates` / `preflight.triggers` locais.
    - Emite `oxeOnboardSchema: 1` com `ok`, `read_only`, `project`, `oxe`, `environment`, `ci`, `alm`, `delivery`, `rules`, `gaps` e `prompt_markdown`.
+8. **Higiene operacional segura de worktrees (`A13`):**
+   - `gcWorktrees(projectRoot, options)` em `bin/lib/oxe-worktree-gc.cjs`:
+     - Antes de aprovar candidatos, varre junctions/symlinks (profundidade `<= 3`) de todas as worktrees **mantidas** (principal, corrente, `locked`, `dirty`, `not_merged`). Qualquer worktree candidata cujo diretório (ou subdiretório, ex.: `node_modules`) seja alvo de junction ativa é movida para `skipped` com `{ reason: "junction_target_in_use", dependents: [...] }` (fecho transitivo).
+     - Ao remover (`--apply`), desfaz **todas** as junctions/symlinks rasas (`<= 3`) dentro da worktree antes de `git worktree remove`/deleção, preservando 100% os arquivos do destino.
+     - Com `--include-nested` (`includeNested: true`), inclui worktrees aninhados de agentes (ex.: `.claude/worktrees/*`) e com `--ignore-agent-settings` (`ignoreAgentSettings: true`), aceita como elegíveis worktrees já mergeados cuja única modificação pendente seja `.claude/settings.local.json`.
+     - Cada candidato reporta `has_real_node_modules: boolean` e `nested_agent: boolean`.
+   - `summarizeWorktreeHygiene(projectRoot, options)` (100% read-only, não-lançador fora de git) retorna `{ ok, git_repo, base, total, secondary, clean_merged, prunable, dirty, not_merged, protected_junction_targets, nested_agent, with_real_node_modules, warn_above, needs_gc, protected_details }`.
+   - `checkProjectEnvironment` (`doctor --project`) anexa `worktrees` ao JSON e adiciona aviso não-bloqueante em `warnings` quando `needs_gc === true` (respeitando `worktree.warn_above`, padrão `5`, e `worktree.hygiene: false` para silenciar). `buildOnboardingPack` (`onboard`) espelha `environment.worktrees` e inclui gap acionável quando `needs_gc === true`.
+   - `runtimeProgramClose` respeita `worktree.auto_gc` (`"warn"` padrão = apenas resumo read-only em `worktree_hygiene`; `"prune"` = executa `git worktree prune`; `"apply"` = executa `gcWorktrees(..., { mergedOnly: true, apply: true })` respeitando proteção de junctions; `false` = desativado).
 
 ## Bordas e proibições
 
