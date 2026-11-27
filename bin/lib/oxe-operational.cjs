@@ -14321,6 +14321,19 @@ function runtimeCiParity(projectRoot, options = {}) {
   return require('./oxe-ci-parity.cjs').runCiParityCheck(projectRoot, options);
 }
 
+function runtimeMcpServer(projectRoot, options = {}) {
+  const mcp = require('./oxe-mcp-server.cjs');
+  if (options && options.start === true) {
+    return mcp.startStdioServer({ ...options, projectRoot });
+  }
+  return {
+    protocolVersion: mcp.PROTOCOL_VERSION,
+    tools: mcp.TOOLS,
+    handleJsonRpcMessage: (msg, ctx = {}) => mcp.handleJsonRpcMessage(msg, { projectRoot, ...ctx }),
+    startStdioServer: (opts = {}) => mcp.startStdioServer({ projectRoot, ...opts }),
+  };
+}
+
 module.exports = {
   relatedTestsCommand,
   relatedRedsOfTask,
@@ -14537,5 +14550,6 @@ module.exports = {
   runtimeAgentsCoord,
   runtimeReevaluate,
   runtimeCiParity,
+  runtimeMcpServer,
   resolveEffectiveSession,
 };

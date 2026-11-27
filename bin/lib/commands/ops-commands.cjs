@@ -745,6 +745,29 @@ function createOpsCommandRegistry(deps = {}) {
         }
       },
     },
+    {
+      name: 'mcp',
+      async handler(argv) {
+        if (argv.includes('--help') || argv.includes('-h')) {
+          console.log(`\n  oxe-cc mcp [--dir <pasta>] [--session <sessão>]
+  Inicia o servidor MCP (Model Context Protocol) nativo do OXE em JSON-RPC 2.0 sobre stdio
+  (zero dependências externas), expondo ferramentas tipadas como oxe_status, oxe_onboard,
+  oxe_agents_list, oxe_agents_collisions, oxe_reevaluate, oxe_plan_lint e oxe_scorecard.\n`);
+          return;
+        }
+        const o = { dir: process.cwd(), session: null };
+        for (let i = 0; i < argv.length; i += 1) {
+          const a = argv[i];
+          if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+          else if (a === '--session' && argv[i + 1]) o.session = String(argv[++i]);
+          else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+        }
+        await require('../oxe-mcp-server.cjs').startStdioServer({
+          projectRoot: o.dir,
+          activeSession: o.session,
+        });
+      },
+    },
   ]);
 }
 
