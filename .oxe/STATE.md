@@ -11,7 +11,7 @@
 
 ## Programa
 
-✓ F1 Hardening de Release/CI, Doctor CI-Parity & Fim do Flake de PID (closed) · ✓ F2 Fechamento dos Loops Automáticos da 1.22.2 (closed) · ✓ F3 Ecossistema Aberto — Servidor MCP Nativo & ALM GitHub/GitLab Issues (closed) · ▶ F4 Dashboard v2 Multi-Agente, Strangler Fig Fatia 3 & Corte `1.23.0` (verifying)
+✓ F1 Hardening de Release/CI, Doctor CI-Parity & Fim do Flake de PID (closed) · ✓ F2 Fechamento dos Loops Automáticos da 1.22.2 (closed) · ✓ F3 Ecossistema Aberto — Servidor MCP Nativo & ALM GitHub/GitLab Issues (closed) · ✓ F4 Dashboard v2 Multi-Agente, Strangler Fig Fatia 3 & Corte `1.23.0` (closed)
 
 ## Run
 
