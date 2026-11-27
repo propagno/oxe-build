@@ -14,7 +14,14 @@ const { spawnSync } = require('child_process');
 
 const envSanitize = require('./oxe-env-sanitize.cjs');
 
-const DEFAULT_MIGRATION_DIRS = ['migrations', 'db/migrations', 'src/db/migrations', 'src/main/db/migrations', 'electron/db/migrations'];
+const DEFAULT_MIGRATION_DIRS = [
+  'migrations',
+  'db/migrations',
+  'src/db/migrations',
+  'src/main/db/migrations',
+  'electron/db/migrations',
+  'electron/main/db/migrations',
+];
 const MIGRATION_NUM_RE = /^(\d+)([_-].+)$/;
 
 function readJsonQuiet(file) {
@@ -168,7 +175,72 @@ function planRatchetSync(root, cfg) {
 }
 
 /**
- * OXB-G06: Detects and optionally applies deterministic auto-bumps for sequential migrations & ratchets.
+ * OXB-222-03: Plans atomic updates to declared `sync.version_pins` (`[{ file, pattern, label? }]`)
+ * whenever colliding migrations bump the maximum schema version.
+ */
+function planVersionPinSync(root, cfg, migrationBumps = []) {
+  const syncCfg = cfg && cfg.sync && typeof cfg.sync === 'object' ? cfg.sync : {};
+  const pins = Array.isArray(syncCfg.version_pins) ? syncCfg.version_pins : [];
+  if (!pins.length || !Array.isArray(migrationBumps) || !migrationBumps.length) return [];
+  const targetVersion = Math.max(...migrationBumps.map((b) => Number(b && b.new_number) || 0));
+  if (!Number.isFinite(targetVersion) || targetVersion <= 0) return [];
+
+  const updates = [];
+  for (const pin of pins) {
+    if (!pin || typeof pin !== 'object' || typeof pin.file !== 'string' || typeof pin.pattern !== 'string') continue;
+    const rel = pin.file.replace(/\\/g, '/').replace(/^\.\//, '').trim();
+    if (!rel) continue;
+    const abs = path.join(root, rel);
+    if (!fs.existsSync(abs)) continue;
+    let text = '';
+    try { text = fs.readFileSync(abs, 'utf8'); } catch { continue; }
+    const rawPattern = pin.pattern.includes('{version}')
+      ? pin.pattern.replace(/\{version\}/g, '(\\d+)')
+      : pin.pattern;
+    let re;
+    try { re = new RegExp(rawPattern, 'g'); } catch { continue; }
+    for (const m of text.matchAll(re)) {
+      if (m.index == null) continue;
+      let prefix = '';
+      let numStr = '';
+      let suffix = '';
+      if (m.length >= 3 && /^\d+$/.test(String(m[2] || ''))) {
+        prefix = String(m[1] || '');
+        numStr = String(m[2]);
+        const endPrefix = m[0].indexOf(prefix) + prefix.length;
+        const endNum = m[0].indexOf(numStr, endPrefix) + numStr.length;
+        suffix = m[0].slice(endNum);
+      } else if (m.length >= 2 && /^\d+$/.test(String(m[1] || ''))) {
+        numStr = String(m[1]);
+        const pos = m[0].indexOf(numStr);
+        prefix = m[0].slice(0, pos);
+        suffix = m[0].slice(pos + numStr.length);
+      } else {
+        const d = /\d+/.exec(m[0]);
+        if (!d) continue;
+        numStr = d[0];
+        prefix = m[0].slice(0, d.index);
+        suffix = m[0].slice(d.index + numStr.length);
+      }
+      const current = Number(numStr);
+      if (!Number.isFinite(current) || current === targetVersion) continue;
+      updates.push({
+        file: rel,
+        label: typeof pin.label === 'string' && pin.label.trim() ? pin.label.trim() : null,
+        from: current,
+        to: targetVersion,
+        index: m.index,
+        length: m[0].length,
+        replacement: `${prefix}${targetVersion}${suffix}`,
+      });
+    }
+  }
+  return updates;
+}
+
+/**
+ * OXB-G06 + OXB-222-03: Detects and optionally applies deterministic auto-bumps for sequential migrations,
+ * declared `sync.version_pins`, and numeric ratchets.
  */
 function syncSequentialResources(projectRoot, options = {}) {
   const rootAbs = path.resolve(projectRoot);
@@ -182,9 +254,11 @@ function syncSequentialResources(projectRoot, options = {}) {
   for (const d of migDirs) {
     migrationBumps.push(...planMigrationBumps(rootAbs, base, d, spawn));
   }
+  const versionPinUpdates = planVersionPinSync(rootAbs, cfg, migrationBumps);
   const ratchetUpdates = planRatchetSync(rootAbs, cfg);
 
   const appliedMigrations = [];
+  const appliedVersionPins = [];
   const appliedRatchets = [];
 
   if (apply) {
@@ -204,6 +278,25 @@ function syncSequentialResources(projectRoot, options = {}) {
       const mv = runGit(rootAbs, ['mv', b.from, b.to], spawn);
       if (!mv.ok) fs.renameSync(fromAbs, toAbs);
       appliedMigrations.push(b);
+    }
+    // Apply version_pins grouped per file in reverse offset order so multiple matches in one file stay exact.
+    const freshPins = planVersionPinSync(rootAbs, cfg, appliedMigrations.length ? appliedMigrations : migrationBumps);
+    const pinsByFile = new Map();
+    for (const u of freshPins) {
+      if (!pinsByFile.has(u.file)) pinsByFile.set(u.file, []);
+      pinsByFile.get(u.file).push(u);
+    }
+    for (const [rel, list] of pinsByFile.entries()) {
+      const abs = path.join(rootAbs, rel);
+      let text = fs.readFileSync(abs, 'utf8');
+      const ordered = [...list].sort((a, b) => b.index - a.index);
+      for (const u of ordered) {
+        text = text.slice(0, u.index) + u.replacement + text.slice(u.index + u.length);
+      }
+      fs.writeFileSync(abs, text, 'utf8');
+      for (const u of list) {
+        appliedVersionPins.push({ file: u.file, label: u.label, from: u.from, to: u.to });
+      }
     }
     // Re-plan ratchets right before applying (in case migration rename changed anything)
     const freshRatchets = planRatchetSync(rootAbs, cfg);
@@ -236,15 +329,19 @@ function syncSequentialResources(projectRoot, options = {}) {
     dry_run: !apply,
     base,
     migration_bumps: migrationBumps,
+    version_pin_updates: versionPinUpdates.map(({ file, label, from, to }) => ({ file, label, from, to })),
     ratchet_updates: ratchetUpdates.map(({ file, line, from, to }) => ({ file, line, from, to })),
     applied_migrations: appliedMigrations,
+    applied_version_pins: appliedVersionPins,
     applied_ratchets: appliedRatchets,
     verify,
   };
 }
 
 module.exports = {
+  DEFAULT_MIGRATION_DIRS,
   planMigrationBumps,
+  planVersionPinSync,
   planRatchetSync,
   syncSequentialResources,
 };

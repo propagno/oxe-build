@@ -7590,6 +7590,44 @@ function finalizePromotedWorktree({
       result.enforced_scene_gaps = enforcedCheck.gaps;
       result.warnings.push(...enforcedCheck.warnings);
     }
+    // OXB-222-03: reconcile sequential migrations & sync.version_pins against base inside the promoted worktree.
+    const syncEnabled = !(pcfg.sync && pcfg.sync.on_promote === false) && !(options && options.sync === false);
+    if (syncEnabled && !result.error) {
+      try {
+        const syncLib = require('./oxe-sync.cjs');
+        const syncPlan = syncLib.syncSequentialResources(work, { base: buildSha, config: pcfg, apply: false });
+        if ((syncPlan.migration_bumps && syncPlan.migration_bumps.length) || (syncPlan.version_pin_updates && syncPlan.version_pin_updates.length)) {
+          const syncApplied = syncLib.syncSequentialResources(work, { base: buildSha, config: pcfg, apply: true });
+          const existingToStage = [...new Set([
+            ...(syncApplied.applied_migrations || []).map((m) => m.to),
+            ...(syncApplied.applied_version_pins || []).map((p) => p.file),
+          ])].filter((f) => f && fs.existsSync(path.join(work, f)));
+          const deletedToStage = [...new Set((syncApplied.applied_migrations || []).map((m) => m.from))]
+            .filter((f) => f && !fs.existsSync(path.join(work, f)));
+          if (deletedToStage.length) gitRun(work, ['rm', '-q', '--ignore-unmatch', '--', ...deletedToStage]);
+          if (existingToStage.length) gitRun(work, ['add', '--', ...existingToStage]);
+          if ((existingToStage.length || deletedToStage.length) && !gitRun(work, ['diff', '--cached', '--quiet']).ok) {
+            const summaryLines = [
+              ...(syncApplied.applied_migrations || []).map((m) => `${m.from} -> ${m.to}`),
+              ...(syncApplied.applied_version_pins || []).map((p) => `${p.file}${p.label ? ` (${p.label})` : ''}: ${p.from} -> ${p.to}`),
+            ];
+            const cm = gitRun(work, [
+              'commit', '-q',
+              '-m', `chore(sync): bump sequential resources of ${taskId} on ${base}`,
+              '-m', summaryLines.join('\n'),
+              '-m', originTrailers,
+            ]);
+            if (!cm.ok) {
+              result.error = `commit de sync sequencial falhou: ${(cm.stderr || cm.stdout || '').trim().split(/\r?\n/).pop()}`;
+            }
+          }
+          result.sync = syncApplied;
+          result.warnings.push(`sync sequencial aplicado contra ${base}: ${(syncApplied.applied_migrations || []).length} migration(s), ${(syncApplied.applied_version_pins || []).length} version_pin(s)`);
+        }
+      } catch (err) {
+        result.warnings.push(`sync sequencial no promote falhou: ${err && err.message ? err.message : String(err)}`);
+      }
+    }
   }
   if (!result.conflict && !result.error) {
     const icLib = require('./oxe-integration-checks.cjs');
