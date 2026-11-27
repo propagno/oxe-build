@@ -14262,6 +14262,10 @@ function runtimeReevaluate(projectRoot, options = {}) {
   return require('./oxe-reevaluate.cjs').reevaluateAgainstBase(projectRoot, options);
 }
 
+function runtimeCiParity(projectRoot, options = {}) {
+  return require('./oxe-ci-parity.cjs').runCiParityCheck(projectRoot, options);
+}
+
 module.exports = {
   relatedTestsCommand,
   relatedRedsOfTask,
@@ -14477,5 +14481,6 @@ module.exports = {
   runtimeWorktreeHygiene,
   runtimeAgentsCoord,
   runtimeReevaluate,
+  runtimeCiParity,
   resolveEffectiveSession,
 };

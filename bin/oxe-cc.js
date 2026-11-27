@@ -421,6 +421,7 @@ function parseInstallArgs(argv) {
     conflictFlags: '',
     ignoreInstallConfig: false,
     releaseDoctor: false,
+    ciParity: false,
     writeManifest: false,
     /** Saída JSON em `status` (CI / agentes). */
     jsonOutput: false,
@@ -483,6 +484,7 @@ function parseInstallArgs(argv) {
     else if (a === '--all-worktrees') out.allWorktrees = true;
     else if (a === '--release') out.releaseDoctor = true;
     else if (a === '--project') out.projectDoctor = true;
+    else if (a === '--ci-parity') out.ciParity = true;
     else if (a === '--migrate-config') out.migrateConfig = true;
     else if (a === '--apply') out.applyMigration = true;
     else if (a === '--write-manifest') out.writeManifest = true;
@@ -2223,6 +2225,25 @@ function runDoctor(target, options = {}) {
         console.log(env.ok ? `  ${green}✓ ambiente compatível${reset}` : `  ${red}✗ ambiente incompatível — o runtime execute fica bloqueado (project_env)${reset}`);
       }
       process.exitCode = env.ok ? 0 : 1;
+      return;
+    }
+    if (options.ciParity) {
+      const parity = require('./lib/oxe-ci-parity.cjs').runCiParityCheck(target);
+      if (options.json) {
+        console.log(JSON.stringify(parity, null, 2));
+      } else {
+        printSection('OXE ▸ doctor --ci-parity');
+        const c = useAnsiColors();
+        const ck = parity.checks;
+        const badge = (ok) => (ok ? `${c ? green : ''}✓${c ? reset : ''}` : `${c ? red : ''}✗${c ? reset : ''}`);
+        console.log(`  ${badge(ck.clean_checkout_doctor.ok)} clean-checkout doctor (${ck.clean_checkout_doctor.healthStatus || 'n/a'})`);
+        console.log(`  ${badge(ck.engines_parity.ok)} engines.node parity (${ck.engines_parity.root_engines_node || 'n/a'})`);
+        console.log(`  ${badge(ck.posix_symlink_gitignore.ok)} POSIX symlink / .gitignore hygiene`);
+        for (const p of parity.problems) console.log(`  ${red}✗${reset} ${p}`);
+        for (const w of parity.warnings) console.log(`  ${yellow}!${reset} ${w}`);
+        console.log(parity.ok ? `  ${green}✓ paridade CI local OK${reset}` : `  ${red}✗ divergências encontradas — corrija antes do push${reset}`);
+      }
+      process.exitCode = parity.ok ? 0 : 1;
       return;
     }
     if (options.release) {

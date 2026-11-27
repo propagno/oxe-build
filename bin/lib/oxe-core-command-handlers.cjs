@@ -65,7 +65,7 @@ function createCoreCommandRegistry(deps) {
       if (!opts.jsonOutput) printBanner();
       requireDirectory(opts.dir, false);
       return runDoctor(opts.dir, {
-        release: opts.releaseDoctor, project: opts.projectDoctor, json: opts.jsonOutput, writeManifest: opts.writeManifest,
+        release: opts.releaseDoctor, project: opts.projectDoctor, ciParity: opts.ciParity, json: opts.jsonOutput, writeManifest: opts.writeManifest,
         migrateConfig: opts.migrateConfig, applyMigration: opts.applyMigration,
       });
     } },

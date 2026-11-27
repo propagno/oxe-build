@@ -961,7 +961,6 @@ function detectWorkspaceMode(target) {
   const commandsTreePresent = fs.existsSync(path.join(target, 'commands', 'oxe'));
   const packageRepo =
     packageName === 'oxe-cc'
-    && fs.existsSync(path.join(target, 'bin', 'oxe-cc.js'))
     && fs.existsSync(path.join(target, 'packages', 'runtime', 'package.json'))
     && canonicalTreePresent;
   return {
@@ -973,14 +972,55 @@ function detectWorkspaceMode(target) {
 }
 
 /**
+ * Checks whether `.oxe/<activeSession>` (or `.oxe/sessions`) is ignored by `.gitignore`.
+ * Used so a clean CI checkout of `product_package` does not report `broken` when
+ * `.oxe/STATE.md` references a local gitignored development session.
+ *
+ * @param {string} target
+ * @param {string | null} activeSession
+ * @returns {boolean}
+ */
+function isSessionDirGitignored(target, activeSession) {
+  if (!activeSession) return false;
+  const giPath = path.join(target, '.gitignore');
+  if (!fs.existsSync(giPath)) return false;
+  try {
+    const lines = fs.readFileSync(giPath, 'utf8')
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith('#') && !l.startsWith('!'));
+    const normSession = String(activeSession).replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    const relPath = `.oxe/${normSession}`;
+    return lines.some((raw) => {
+      const p = raw.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+      return (
+        p === '.oxe'
+        || p === '.oxe/*'
+        || p === '.oxe/**'
+        || p === '.oxe/sessions'
+        || p === '.oxe/sessions/*'
+        || p === '.oxe/sessions/**'
+        || p === relPath
+        || p === `${relPath}/*`
+        || p === `${relPath}/**`
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
+/**
  * @param {'product_package' | 'oxe_project'} workspaceMode
  * @param {string | null} phase
  * @param {string | null} activeSession
  * @param {Record<string, unknown> | null} activeRun
+ * @param {{ gitignoredLocalSession?: boolean }} [options]
  * @returns {boolean}
  */
-function shouldSuppressExecutionWorkspaceGates(workspaceMode, phase, activeSession, activeRun) {
+function shouldSuppressExecutionWorkspaceGates(workspaceMode, phase, activeSession, activeRun, options = {}) {
   if (workspaceMode !== 'product_package') return false;
+  if (options && options.gitignoredLocalSession) return true;
   if (activeSession) return false;
   if (activeRun && typeof activeRun === 'object') return false;
   return !phase || phase === 'initial';
@@ -2928,14 +2968,19 @@ function buildHealthReport(target) {
   const p = resolvedReadableOxePaths(target, activeSession);
   const phase = parseStatePhase(stateText);
   const workspaceInfo = detectWorkspaceMode(target);
+  const gitignoredLocalSessionInPackage =
+    workspaceInfo.workspaceMode === 'product_package'
+    && Boolean(activeSession)
+    && !fs.existsSync(scopedOxePaths(target, activeSession).sessionRoot)
+    && isSessionDirGitignored(target, activeSession);
   const scanDate = parseLastScanDate(stateText);
   const stale = isStaleScan(scanDate, Number(config.scan_max_age_days) || 0);
   const compactDate = parseLastCompactDate(stateText);
   const staleCompact = isStaleScan(compactDate, Number(config.compact_max_age_days) || 0);
   const retroDate = parseLastRetroDate(stateText);
   const staleLessons = isStaleLessons(retroDate, Number(config.lessons_max_age_days) || 0);
-  const phaseWarn = phase ? phaseCoherenceWarnings(phase, p) : [];
-  const runtimeWarn = runtimeWarnings(stateText, p);
+  const phaseWarn = (phase && !gitignoredLocalSessionInPackage) ? phaseCoherenceWarnings(phase, p) : [];
+  const runtimeWarn = gitignoredLocalSessionInPackage ? [] : runtimeWarnings(stateText, p);
   const sumWarn = verifyGapsWithoutSummaryWarning(p.verify, p.summary);
   const specReq = Array.isArray(config.spec_required_sections) ? config.spec_required_sections : [];
   const specWarn = specSectionWarnings(p.spec, specReq.map(String));
@@ -2962,7 +3007,8 @@ function buildHealthReport(target) {
     workspaceInfo.workspaceMode,
     phase,
     activeSession,
-    activeRun
+    activeRun,
+    { gitignoredLocalSession: gitignoredLocalSessionInPackage }
   );
   let unrunCiWarn = [];
   try {
@@ -2980,7 +3026,7 @@ function buildHealthReport(target) {
     ...unrunCiWarn,
   ];
   const planWarn = suppressExecutionWorkspaceGates ? [] : executionPlanWarn;
-  const sessionWarn = sessionWarnings(target, activeSession);
+  const sessionWarn = gitignoredLocalSessionInPackage ? [] : sessionWarnings(target, activeSession);
   const installWarn = installationCompletenessWarnings(target);
   const copilot = copilotIntegrationReport(target);
   const copilotWarn = copilot.warnings;
