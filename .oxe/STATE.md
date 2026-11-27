@@ -11,7 +11,7 @@
 
 ## Programa
 
-✓ F1 Paridade Pré-Push, JSON Compacto, Sync & Escopo Pós-CI (E1) (closed) · ✓ F2 Grill Unificado, Confiabilidade Windows/CLI & Polimento (E2) (closed) · ✓ F3 Telemetria CI, Discovery & Corte 1.22.2 (E3) (closed) · ✓ F4 Gates Mecanicos de Qualidade de Specs e Cards (Meta 9+) (closed) · ✓ F5 Onboarding Agnostico Multi-CI e Multi-ALM (oxe-cc onboard) (closed) · ✓ F6 Higiene Operacional Segura de Worktrees (OXB-222-13) (closed) · ✓ F7 Velocidade, Sessao Unica, Seguranca Git & Modularizacao D-6 Fatia 2 (closed) · ✓ F8 Coordenacao Multi-Agente Local & Reavaliacao Continua (closed) · ▶ F9 Agnosticismo Fim-a-Fim (CiAdapter), Onboard Propose & Roteamento Empirico (verifying)
+✓ F1 Paridade Pré-Push, JSON Compacto, Sync & Escopo Pós-CI (E1) (closed) · ✓ F2 Grill Unificado, Confiabilidade Windows/CLI & Polimento (E2) (closed) · ✓ F3 Telemetria CI, Discovery & Corte 1.22.2 (E3) (closed) · ✓ F4 Gates Mecanicos de Qualidade de Specs e Cards (Meta 9+) (closed) · ✓ F5 Onboarding Agnostico Multi-CI e Multi-ALM (oxe-cc onboard) (closed) · ✓ F6 Higiene Operacional Segura de Worktrees (OXB-222-13) (closed) · ✓ F7 Velocidade, Sessao Unica, Seguranca Git & Modularizacao D-6 Fatia 2 (closed) · ✓ F8 Coordenacao Multi-Agente Local & Reavaliacao Continua (closed) · ✓ F9 Agnosticismo Fim-a-Fim (CiAdapter), Onboard Propose & Roteamento Empirico (closed)
 
 ## Run
 
