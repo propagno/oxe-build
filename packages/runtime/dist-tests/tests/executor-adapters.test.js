@@ -207,8 +207,9 @@ const provider = { baseUrl: '', apiKey: '', model: '', maxTurns: 4 };
         const ids = (0, registry_1.detectExecutorAdapters)({
             claude: { command: 'oxe-no-such-claude-binary' },
             antigravity: { command: 'oxe-no-such-agy-binary' },
+            grok: { command: 'oxe-no-such-grok-binary' },
         }).map((a) => `${a.id}:${a.available}`);
-        strict_1.default.deepEqual(ids, ['claude:false', 'antigravity:false', 'http:true']);
+        strict_1.default.deepEqual(ids, ['claude:false', 'antigravity:false', 'grok:false', 'http:true']);
     });
 });
 (0, node_test_1.describe)('OXB-148: claude -p failure reasons come from stdout, classified', () => {
