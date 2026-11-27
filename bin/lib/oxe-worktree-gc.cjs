@@ -218,11 +218,43 @@ function isOnlyAgentSettingsDirty(porcelainStdout) {
   return dirtyPaths.every((p) => AGENT_SETTINGS_IGNORED_FILES.has(p));
 }
 
+function gitignorePatternToRegex(pattern, anchored) {
+  const esc = String(pattern || '')
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*\*\//g, '\u0000')
+    .replace(/\*/g, '[^/]*')
+    .replace(/\?/g, '[^/]')
+    .replace(/\u0000/g, '(?:.+/)?');
+  return new RegExp(anchored ? `^${esc}$` : `(?:^|/)${esc}$`);
+}
+
+function matchesGitignoreAsDirectory(wtPath, cleanRel) {
+  const giFile = path.join(wtPath, '.gitignore');
+  let text = '';
+  try { text = fs.readFileSync(giFile, 'utf8'); } catch { return false; }
+  const rel = String(cleanRel || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  if (!rel) return false;
+  let ignored = false;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const negated = line.startsWith('!');
+    let pat = negated ? line.slice(1).trim() : line;
+    if (!pat) continue;
+    pat = pat.replace(/\/+$/, '');
+    const anchored = pat.startsWith('/') || pat.includes('/');
+    pat = pat.replace(/^\/+/, '');
+    const re = gitignorePatternToRegex(pat, anchored);
+    if (re.test(rel)) ignored = !negated;
+  }
+  return ignored;
+}
+
 /**
  * On POSIX (Linux/macOS), `.gitignore` rules with a trailing slash (e.g. `node_modules/`, `e2e/out/`)
- * do not match symlinks to directories, so `git status --porcelain` reports them as untracked (`??`).
- * This helper checks if an untracked path is strictly a directory-symlink (or a directory containing
- * only such symlinks) whose directory form (`<rel>/`) IS ignored by git.
+ * do not match symlinks to directories (neither in `git status` nor in `git check-ignore`), so
+ * `git status --porcelain` reports them as untracked (`??`). This helper checks if an untracked
+ * path is strictly a symlink (or directory containing only symlinks) ignored by `.gitignore` as a directory.
  */
 function isIgnoredDirSymlinkTree(wtPath, relPath, spawn, depth = 0) {
   if (depth > 3) return false;
@@ -232,7 +264,8 @@ function isIgnoredDirSymlinkTree(wtPath, relPath, spawn, depth = 0) {
   let lst;
   try { lst = fs.lstatSync(abs); } catch { return false; }
   if (lst.isSymbolicLink()) {
-    return runGit(wtPath, ['check-ignore', '-q', `${cleanRel}/`], spawn).ok;
+    if (matchesGitignoreAsDirectory(wtPath, cleanRel)) return true;
+    return runGit(wtPath, ['check-ignore', '-q', cleanRel], spawn).ok;
   }
   if (lst.isDirectory()) {
     let ents;
