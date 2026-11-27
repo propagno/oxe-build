@@ -64,7 +64,9 @@ function useAnsiColors() {
  * decoration go to stderr, so `oxe-cc … --json | jq` and benchmarks can parse the output.
  */
 // --otel prints OTLP JSON on stdout, so it is a JSON mode too (decoration to stderr)
-const JSON_OUTPUT_MODE = process.argv.includes('--json') || process.argv.includes('--otel');
+const JSON_OUTPUT_MODE = process.argv.includes('--json')
+  || process.argv.includes('--otel')
+  || (process.argv.includes('runtime') && process.argv.includes('verify') && process.argv.includes('--summary'));
 
 /** 1.21.2 (OXB-133): `--json-errors` / OXE_JSON_ERRORS=1 — every failure is one typed envelope with a stable exit code. */
 process.argv = require('./lib/oxe-cli-errors.cjs').install(process.argv).argv;
@@ -2043,6 +2045,20 @@ function runStatus(target, opts = {}) {
         if (Array.isArray(pc.providers) && pc.providers.length > 0) {
           payload.providerCatalog = { count: pc.providers.length, ids: pc.providers.map((p) => (p && p.id) || String(p)) };
         }
+      }
+      if (payload.releaseReadiness && typeof payload.releaseReadiness === 'object') {
+        const rr = /** @type {Record<string, unknown>} */ (payload.releaseReadiness);
+        const { manifest: rawManifest, ...rest } = rr;
+        payload.releaseReadiness = {
+          ...rest,
+          ...(rawManifest && typeof rawManifest === 'object'
+            ? {
+                manifestPresent: true,
+                manifestOk: Boolean(/** @type {Record<string, unknown>} */ (rawManifest).ok),
+                manifestVersion: /** @type {Record<string, unknown>} */ (rawManifest).version || null,
+              }
+            : {}),
+        };
       }
       payload.compact = true;
     }
@@ -4354,6 +4370,8 @@ function parseRuntimeArgs(argv) {
     evidence: '',
     changeClass: '',
     summary: '',
+    summaryFlag: false,
+    full: false,
     amendTo: null,
     deferSignoff: false,
     risk: '',
@@ -4384,7 +4402,11 @@ function parseRuntimeArgs(argv) {
     else if (a === '--environment' && argv[i + 1]) out.environment = String(argv[++i]);
     else if (a === '--evidence' && argv[i + 1]) out.evidence = String(argv[++i]);
     else if (a === '--class' && argv[i + 1]) out.changeClass = String(argv[++i]);
-    else if (a === '--summary' && argv[i + 1]) out.summary = String(argv[++i]);
+    else if (a === '--full') out.full = true;
+    else if (a === '--summary') {
+      if (argv[i + 1] && !String(argv[i + 1]).startsWith('-')) out.summary = String(argv[++i]);
+      else out.summaryFlag = true;
+    }
     else if (a === '--amend-to' && argv[i + 1]) out.amendTo = Number(argv[++i]);
     else if (a === '--tasks' && argv[i + 1]) out.tasks = String(argv[++i]);
     else if (a === '--branch' && argv[i + 1]) out.branch = String(argv[++i]);
@@ -4522,6 +4544,7 @@ function parseRuntimeArgs(argv) {
     }
   }
   if (positionals[0]) out.action = positionals[0];
+  if (out.action === 'verify' && out.summaryFlag) out.jsonOutput = true;
   if (out.action === 'feedback') {
     // Só `list` é subcomando; qualquer outro posicional é o diretório do projeto.
     if (positionals[1] === 'resolve' || positionals[1] === 'withdraw') {
@@ -5834,6 +5857,81 @@ async function runRuntime(opts) {
     }
   }
 
+  /**
+   * OXB-222-02: Compact JSON projection for `runtime verify --json` / `--summary` (< 4 KB by default)
+   * so agent terminals do not truncate 2+ MB dumps while preserving the full report on disk.
+   */
+  function formatCompactVerifyJson(verified, fullReportRelPath, exitCode, rootDir) {
+    const report = (verified && verified.report) || {};
+    const checkResults = Array.isArray(report.check_results) ? report.check_results : [];
+    const manifestSummary = report.manifest && report.manifest.summary ? report.manifest.summary : null;
+    const checksSummary = manifestSummary
+      ? {
+          total: Number(manifestSummary.total || 0),
+          pass: Number(manifestSummary.pass || 0),
+          fail: Number(manifestSummary.fail || 0),
+          error: Number(manifestSummary.error || 0),
+          skip: Number(manifestSummary.skip || 0),
+        }
+      : {
+          total: checkResults.length,
+          pass: checkResults.filter((r) => r && r.status === 'pass').length,
+          fail: checkResults.filter((r) => r && r.status === 'fail').length,
+          error: checkResults.filter((r) => r && r.status === 'error').length,
+          skip: checkResults.filter((r) => r && r.status === 'skip').length,
+        };
+    const firstLine = (txt) => String(txt || '').split(/\r?\n/).map((l) => l.trim()).find(Boolean) || '';
+    const failures = checkResults
+      .filter((r) => r && (r.status === 'fail' || r.status === 'error'))
+      .slice(0, 12)
+      .map((r) => ({
+        check_id: r.check_id || null,
+        acceptance_ref: r.acceptance_ref || null,
+        status: r.status,
+        message: firstLine(r.error || r.stderr || r.stdout).slice(0, 200),
+      }));
+    const gaps = Array.isArray(report.gaps) ? report.gaps : [];
+    const tampered = checkResults.some((r) => /tamper|adulterad/i.test(String((r && (r.error || r.stderr || r.check_id)) || '')))
+      || gaps.some((g) => /tamper|adulterad/i.test(String(g || '')));
+    const reg = verified && verified.regression
+      ? {
+          total: Number(verified.regression.total || 0),
+          passed: Number(verified.regression.passed || 0),
+          failed: (verified.regression.failed || []).slice(0, 10).map((f) => f.check_id),
+        }
+      : null;
+    const gates = verified && verified.gates && verified.gates.total
+      ? {
+          total: Number(verified.gates.total || 0),
+          passed: Array.isArray(verified.gates.passed) ? verified.gates.passed.length : 0,
+          failed: (verified.gates.failed || []).slice(0, 10),
+          changes: (verified.gates.changes || []).slice(0, 10),
+        }
+      : null;
+    const verifyMdAbs = verified && verified.projected && verified.projected.paths && verified.projected.paths.verify;
+    const verifyMd = verifyMdAbs ? path.relative(rootDir, verifyMdAbs).replace(/\\/g, '/') : null;
+    return {
+      oxeRuntimeVerifySchema: 2,
+      compact: true,
+      ok: exitCode === 0,
+      exit_code: exitCode,
+      run_id: (verified && verified.run && verified.run.run_id) || null,
+      status: report.status || null,
+      summary: checksSummary,
+      checks_summary: checksSummary,
+      coverage_percent: report.evidence_coverage && typeof report.evidence_coverage.coverage_percent === 'number'
+        ? report.evidence_coverage.coverage_percent
+        : null,
+      tampered,
+      gates,
+      regression: reg,
+      gaps: gaps.slice(0, 8).map((g) => String(g).slice(0, 180)),
+      failures,
+      verify_md: verifyMd,
+      full_report_path: fullReportRelPath,
+    };
+  }
+
   if (opts.action === 'verify') {
     try {
       const verified = await oxeOperational.runRuntimeVerify(opts.dir, activeSession, {
@@ -5851,8 +5949,20 @@ async function runRuntime(opts) {
       const gatesFailed = Boolean(verified.gates && verified.gates.failed && verified.gates.failed.length);
       const reportStatus = verified.report && verified.report.status;
       process.exitCode = reportStatus === 'failed' || regFailed || gatesFailed ? 1 : reportStatus === 'passed' ? 0 : 2;
-      if (opts.jsonOutput) {
-        console.log(JSON.stringify(verified, null, 2));
+      if (opts.jsonOutput || opts.summaryFlag) {
+        const runId = (verified.run && verified.run.run_id) || 'latest';
+        const fullReportAbs = path.join(opts.dir, '.oxe', 'runs', runId, 'verify-full.json');
+        let fullReportRel = null;
+        try {
+          fs.mkdirSync(path.dirname(fullReportAbs), { recursive: true });
+          fs.writeFileSync(fullReportAbs, `${JSON.stringify(verified, null, 2)}\n`, 'utf8');
+          fullReportRel = path.relative(opts.dir, fullReportAbs).replace(/\\/g, '/');
+        } catch { /* best-effort full dump */ }
+        if (opts.full && !opts.summaryFlag) {
+          console.log(JSON.stringify(verified, null, 2));
+        } else {
+          console.log(JSON.stringify(formatCompactVerifyJson(verified, fullReportRel, process.exitCode, opts.dir), null, 2));
+        }
         return;
       }
       console.log(`  ${c ? green : ''}✓${c ? reset : ''} Runtime verify executado.`);
@@ -9926,6 +10036,7 @@ async function main() {
     let dir = process.cwd();
     let session = null;
     let json = false;
+    let full = false;
     let maxTasksPerWave = 0;
     let dryVerify = false;
     let noPreflight = false;
@@ -9952,6 +10063,7 @@ async function main() {
     for (let i = 0; i < rest.length; i += 1) {
       const a = rest[i];
       if (a === '--json') json = true;
+      else if (a === '--full') full = true;
       else if (a === '--no-file-size-notes') annotateFileSize = false;
       else if (a === '--precheck-tests') { precheckTests = true; noPrecheck = false; }
       else if (a === '--precheck-e2e') { precheckE2e = true; noPrecheck = false; }
@@ -10031,7 +10143,34 @@ async function main() {
       process.exit(1);
     }
     if (json) {
-      console.log(JSON.stringify({ oxePlanLintSchema: 1, ...result }, null, 2));
+      if (full) {
+        console.log(JSON.stringify({ oxePlanLintSchema: 1, ...result }, null, 2));
+      } else {
+        const allWarnings = Array.isArray(result.warnings) ? result.warnings : [];
+        const compactWarnings = allWarnings.slice(0, 25);
+        const { suite_impact: rawImpact, ...restLint } = result;
+        const compactPayload = {
+          oxePlanLintSchema: 1,
+          compact: true,
+          ...restLint,
+          warnings: compactWarnings,
+          ...(allWarnings.length > compactWarnings.length
+            ? { warnings_total: allWarnings.length, warnings_truncated: allWarnings.length - compactWarnings.length }
+            : {}),
+          ...(Array.isArray(rawImpact)
+            ? {
+                suite_impact: {
+                  count: rawImpact.length,
+                  tasks: rawImpact.map((s) => ({
+                    task: s && s.task ? s.task : null,
+                    suites: Array.isArray(s && s.suites) ? s.suites.length : 0,
+                  })),
+                },
+              }
+            : {}),
+        };
+        console.log(JSON.stringify(compactPayload, null, 2));
+      }
     } else {
       const c = useAnsiColors();
       console.log(`  ${c ? dim : ''}Fonte:${c ? reset : ''} ${result.source} · ${result.tasks} tarefas${result.phase ? ` · fase ${result.phase}` : ''}`);
