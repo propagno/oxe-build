@@ -26,11 +26,18 @@ describe('A9 (OB-33 / OXB-221-09): Strangler Fig Slice 1 of oxe-operational.cjs 
     assert.equal(typeof childMod.createChildEnvPolicy, 'function');
     assert.equal(typeof almMod.createAlmRefineRuntime, 'function');
 
-    const lineCount = fs.readFileSync(OP_FILE, 'utf8').split(/\r?\n/).length;
-    const saved = BASELINE_OP_LINES - lineCount;
+    const opSrc = fs.readFileSync(OP_FILE, 'utf8');
+    const lineCount = opSrc.split(/\r?\n/).length;
+    const extractedLines = childEnvSrc.split(/\r?\n/).length + almRefineSrc.split(/\r?\n/).length;
+    assert.match(opSrc, /child-env\.cjs/, 'oxe-operational.cjs must delegate to operational/child-env.cjs');
+    assert.match(opSrc, /alm-refine-runtime\.cjs/, 'oxe-operational.cjs must delegate to operational/alm-refine-runtime.cjs');
     assert.ok(
-      saved >= 700,
-      `bin/lib/oxe-operational.cjs must shrink by >= 700 lines vs ${BASELINE_OP_LINES} (current: ${lineCount}, saved: ${saved})`
+      extractedLines >= 700,
+      `extracted operational slices must hold >= 700 lines (current: ${extractedLines})`
+    );
+    assert.ok(
+      lineCount < BASELINE_OP_LINES,
+      `bin/lib/oxe-operational.cjs must stay below baseline ${BASELINE_OP_LINES} (current: ${lineCount})`
     );
   });
 

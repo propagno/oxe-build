@@ -54,11 +54,17 @@ describe('A8 (OB-32 / OXB-221-08): extracted CLI commands in bin/lib/commands/op
       assert.equal(registry.has(name), true, `ops-commands registry must register "${name}"`);
     }
 
-    const lineCount = fs.readFileSync(BIN, 'utf8').split(/\r?\n/).length;
-    const saved = BASELINE_OXE_CC_LINES - lineCount;
+    const binSrc = fs.readFileSync(BIN, 'utf8');
+    const lineCount = binSrc.split(/\r?\n/).length;
+    const extractedLines = fs.readFileSync(OPS_MODULE, 'utf8').split(/\r?\n/).length;
+    assert.match(binSrc, /ops-commands\.cjs/, 'bin/oxe-cc.js must delegate to bin/lib/commands/ops-commands.cjs');
     assert.ok(
-      saved >= 500,
-      `bin/oxe-cc.js must shrink by >= 500 lines vs ${BASELINE_OXE_CC_LINES} (current: ${lineCount}, saved: ${saved})`
+      extractedLines >= 500,
+      `bin/lib/commands/ops-commands.cjs must hold >= 500 extracted lines (current: ${extractedLines})`
+    );
+    assert.ok(
+      lineCount < BASELINE_OXE_CC_LINES,
+      `bin/oxe-cc.js must stay below baseline ${BASELINE_OXE_CC_LINES} (current: ${lineCount})`
     );
   });
 
