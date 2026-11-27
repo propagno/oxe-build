@@ -70,6 +70,8 @@ export interface CheckResult {
     evidence_refs?: string[];
     /** Bench B55: the command already ran in this suite (same cwd/timeout); this check was judged on that output. */
     reused_run?: boolean;
+    /** OXB-222-15: reused a verified passing result from the incremental fingerprint cache without re-running. */
+    cached?: boolean;
     /** Why a check was skipped (`needs_structured_check` = criterion has no executable verification). */
     skip_reason?: string | null;
     /** OXB-072: killed by the check timeout (status `error`, never `fail`). */
@@ -165,7 +167,10 @@ export declare function compile(spec: ParsedSpecLike, plan: ParsedPlanLike): Acc
  * Runs a check. A failure caused only by a test runner's per-test timeout (machine load, not the code: the same file
  * passed alone in 4 s) is run once more by itself before it counts; both outcomes are kept.
  */
-export declare function runCheck(check: AcceptanceCheck, cwd: string, timeoutMs?: number): Promise<CheckResult>;
+export declare function runCheck(check: AcceptanceCheck, cwd: string, timeoutMs?: number, opts?: {
+    allowOxeRefs?: boolean;
+    useAsync?: boolean;
+}): Promise<CheckResult>;
 export declare function runSuite(suite: AcceptanceCheckSuite, cwd: string, timeoutMs?: number): Promise<CheckResult[]>;
 export declare function executeSuite(suite: AcceptanceCheckSuite, cwd: string, options: {
     timeoutMs?: number;
@@ -174,6 +179,9 @@ export declare function executeSuite(suite: AcceptanceCheckSuite, cwd: string, o
     attemptNumber?: number;
     evidenceStore?: EvidenceStore;
     pluginRegistry?: PluginRegistry;
+    concurrency?: number;
+    allowOxeRefs?: boolean;
+    regressionCache?: Map<string, CheckResult>;
 }): Promise<ExecutedVerificationSuite>;
 export declare function summarizeSuite(results: CheckResult[]): {
     total: number;
@@ -195,4 +203,7 @@ export declare function verifyRun(input: {
     evidenceStore?: EvidenceStore;
     attemptNumber?: number;
     timeoutMs?: number;
+    concurrency?: number;
+    allowOxeRefs?: boolean;
+    regressionCache?: Map<string, CheckResult>;
 }): Promise<VerifyRunResult>;
