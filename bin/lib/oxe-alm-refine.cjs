@@ -588,6 +588,99 @@ function lintSpec(md, kind, options = {}) {
       warnings.push('arquitetura: o projeto possui SYSTEM-DESIGN.md mas a história não traz a seção "Arquitetura e fluxo" nem referencia o documento');
     }
   }
+
+  // OXB-222-11: mechanical repo path validation, existing-symbol verification and anti-combo cohesion checks.
+  const rootAbs = options.projectRoot ? path.resolve(options.projectRoot) : null;
+  const NEW_PATH_HINT_RE = /\b(?:novo|nova|criar|a\s+criar|gerado|new|to\s+be\s+created)\b/i;
+  const EPHEMERAL_OXE_RE = /^\.oxe\/(?:grill|alm\/grill|runs|tmp|evidence|quick|checkpoints|archive)(?:\/|$)/i;
+  const PLACEHOLDER_SEG_RE = /(?:^|\/)(?:KEY|ID|CARD|SLUG|RUN_ID|SESSION|PHASE|Fn|Tn)(?:\/|$)/;
+  const REPO_PATH_RE = /`((?:\.oxe|docs|bin|oxe|src|packages|scripts|lib|tests?|e2e|shared|electron|mobile|app|config)\/[^`\r\n]+)`/g;
+  if (rootAbs) {
+    const checkedPaths = new Set();
+    for (const secName of ['Referências', 'Arquitetura e fluxo']) {
+      const secBody = sec.get(secName);
+      if (!secBody) continue;
+      for (const line of secBody.split('\n')) {
+        let pm;
+        const re = new RegExp(REPO_PATH_RE.source, 'g');
+        while ((pm = re.exec(line))) {
+          const raw = pm[1].trim();
+          const clean = raw.replace(/#.*$/, '').replace(/:\d+(?::\d+)?$/, '').trim();
+          if (!clean || /[*<>]|\.\.|^https?:/i.test(clean)) continue;
+          if (EPHEMERAL_OXE_RE.test(clean) || PLACEHOLDER_SEG_RE.test(clean)) continue;
+          const after = line.slice(pm.index + pm[0].length, pm.index + pm[0].length + 40);
+          if (NEW_PATH_HINT_RE.test(after)) continue;
+          if (checkedPaths.has(clean)) continue;
+          checkedPaths.add(clean);
+          const abs = path.join(rootAbs, clean);
+          if (!fs.existsSync(abs)) {
+            errors.push(`referência inexistente no repositório: \`${clean}\` (confira o caminho real ou marque "(novo)" se será criado)`);
+          }
+        }
+      }
+    }
+
+    // Verify `file.ext` (`symbol`) pairs against existing files (skip creation verbs)
+    const CREATE_VERB_RE = /\b(?:criar|adicionar|implementar|exportar|introduzir|novo|nova|add|create|implement|export|new)\b/i;
+    const FILE_SYM_RE = /`([A-Za-z0-9_.\-/]+\.(?:[cm]?js|tsx?|jsx?|py|go|rs))`\s*\(\s*`([A-Za-z_$][\w$]*)`\s*\)/g;
+    const fileCache = new Map();
+    const checkedSyms = new Set();
+    for (const secName of ['Regras técnicas', 'Critérios de aceite', 'Arquitetura e fluxo']) {
+      const secBody = sec.get(secName);
+      if (!secBody) continue;
+      let sm;
+      const re = new RegExp(FILE_SYM_RE.source, 'g');
+      while ((sm = re.exec(secBody))) {
+        const fileRel = sm[1].trim();
+        const sym = sm[2].trim();
+        if (!fileRel || !sym || /[*<>]|\.\./.test(fileRel)) continue;
+        const before = secBody.slice(Math.max(0, sm.index - 40), sm.index);
+        if (CREATE_VERB_RE.test(before)) continue;
+        const pairKey = `${fileRel}::${sym}`;
+        if (checkedSyms.has(pairKey)) continue;
+        checkedSyms.add(pairKey);
+        const abs = path.join(rootAbs, fileRel);
+        if (!fs.existsSync(abs)) continue;
+        let content = fileCache.get(abs);
+        if (content === undefined) {
+          try { content = fs.readFileSync(abs, 'utf8'); } catch { content = ''; }
+          fileCache.set(abs, content);
+        }
+        const symRe = new RegExp(`(?<![A-Za-z0-9_$])${sym.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_$])`);
+        if (content && !symRe.test(content)) {
+          warnings.push(`símbolo \`${sym}\` citado como existente não encontrado em \`${fileRel}\` — confira o código real antes de fechar o card`);
+        }
+      }
+    }
+  }
+
+  // Anti-combo cohesion warning for story/task (epics naturally span modules)
+  if (kind === 'story' || kind === 'task') {
+    const comboReasons = [];
+    const titleMatch = /^#\s+(?:[A-Z]+-\d+\s*[—–-]\s*)?(.*)$/m.exec(String(md || '').replace(/<!--[\s\S]*?-->/g, ''));
+    const cleanTitle = titleMatch ? titleMatch[1].trim() : '';
+    const titleParts = cleanTitle.split(/[,+]|\s+e\s+/i).map((x) => x.trim()).filter(Boolean);
+    if (cleanTitle.length > 120 && titleParts.length >= 4) {
+      comboReasons.push(`título muito amplo (${cleanTitle.length} chars, ${titleParts.length} frentes)`);
+    }
+    const refsSec = sec.get('Referências') || '';
+    const codeLines = refsSec.split('\n').filter((l) => /^\s*[-*]\s*C[oó]digo\s*:/i.test(l));
+    const codePaths = new Set();
+    for (const l of codeLines) {
+      for (const m of l.matchAll(/`([^`\r\n]+\.(?:[cm]?js|tsx?|jsx?|py|go|rs|json|md))`/g)) codePaths.add(m[1].trim());
+    }
+    if (codePaths.size >= 5) {
+      comboReasons.push(`${codePaths.size} arquivos distintos em Referências/Código`);
+    }
+    const compoundCas = criteria.filter((c) => /;\s+e\s+/i.test(c.text.replace(/`[^`]*`/g, '')));
+    if (compoundCas.length) {
+      comboReasons.push(`${compoundCas.map((c) => c.id).join(', ')} combina múltiplas proposições com "; e "`);
+    }
+    if (comboReasons.length) {
+      warnings.push(`coesão/granularidade (card combo): ${comboReasons.join('; ')} — considere dividir em cards menores e independentes`);
+    }
+  }
+
   return { ok: errors.length === 0, errors, warnings, questions, criteria, needs_info: tbc > 0 };
 }
 
@@ -605,7 +698,10 @@ function descriptionBody(md) {
 async function apply(ctx, collected, md, options = {}) {
   const { request, site } = ctx;
   const encKey = encodeURIComponent(collected.key);
-  const lint = lintSpec(md, collected.kind);
+  const lint = lintSpec(md, collected.kind, {
+    projectRoot: options.projectRoot || null,
+    artifacts: options.artifacts || null,
+  });
   if (!lint.ok && !options.allowLintErrors) throw Object.assign(new Error(`spec reprovado no lint:\n  - ${lint.errors.join('\n  - ')}`), { lint });
   const now = await request('GET', `${site}/rest/api/3/issue/${encKey}?fields=description,labels`);
   const currentText = adfToText(now && now.fields ? now.fields.description : null).trim();

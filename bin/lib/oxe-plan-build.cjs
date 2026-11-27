@@ -250,14 +250,19 @@ function importedSymbols(root, testFile, files) {
     const file = resolve(m[2]);
     if (file) for (const n of m[1].split(',').map((x) => x.trim().split(':')[0].trim()).filter(Boolean)) out.push({ name: n, path: norm(file) });
   }
-  // OXB-222-06: infer CJS namespace require() member accesses (`const mod = require('./a.cjs'); mod.fn()`)
-  const BUILTIN_PROPS = new Set(['prototype', 'constructor', 'toString', 'valueOf', 'hasOwnProperty', 'keys', 'values', 'entries', 'length']);
+  // OXB-222-06 / OXB-222-11: infer CJS namespace require() member accesses (`const mod = require('./a.cjs'); mod.fn()`)
+  // Strip comments and string literals before scanning member accesses so e.g. `'.../oxe-alm-refine.cjs'` never matches `refine.cjs`.
+  const codeOnly = text
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/[^\r\n]*/g, ' ')
+    .replace(/(["'`])(?:\\[\s\S]|(?!\1)[^\\])*\1/g, ' ');
+  const BUILTIN_PROPS = new Set(['prototype', 'constructor', 'toString', 'valueOf', 'hasOwnProperty', 'keys', 'values', 'entries', 'length', 'cjs', 'mjs', 'js', 'ts', 'json', 'md']);
   for (const m of text.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*['"]([^'"]+)['"]\s*\)/g)) {
     const alias = m[1];
     const file = resolve(m[2]);
     if (!file) continue;
-    const accessRe = new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.([A-Za-z_$][\\w$]*)\\b`, 'g');
-    for (const am of text.matchAll(accessRe)) {
+    const accessRe = new RegExp(`(?<![A-Za-z0-9_$-])${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.([A-Za-z_$][\\w$]*)\\b`, 'g');
+    for (const am of codeOnly.matchAll(accessRe)) {
       if (am[1] && !BUILTIN_PROPS.has(am[1])) out.push({ name: am[1], path: norm(file) });
     }
   }

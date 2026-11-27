@@ -6,7 +6,7 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ## [1.22.2] — 2026-11-26
 
-Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-37`..`OB-49`, 3 fases `F1`–`F3`, 10 entregas) incorporando os achados de uso real no OXESpace `v1.6.3` e as fricções catalogadas no bench `v1.22.0` (`OXB-222-01`..`OXB-222-10`).
+Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-37`..`OB-50`, 4 fases `F1`–`F4`, 11 entregas + `RFC-1`) incorporando os achados de uso real no OXESpace `v1.6.3`, as fricções catalogadas no bench `v1.22.0` e gates mecânicos de qualidade de specs e cards no upstream (`OXB-222-01`..`OXB-222-11`).
 
 ### Paridade pré-push, contexto compacto & coordenação de recursos (`OB-40`..`OB-43`, ADR `D-7`)
 
@@ -26,6 +26,10 @@ Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-37`..
 - **Scorecard offline de CI e leadtime (`runtime scorecard --with-ci`, `OB-47`):** `computeLeadtimeAndCiMetrics` em `bin/lib/oxe-scorecard.cjs` calcula `first_pass_ci_green_rate`, `ci_rework_cycles` e `leadtime_breakdown` (`plan_to_verify_ms`, `verify_to_close_ms`, `post_verify_share_pct`) 100% offline a partir de `ci.ndjson` e `events.ndjson`, anexado sob `ci_telemetry` com `--with-ci` sem alterar o contrato padrão.
 - **Discovery nos workflows & detecção de vazamento `stripEnvPrefixes` (`OB-48`):** `oxe-cc doctor --project` reporta `leaked_env` (somente nomes) e emite aviso não-bloqueante quando variáveis do shell coincidem com `stripEnvPrefixes`; `oxe/workflows/lean/execute.md`, `oxe/workflows/ship.md` e `oxe/templates/CONFIG.md` documentam as novas capacidades da `1.22.2`.
 - **ADR `D-7` e sincronização `1.22.2` (`OB-49`):** decisão arquitetural formalizada em `docs/adr/D-7-*.md` preservando `D-1..D-6`, com versão `1.22.2` sincronizada nas 5 fontes.
+
+### Gates mecânicos de qualidade de specs e cards no upstream (`OB-50`, `RFC-1`)
+
+- **Validação mecânica no `alm refine lint`/`apply` e `spec check` (`OB-50`):** `oxe-alm-refine.lintSpec` agora valida no disco paths/ADRs citados em `Referências` e `Arquitetura e fluxo` (respeitando `(novo)`), alerta símbolos citados como existentes ausentes no arquivo e alerta cards `story`/`task` "combo" pouco coesos; `oxe-spec-check.checkSpec` alerta SPEC sem seção de `Bordas`/`Proibições`, critérios `A*` extensos (`> 320` chars) e reprova referências a ADRs/workflows inexistentes; `oxe-plan-build.cjs` corrige inferência CJS para ignorar strings/comentários (ex.: `'.../oxe-alm-refine.cjs'` não gera falso símbolo `cjs`).
 
 ---
 

@@ -670,7 +670,7 @@ function createAlmRefineRuntime(deps) {
           const artifacts = (collected && collected.project_artifacts && collected.project_artifacts.has_any)
             ? collected.project_artifacts
             : refine.discoverProjectArtifacts(artRoot, artSess, key);
-          const l = refine.lintSpec(md, collected.kind, { artifacts });
+          const l = refine.lintSpec(md, collected.kind, { artifacts, projectRoot: artRoot });
           const ui = uiCardGaps(md, collected, { projectRoot: artRoot });
           if (ui.isUi && ui.gaps.length) {
             for (const g of ui.gaps) { l.warnings.push(`interface: ${g}`); l.questions.push(`MARCA: ${g}`); }
@@ -717,8 +717,13 @@ function createAlmRefineRuntime(deps) {
         if (!dry) lib.warnApply(cfg, options);
         const problems = lib.checkConfig(cfg, env);
         if (problems.length) throw new Error(`ALM: ${problems.join('; ')}`);
+        const applyRoot = targetEntry ? targetEntry.root : projectRoot;
         try {
-          const r = await refine.apply(lib.jiraRest(cfg, { ...options, dryRun: dry }), collected, md, { confirmOverwrite: options.confirmOverwrite, dryRun: dry });
+          const r = await refine.apply(lib.jiraRest(cfg, { ...options, dryRun: dry }), collected, md, {
+            confirmOverwrite: options.confirmOverwrite,
+            dryRun: dry,
+            projectRoot: applyRoot,
+          });
           const target = r.questions ? 'grooming' : 'ready';
           if (options.keepStatus) r.moved = { skipped: true, why: '--keep-status: o card fica na coluna em que está' };
           else if (r.applied) r.moved = await refineMove(lib, cfg, key, target, { ...options, env });

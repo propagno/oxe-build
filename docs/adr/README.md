@@ -14,5 +14,6 @@ Gerado de `.oxe/program/decisions.ndjson` pelo `oxe-cc decision publish`. Regist
 | [D-5](D-5-core-agnostico-vs-presets-declarativos-de-dominio.md) | Core agnostico vs presets declarativos de dominio | — | 2026-11-26 | — |
 | [D-6](D-6-decomposicao-strangler-fig-de-oxe-cc-e-oxe-operational.md) | Decomposicao strangler fig de oxe-cc e oxe-operational | — | 2026-11-26 | — |
 | [D-7](D-7-paridade-pre-push-com-phase-gates-path-aware-json-compacto-e.md) | Paridade pre-push com phase_gates path-aware, JSON compacto e sync version_pins | — | 2026-11-27 | — |
+| [D-F1F4-1](D-F1F4-1-paridade-pre-push-compactacao-json-sync-version-pins-e-quali.md) | Paridade pre-push, compactacao JSON, sync version_pins e qualidade mecanica de specs e cards (v1.22.2) | F1–F4 | 2026-11-27 | — |
 
 <!-- oxe-adr:end -->

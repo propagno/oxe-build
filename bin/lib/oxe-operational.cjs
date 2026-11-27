@@ -1721,6 +1721,7 @@ function runtimeSpecCheck(projectRoot, activeSession, options = {}) {
     decisionSources: require('./oxe-decisions.cjs').list(programDir).map((d) => d.source).filter(Boolean),
     rfcs: require('./oxe-rfc.cjs').list(projectRoot),
     rfcMode: require('./oxe-rfc.cjs').rfcMode(config),
+    projectRoot,
   });
   // alm.trace_gate: the loose ends of the traceability graph (warnings here unless "strict")
   try {
