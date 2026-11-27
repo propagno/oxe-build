@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { parseTestReport, extractTestFileArgs, missingProofs, extractTestResults } from './test-report-parsers';
 import { shellInvocation, childProcessEnv, decodeConsoleOutput } from '../executor/shell-argv';
 import { checkExpectedExports } from './contract-exports';
@@ -103,6 +103,8 @@ export interface CheckResult {
   evidence_refs?: string[];
   /** Bench B55: the command already ran in this suite (same cwd/timeout); this check was judged on that output. */
   reused_run?: boolean;
+  /** OXB-222-15: reused a verified passing result from the incremental fingerprint cache without re-running. */
+  cached?: boolean;
   /** Why a check was skipped (`needs_structured_check` = criterion has no executable verification). */
   skip_reason?: string | null;
   /** OXB-072: killed by the check timeout (status `error`, never `fail`). */
@@ -346,12 +348,13 @@ export function compile(
 export async function runCheck(
   check: AcceptanceCheck,
   cwd: string,
-  timeoutMs = 60_000
+  timeoutMs = 60_000,
+  opts: { allowOxeRefs?: boolean; useAsync?: boolean } = {}
 ): Promise<CheckResult> {
-  const first = await runCheckOnce(check, cwd, timeoutMs);
+  const first = await runCheckOnce(check, cwd, timeoutMs, opts);
   if (first.status !== 'fail' || !isRunnerTimeoutOnly(`${first.stdout}\n${first.stderr}`)) return first;
   // the rerun is a real second run, never the memoized output of the first
-  const second = await runCheckOnce(check, cwd, timeoutMs, { fresh: true });
+  const second = await runCheckOnce(check, cwd, timeoutMs, { ...opts, fresh: true });
   const stillTimeoutOnly = second.status === 'fail' && isRunnerTimeoutOnly(`${second.stdout}\n${second.stderr}`);
   return {
     ...second,
@@ -373,18 +376,91 @@ export async function runCheck(
  */
 type CommandRun = { status: number | null; stdout: Buffer; stderr: Buffer; error?: Error; start: number; duration_ms: number };
 let commandMemo: Map<string, CommandRun> | null = null;
+let inFlightMemo: Map<string, Promise<CommandRun>> | null = null;
 
 function withCommandMemo<T>(fn: () => Promise<T>): Promise<T> {
   if (commandMemo || process.env.OXE_VERIFY_NO_REUSE === '1') return fn();
   commandMemo = new Map();
-  return fn().finally(() => { commandMemo = null; });
+  inFlightMemo = new Map();
+  return fn().finally(() => {
+    commandMemo = null;
+    inFlightMemo = null;
+  });
+}
+
+function spawnAsyncCommand(
+  file: string,
+  args: string[],
+  options: { cwd: string; env: NodeJS.ProcessEnv; timeout: number; maxBuffer: number; windowsVerbatimArguments?: boolean }
+): Promise<CommandRun> {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const child = spawn(file, args, {
+      cwd: options.cwd,
+      env: options.env,
+      windowsHide: true,
+      windowsVerbatimArguments: options.windowsVerbatimArguments,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const outChunks: Buffer[] = [];
+    const errChunks: Buffer[] = [];
+    let outLen = 0;
+    let errLen = 0;
+    let settled = false;
+    let timedOut = false;
+
+    const finish = (status: number | null, error?: Error) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve({
+        status,
+        stdout: Buffer.concat(outChunks),
+        stderr: Buffer.concat(errChunks),
+        error,
+        start,
+        duration_ms: Date.now() - start,
+      });
+    };
+
+    const timer = options.timeout > 0
+      ? setTimeout(() => {
+          timedOut = true;
+          try { child.kill('SIGTERM'); } catch { /* ignore */ }
+          setTimeout(() => {
+            try { child.kill('SIGKILL'); } catch { /* ignore */ }
+          }, 1500).unref();
+          const err = Object.assign(new Error(`ETIMEDOUT after ${options.timeout}ms`), { code: 'ETIMEDOUT' });
+          finish(null, err);
+        }, options.timeout)
+      : null;
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      if (outLen < options.maxBuffer) {
+        outChunks.push(chunk);
+        outLen += chunk.length;
+      }
+    });
+    child.stderr?.on('data', (chunk: Buffer) => {
+      if (errLen < options.maxBuffer) {
+        errChunks.push(chunk);
+        errLen += chunk.length;
+      }
+    });
+    child.on('error', (err) => {
+      if (!timedOut) finish(null, err);
+    });
+    child.on('close', (code) => {
+      if (!timedOut) finish(code);
+    });
+  });
 }
 
 async function runCheckOnce(
   check: AcceptanceCheck,
   cwd: string,
   timeoutMs = 60_000,
-  opts: { fresh?: boolean } = {}
+  opts: { fresh?: boolean; allowOxeRefs?: boolean; useAsync?: boolean } = {}
 ): Promise<CheckResult> {
   if (typeof check.timeout_ms === 'number' && check.timeout_ms > 0) timeoutMs = check.timeout_ms;
   const frozen = check.frozen_files ?? [];
@@ -417,7 +493,7 @@ async function runCheckOnce(
   const exportsExpected = check.exports_expected ?? [];
   if (contracted.length > 0 || exportsExpected.length > 0) {
     const absent = contracted.filter((file) => !fs.existsSync(path.resolve(cwd, file)));
-    const leaks = absent.length > 0 ? [] : contracted.filter((file) => referencesOxeInternals(path.resolve(cwd, file)));
+    const leaks = (absent.length > 0 || opts.allowOxeRefs) ? [] : contracted.filter((file) => referencesOxeInternals(path.resolve(cwd, file)));
     const exportOutcome = absent.length > 0 || leaks.length > 0
       ? { missing: [] as ExpectedExport[], unsupported: [] as string[] }
       : checkExpectedExports(cwd, exportsExpected);
@@ -490,19 +566,38 @@ async function runCheckOnce(
     if (cached) {
       result = cached;
       start = cached.start;
+    } else if (opts.useAsync && inFlightMemo && !opts.fresh && inFlightMemo.has(memoKey)) {
+      result = await inFlightMemo.get(memoKey)!;
+      start = result.start;
     } else {
       // Use a shell so the full command string is interpreted (handles quotes, &&, node -e "...").
       // The child never inherits node:test context: it would emit a serialized protocol, not TAP.
       const shell = shellInvocation(check.command);
-      const spawned = spawnSync(shell.file, shell.args, {
-        cwd,
-        env: childProcessEnv(),
-        timeout: timeoutMs,
-        // a Gradle/Android build prints a lot before and around the test lines: 2 MB cut it (ENOBUFS)
-        maxBuffer: 32 * 1024 * 1024,
-        windowsVerbatimArguments: shell.windowsVerbatimArguments,
-      });
-      result = { status: spawned.status, stdout: spawned.stdout as unknown as Buffer, stderr: spawned.stderr as unknown as Buffer, error: spawned.error, start, duration_ms: Date.now() - start };
+      if (opts.useAsync) {
+        const promise = spawnAsyncCommand(shell.file, shell.args, {
+          cwd,
+          env: childProcessEnv(),
+          timeout: timeoutMs,
+          maxBuffer: 32 * 1024 * 1024,
+          windowsVerbatimArguments: shell.windowsVerbatimArguments,
+        });
+        if (inFlightMemo && !opts.fresh) inFlightMemo.set(memoKey, promise);
+        try {
+          result = await promise;
+        } finally {
+          if (inFlightMemo) inFlightMemo.delete(memoKey);
+        }
+      } else {
+        const spawned = spawnSync(shell.file, shell.args, {
+          cwd,
+          env: childProcessEnv(),
+          timeout: timeoutMs,
+          // a Gradle/Android build prints a lot before and around the test lines: 2 MB cut it (ENOBUFS)
+          maxBuffer: 32 * 1024 * 1024,
+          windowsVerbatimArguments: shell.windowsVerbatimArguments,
+        });
+        result = { status: spawned.status, stdout: spawned.stdout as unknown as Buffer, stderr: spawned.stderr as unknown as Buffer, error: spawned.error, start, duration_ms: Date.now() - start };
+      }
       if (commandMemo) commandMemo.set(memoKey, result);
     }
 
@@ -598,6 +693,17 @@ export async function runSuite(
   });
 }
 
+function frozenFilesIntact(check: AcceptanceCheck, cwd: string): boolean {
+  const frozen = check.frozen_files ?? [];
+  if (frozen.length === 0) return true;
+  for (const f of frozen) {
+    if (f.sha256 === null) return false;
+    const abs = path.resolve(cwd, f.path);
+    if (!fs.existsSync(abs) || !frozenFileMatches(abs, f.sha256)) return false;
+  }
+  return true;
+}
+
 export async function executeSuite(
   suite: AcceptanceCheckSuite,
   cwd: string,
@@ -608,21 +714,55 @@ export async function executeSuite(
     attemptNumber?: number;
     evidenceStore?: EvidenceStore;
     pluginRegistry?: PluginRegistry;
+    concurrency?: number;
+    allowOxeRefs?: boolean;
+    regressionCache?: Map<string, CheckResult>;
   }
 ): Promise<ExecutedVerificationSuite> {
-  const results: CheckResult[] = [];
-  const verificationResults: VerificationResult[] = [];
+  const checks = suite.checks ?? [];
+  const results: CheckResult[] = new Array(checks.length);
+  const verificationResults: VerificationResult[] = new Array(checks.length);
   const evidenceRefs = new Map<string, string[]>();
   const timeoutMs = options.timeoutMs ?? 60_000;
   const attemptNumber = options.attemptNumber ?? 1;
+  const rawConcurrency = Number(options.concurrency ?? 1);
+  const concurrency = Number.isFinite(rawConcurrency) && rawConcurrency > 1
+    ? Math.min(16, Math.floor(rawConcurrency))
+    : 1;
 
-  await withCommandMemo(async () => {
-  for (const check of suite.checks) {
+  const runOne = async (idx: number): Promise<void> => {
+    const check = checks[idx];
     const provider = options.pluginRegistry?.verifierProviderFor(check.type);
     let result: CheckResult;
     let verificationResult: VerificationResult;
 
-    if (provider) {
+    const cachedHit = !provider && options.regressionCache?.get(check.id);
+    if (cachedHit && cachedHit.status === 'pass' && frozenFilesIntact(check, cwd)) {
+      result = {
+        ...cachedHit,
+        check_id: check.id,
+        acceptance_ref: check.acceptance_ref,
+        duration_ms: 0,
+        cached: true,
+      };
+      const collected = options.evidenceStore
+        ? await collectCheckEvidence(options.evidenceStore, check, result, {
+            run_id: options.runId,
+            work_item_id: options.workItemId,
+            attempt_number: attemptNumber,
+          })
+        : { refs: [], summaryRef: null };
+      result.evidence_refs = collected.refs;
+      result.summary_evidence_ref = collected.summaryRef;
+      verificationResult = {
+        verification_id: `vr-${crypto.randomBytes(4).toString('hex')}`,
+        work_item_id: options.workItemId,
+        check_id: check.id,
+        status: result.status,
+        evidence_refs: collected.refs,
+        summary: result.stdout || 'cached pass',
+      };
+    } else if (provider) {
       const providerResult = await provider.execute({
         check_id: check.id,
         check_type: check.type,
@@ -644,7 +784,10 @@ export async function executeSuite(
       };
       verificationResult = providerResult;
     } else {
-      result = await runCheck(check, cwd, timeoutMs);
+      result = await runCheck(check, cwd, timeoutMs, {
+        allowOxeRefs: options.allowOxeRefs,
+        useAsync: concurrency > 1,
+      });
       const collected = options.evidenceStore
         ? await collectCheckEvidence(options.evidenceStore, check, result, {
             run_id: options.runId,
@@ -667,9 +810,28 @@ export async function executeSuite(
     if (result.evidence_refs && result.evidence_refs.length > 0) {
       evidenceRefs.set(check.id, result.evidence_refs);
     }
-    results.push(result);
-    verificationResults.push(verificationResult);
-  }
+    results[idx] = result;
+    verificationResults[idx] = verificationResult;
+  };
+
+  await withCommandMemo(async () => {
+    if (concurrency <= 1 || checks.length <= 1) {
+      for (let i = 0; i < checks.length; i += 1) {
+        await runOne(i);
+      }
+    } else {
+      let nextIdx = 0;
+      const workerCount = Math.min(concurrency, checks.length);
+      const worker = async () => {
+        while (true) {
+          const idx = nextIdx;
+          nextIdx += 1;
+          if (idx >= checks.length) return;
+          await runOne(idx);
+        }
+      };
+      await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    }
   });
 
   const manifest = buildManifest(options.runId, results, {
@@ -718,6 +880,9 @@ export async function verifyRun(input: {
   evidenceStore?: EvidenceStore;
   attemptNumber?: number;
   timeoutMs?: number;
+  concurrency?: number;
+  allowOxeRefs?: boolean;
+  regressionCache?: Map<string, CheckResult>;
 }): Promise<VerifyRunResult> {
   const gaps: string[] = [];
   if (!input.suite || !Array.isArray(input.suite.checks) || input.suite.checks.length === 0) {
@@ -742,6 +907,9 @@ export async function verifyRun(input: {
     attemptNumber: input.attemptNumber,
     evidenceStore: input.evidenceStore,
     pluginRegistry: input.pluginRegistry,
+    concurrency: input.concurrency,
+    allowOxeRefs: input.allowOxeRefs,
+    regressionCache: input.regressionCache,
   });
   saveManifest(input.projectRoot, input.runId, executed.manifest);
   saveRiskLedger(input.projectRoot, input.runId, executed.risk_ledger);

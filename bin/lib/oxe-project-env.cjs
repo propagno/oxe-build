@@ -320,6 +320,22 @@ function checkProjectEnvironment(projectRoot, machine = {}) {
     // optional hygiene helper
   }
 
+  // OXB-222-14: warn (non-blocking) when an accidental `.git` exists in $HOME (can leak into non-git/temp dirs).
+  let homeGitHazard = null;
+  try {
+    const gitRootLib = require('./oxe-git-root.cjs');
+    if (typeof gitRootLib.detectHomeGitHazard === 'function') {
+      homeGitHazard = gitRootLib.detectHomeGitHazard(projectRoot, { homeDir: machine.homeDir });
+      if (homeGitHazard && homeGitHazard.hazard) {
+        warnings.push(
+          `diretório .git detectado no home do usuário (${homeGitHazard.home_git}) — pastas sem repositório próprio sob o home podem herdar esse .git fantasma; remova se for acidental`,
+        );
+      }
+    }
+  } catch {
+    // optional helper
+  }
+
   return {
     ok: problems.length === 0,
     problems,
@@ -327,6 +343,7 @@ function checkProjectEnvironment(projectRoot, machine = {}) {
     scrubbed_env: scrubbedEnv,
     leaked_env: leakedEnv,
     worktrees,
+    home_git_hazard: homeGitHazard,
     toolchain: { node, npm: npm || null, platform: process.platform, arch: process.arch, free_mb: freeMb },
     wanted: { engines, nvmrc: nvmrc || null, packageManager: (pkg && pkg.packageManager) || null },
   };

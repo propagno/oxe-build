@@ -16,7 +16,6 @@
  */
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
@@ -441,22 +440,9 @@ function summarizeWorktreeHygiene(projectRoot, options = {}) {
     protected_details: [],
   };
 
-  let topRes;
-  try {
-    topRes = runGit(rootAbs, ['rev-parse', '--show-toplevel'], spawn);
-  } catch {
-    return empty;
-  }
-  if (!topRes.ok || !topRes.stdout.trim()) return empty;
-  const rootNorm = normPath(rootAbs);
-  const topNorm = normPath(topRes.stdout.trim());
-  if (topNorm !== rootNorm && !fs.existsSync(path.join(rootAbs, '.git'))) {
-    const homeNorm = normPath(os.homedir());
-    const tmpNorm = normPath(os.tmpdir());
-    if (topNorm === homeNorm || (isPathInside(rootNorm, tmpNorm) && !isPathInside(topNorm, tmpNorm))) {
-      return empty;
-    }
-  }
+  const gitRootLib = require('./oxe-git-root.cjs');
+  const gitRoot = gitRootLib.resolveProjectGitRoot(rootAbs, { spawn });
+  if (!gitRoot) return empty;
 
   let listRes;
   try {
