@@ -541,8 +541,98 @@ function renderOnboardingMarkdown(pack) {
   return lines.join('\n');
 }
 
+function slugifyGateId(command, used) {
+  const cleaned = String(command || '')
+    .toLowerCase()
+    .replace(/^npm\s+run\s+/, '')
+    .replace(/^npx\s+/, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32) || 'ci-check';
+  let id = `ci-${cleaned}`;
+  let idx = 2;
+  while (used.has(id)) {
+    id = `ci-${cleaned}-${idx}`;
+    idx += 1;
+  }
+  used.add(id);
+  return id;
+}
+
+/**
+ * 1.22.2 (OXB-222-19): Proposes a declarative `.oxe/config.json` patch from detected CI pipelines
+ * and environment hygiene (`--dry-run` by default = 0 writes; `--apply` = non-destructive merge).
+ */
+function proposeOnboardingConfig(projectRoot, options = {}) {
+  const rootAbs = path.resolve(projectRoot || process.cwd());
+  const apply = Boolean(options.apply) && options.dryRun !== true;
+  const dryRun = !apply;
+  const pack = buildOnboardingPack(rootAbs, { ...options, write: false });
+  const cfgPath = path.join(rootAbs, '.oxe', 'config.json');
+  const existing = readJsonQuiet(cfgPath) || {};
+  const existingGates = Array.isArray(existing.phase_gates) ? existing.phase_gates : [];
+  const usedIds = new Set(existingGates.map((g) => g && g.id).filter(Boolean));
+  const existingCmds = existingGates.map((g) => g && g.command).filter(Boolean);
+
+  const addedGates = [];
+  for (const cmd of pack.ci.unmirrored_commands || []) {
+    if (isCommandMirrored(cmd, existingCmds)) continue;
+    if (addedGates.some((g) => isCommandMirrored(cmd, [g.command]))) continue;
+    const id = slugifyGateId(cmd, usedIds);
+    addedGates.push({ id, command: cmd });
+    if (addedGates.length >= 12) break;
+  }
+  for (const sug of pack.ci.suggested_path_gates || []) {
+    if (!sug || !sug.command) continue;
+    if (isCommandMirrored(sug.command, [...existingCmds, ...addedGates.map((g) => g.command)])) continue;
+    const id = slugifyGateId(sug.id || sug.command, usedIds);
+    addedGates.push({
+      id,
+      command: sug.command,
+      ...(Array.isArray(sug.paths) && sug.paths.length ? { paths: sug.paths } : {}),
+    });
+    if (addedGates.length >= 12) break;
+  }
+
+  const proposedPatch = {};
+  if (existing.profile !== 'lean') proposedPatch.profile = 'lean';
+  if (addedGates.length) proposedPatch.phase_gates = addedGates;
+  const curWt = existing.worktree && typeof existing.worktree === 'object' ? existing.worktree : {};
+  if (!curWt.auto_gc) {
+    proposedPatch.worktree = {
+      auto_gc: 'warn',
+      ...(curWt.warn_above == null ? { warn_above: 5 } : {}),
+    };
+  }
+
+  const mergedConfig = {
+    ...existing,
+    ...(proposedPatch.profile ? { profile: proposedPatch.profile } : {}),
+    ...(addedGates.length ? { phase_gates: [...existingGates, ...addedGates] } : {}),
+    ...(proposedPatch.worktree ? { worktree: { ...proposedPatch.worktree, ...curWt, auto_gc: curWt.auto_gc || proposedPatch.worktree.auto_gc } } : {}),
+  };
+
+  if (apply) {
+    fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+    fs.writeFileSync(cfgPath, `${JSON.stringify(mergedConfig, null, 2)}\n`, 'utf8');
+  }
+
+  return {
+    ok: true,
+    dry_run: dryRun,
+    applied: apply,
+    config_path: '.oxe/config.json',
+    ci_providers: pack.ci.providers,
+    existing_gates_count: existingGates.length,
+    added_gates: addedGates,
+    proposed_patch: proposedPatch,
+    ...(apply ? { merged_config: mergedConfig } : {}),
+  };
+}
+
 module.exports = {
   buildOnboardingPack,
+  proposeOnboardingConfig,
   detectCiPipelines,
   detectAlmProfile,
   detectProjectStacks,

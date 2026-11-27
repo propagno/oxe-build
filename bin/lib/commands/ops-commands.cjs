@@ -570,26 +570,50 @@ function createOpsCommandRegistry(deps = {}) {
       name: 'onboard',
       handler(argv) {
         if (argv.includes('--help') || argv.includes('-h')) {
-          console.log(`\n  oxe-cc onboard [--json] [--write] [--dir <pasta>] [--session <id>]
+          console.log(`\n  oxe-cc onboard [--json] [--write] [--propose-config [--dry-run|--apply]] [--dir <pasta>] [--session <id>]
   Gera dossiê de onboarding 100% read-only e agnóstico para qualquer agente ou dev recém-chegado:
   detecta stack, pipelines de CI (GitHub Actions, GitLab CI, Azure Pipelines, Bitbucket, CircleCI,
   Jenkins ou local), ALM (Jira, Azure DevOps, custom ou sem ALM), vazamento stripEnvPrefixes e
-  lacunas de espelhamento entre CI e phase_gates locais. Use --write para gravar .oxe/ONBOARDING.md.\n`);
+  lacunas de espelhamento entre CI e phase_gates locais.
+  Use --write para gravar .oxe/ONBOARDING.md.
+  Use --propose-config para propor patch declarativo de .oxe/config.json (--dry-run padrão; --apply mescla sem destruir chaves existentes).\n`);
           return;
         }
-        const o = { dir: process.cwd(), json: false, write: false, activeSession: null };
+        const o = { dir: process.cwd(), json: false, write: false, proposeConfig: false, apply: false, dryRun: false, activeSession: null };
         for (let i = 0; i < argv.length; i += 1) {
           const a = argv[i];
           if (a === '--json') o.json = true;
           else if (a === '--write') o.write = true;
+          else if (a === '--propose-config') o.proposeConfig = true;
+          else if (a === '--apply') o.apply = true;
+          else if (a === '--dry-run') o.dryRun = true;
           else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
           else if (a === '--session' && argv[i + 1]) o.activeSession = String(argv[++i]).replace(/\\/g, '/');
           else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
         }
         try {
-          const pack = require('../oxe-onboard.cjs').buildOnboardingPack(o.dir, {
+          const onboardMod = require('../oxe-onboard.cjs');
+          const resolvedSession = o.activeSession || (typeof sessionDirId === 'function' ? sessionDirId(o.dir) : null);
+          if (o.proposeConfig) {
+            const res = onboardMod.proposeOnboardingConfig(o.dir, {
+              apply: o.apply && !o.dryRun,
+              dryRun: o.dryRun || !o.apply,
+              activeSession: resolvedSession,
+            });
+            if (o.json) {
+              console.log(JSON.stringify({ oxeOnboardProposeSchema: 1, ...res }, null, 2));
+            } else {
+              console.log(res.dry_run
+                ? `  ${yellow}(simulação)${reset} proposta para ${res.config_path}: +${res.added_gates.length} phase_gate(s)${res.proposed_patch.profile ? `, profile="${res.proposed_patch.profile}"` : ''}${res.proposed_patch.worktree ? `, worktree.auto_gc="${res.proposed_patch.worktree.auto_gc}"` : ''}`
+                : `  ${green}✓${reset} ${res.config_path} atualizado de forma não-destrutiva (+${res.added_gates.length} phase_gate(s))`);
+              for (const g of res.added_gates) console.log(`    + [${g.id}] ${g.command}`);
+              if (res.dry_run) console.log(`  ${dim}nenhum arquivo foi gravado; rode com --apply para aplicar${reset}`);
+            }
+            return;
+          }
+          const pack = onboardMod.buildOnboardingPack(o.dir, {
             write: o.write,
-            activeSession: o.activeSession || (typeof sessionDirId === 'function' ? sessionDirId(o.dir) : null),
+            activeSession: resolvedSession,
           });
           if (o.json) {
             console.log(JSON.stringify({ oxeOnboardSchema: 1, ...pack }, null, 2));
