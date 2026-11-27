@@ -25,6 +25,8 @@ const ALLOWED_CONFIG_KEYS = [
   'spec_required_sections',
   'plan_max_tasks_per_wave',
   'profile',
+  'preset',
+  'presets',
   'verification_depth',
   'plan_confidence_threshold',
   'plan_ceremony',

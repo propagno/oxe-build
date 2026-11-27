@@ -132,7 +132,26 @@ function worktreesOxe(projectRoot, options = {}) {
     else if (cur && line.startsWith('branch ')) cur.branch = line.slice(7).replace('refs/heads/', '').trim();
     else if (cur && line === 'detached') cur.branch = '(detached)';
   }
-  return rows.map((r) => ({ ...r, here: path.resolve(r.path) === path.resolve(projectRoot), oxe: describeOxeDir(r.path, options) }));
+  let activeAgents = [];
+  try {
+    activeAgents = require('./oxe-agent-coord.cjs').listActiveAgents(projectRoot, { readOnly: true });
+  } catch { activeAgents = []; }
+  const norm = (p) => {
+    let r = path.resolve(String(p || ''));
+    try { r = fs.realpathSync(r); } catch { /* ignore */ }
+    const s = r.replace(/\\/g, '/').replace(/\/+$/, '');
+    return process.platform === 'win32' ? s.toLowerCase() : s;
+  };
+  return rows.map((r) => {
+    const wtNorm = norm(r.path);
+    const wtAgents = activeAgents.filter((a) => norm(a.worktree) === wtNorm);
+    return {
+      ...r,
+      here: path.resolve(r.path) === path.resolve(projectRoot),
+      oxe: describeOxeDir(r.path, options),
+      active_agents: wtAgents,
+    };
+  });
 }
 
 module.exports = { MARKER, readMarker, touchMarker, describeOxeDir, oxeDirLine, worktreesOxe, runningVersion };

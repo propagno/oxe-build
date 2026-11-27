@@ -21,7 +21,7 @@ function tmp(prefix) { return fs_1.default.mkdtempSync(path_1.default.join(os_1.
             const target = path_1.default.join(base, 'outside-not-yet');
             fs_1.default.symlinkSync(target, path_1.default.join(ws, 'out'), process.platform === 'win32' ? 'junction' : 'dir');
             strict_1.default.throws(() => (0, built_in_tools_1.resolveWithin)(ws, 'out/pwned.txt'), built_in_tools_1.PathContainmentError);
-            strict_1.default.equal(path_1.default.relative((0, built_in_tools_1.samePathKey)((0, built_in_tools_1.realPathOf)(path_1.default.join(ws, 'out', 'pwned.txt'))), (0, built_in_tools_1.samePathKey)(path_1.default.join(target, 'pwned.txt'))), '');
+            strict_1.default.equal(path_1.default.relative((0, built_in_tools_1.samePathKey)((0, built_in_tools_1.realPathOf)(path_1.default.join(ws, 'out', 'pwned.txt'))), (0, built_in_tools_1.samePathKey)(path_1.default.join(fs_1.default.realpathSync.native(base), 'outside-not-yet', 'pwned.txt'))), '');
             const r = await built_in_tools_1.BUILT_IN_TOOLS.write_file.execute({ path: 'out/pwned.txt', content: 'x' }, ws).catch((e) => `[err] ${e.message}`);
             strict_1.default.ok(!fs_1.default.existsSync(path_1.default.join(target, 'pwned.txt')), `nothing written outside (${String(r).slice(0, 80)})`);
         }

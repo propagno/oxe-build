@@ -348,9 +348,13 @@ function runPreflight(projectRoot, options = {}) {
   const wantE2e = options.e2eImpact === true || options.e2eImpactOnly === true || pf.e2eImpact === true;
   const e2eImpact = wantE2e ? detectE2eImpact(rootAbs, { base, spawn, diffText: options.diffText }) : null;
 
-  // 4. Design target CSS geometry risk alert (OXB-G14)
-  const wantCssTargets = options.cssTargets !== false && pf.cssTargetCheck !== false && !options.e2eImpactOnly;
-  const cssTargets = wantCssTargets ? detectCssTargetRisk(rootAbs, { base, spawn, diffText: options.diffText, targetsDir: pf.designTargetsDir }) : null;
+  // 4. Design target CSS geometry risk alert (OXB-G14, preset-aware via OXB-221-05)
+  const presetCfg = require('./oxe-presets.cjs').resolvePresetConfig(cfg);
+  const resolvedTargetsDir = pf.designTargetsDir || pf.cssTargetsDir
+    || (presetCfg.preflight && presetCfg.preflight.cssTargetsDir)
+    || (presetCfg.hasExplicitPreset ? null : path.join('src', 'design', 'targets'));
+  const wantCssTargets = options.cssTargets !== false && pf.cssTargetCheck !== false && !options.e2eImpactOnly && Boolean(resolvedTargetsDir);
+  const cssTargets = wantCssTargets ? detectCssTargetRisk(rootAbs, { base, spawn, diffText: options.diffText, targetsDir: resolvedTargetsDir }) : null;
 
   const checksOk = checkResults.every((r) => r.ok);
   const triggersOk = triggerResults.every((r) => r.ok);
@@ -372,6 +376,8 @@ function runPreflight(projectRoot, options = {}) {
 
 module.exports = {
   globMatch,
+  resolveDiffBase,
+  getChangedFiles,
   detectE2eImpact,
   detectCssTargetRisk,
   runPreflight,

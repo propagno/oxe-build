@@ -260,11 +260,90 @@ function checkProjectEnvironment(projectRoot, machine = {}) {
   } catch {
     scrubbedEnv = [];
   }
+
+  // OXB-222-09: warn (non-blocking) when host shell variables match configured stripEnvPrefixes.
+  const leakedEnv = [];
+  try {
+    const envSanitize = require('./oxe-env-sanitize.cjs');
+    const pol = envSanitize.resolveEnvSanitizeConfig(projectRoot);
+    if (pol && pol.enabled && Array.isArray(pol.prefixes) && pol.prefixes.length) {
+      const allowSet = new Set(pol.allow || []);
+      const allowLower = new Set((pol.allow || []).map((a) => String(a).toLowerCase()));
+      const envObj = machine.env || process.env;
+      for (const [key, value] of Object.entries(envObj || {})) {
+        if (value === undefined) continue;
+        if (allowSet.has(key) || (process.platform === 'win32' && allowLower.has(key.toLowerCase()))) continue;
+        const upper = key.toUpperCase();
+        if (pol.prefixes.some((p) => upper.startsWith(String(p).toUpperCase()))) {
+          leakedEnv.push(key);
+        }
+      }
+      leakedEnv.sort();
+      if (leakedEnv.length) {
+        warnings.push(
+          `variável(is) de ambiente coincidem com stripEnvPrefixes (${leakedEnv.slice(0, 6).join(', ')}${leakedEnv.length > 6 ? '…' : ''}) — o runtime sanitiza subprocessos, mas comandos manuais fora do runtime podem herdar esse contexto; limpe o shell ou revise stripEnvPrefixes`,
+        );
+      }
+    }
+  } catch {
+    // optional helper
+  }
+
+  // OXB-222-13: non-blocking worktree hygiene check (read-only; opt-out via worktree.hygiene: false).
+  let worktrees = null;
+  try {
+    const rootCfg = readJson(path.join(projectRoot, 'oxe.config.json')) || {};
+    const mergedCfg = { ...rootCfg, ...(oxeConfig || {}) };
+    const wtCfg = mergedCfg.worktree && typeof mergedCfg.worktree === 'object' ? mergedCfg.worktree : {};
+    if (wtCfg.hygiene !== false && machine.worktrees !== false) {
+      const wtGc = require('./oxe-worktree-gc.cjs');
+      if (typeof wtGc.summarizeWorktreeHygiene === 'function') {
+        worktrees = wtGc.summarizeWorktreeHygiene(projectRoot, {
+          warnAbove: wtCfg.warn_above,
+          spawn: machine.spawn,
+        });
+        if (worktrees && worktrees.needs_gc) {
+          const parts = [`${worktrees.secondary} worktree(s) secundária(s)`];
+          if (worktrees.clean_merged) parts.push(`${worktrees.clean_merged} mergeada(s) limpa(s)`);
+          if (worktrees.prunable) parts.push(`${worktrees.prunable} órfã(s)/prunable`);
+          if (worktrees.nested_agent) parts.push(`${worktrees.nested_agent} aninhada(s) de agente`);
+          if (worktrees.with_real_node_modules) parts.push(`${worktrees.with_real_node_modules} com node_modules próprio`);
+          if (worktrees.protected_junction_targets) parts.push(`${worktrees.protected_junction_targets} protegida(s) por junction ativa`);
+          const cmd = worktrees.nested_agent > 0
+            ? 'oxe-cc gc-worktrees --merged --include-nested --ignore-agent-settings --apply'
+            : 'oxe-cc gc-worktrees --merged --apply';
+          warnings.push(`higiene de worktrees: ${parts.join(', ')} — rode \`${cmd}\` (ou configure worktree.auto_gc)`);
+        }
+      }
+    }
+  } catch {
+    // optional hygiene helper
+  }
+
+  // OXB-222-14: warn (non-blocking) when an accidental `.git` exists in $HOME (can leak into non-git/temp dirs).
+  let homeGitHazard = null;
+  try {
+    const gitRootLib = require('./oxe-git-root.cjs');
+    if (typeof gitRootLib.detectHomeGitHazard === 'function') {
+      homeGitHazard = gitRootLib.detectHomeGitHazard(projectRoot, { homeDir: machine.homeDir });
+      if (homeGitHazard && homeGitHazard.hazard) {
+        warnings.push(
+          `diretório .git detectado no home do usuário (${homeGitHazard.home_git}) — pastas sem repositório próprio sob o home podem herdar esse .git fantasma; remova se for acidental`,
+        );
+      }
+    }
+  } catch {
+    // optional helper
+  }
+
   return {
     ok: problems.length === 0,
     problems,
     warnings,
     scrubbed_env: scrubbedEnv,
+    leaked_env: leakedEnv,
+    worktrees,
+    home_git_hazard: homeGitHazard,
     toolchain: { node, npm: npm || null, platform: process.platform, arch: process.arch, free_mb: freeMb },
     wanted: { engines, nvmrc: nvmrc || null, packageManager: (pkg && pkg.packageManager) || null },
   };

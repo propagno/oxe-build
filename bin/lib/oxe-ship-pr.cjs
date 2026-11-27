@@ -11,11 +11,31 @@
  * gh only (the user's login); `spawn` injectable for tests.
  */
 
+const fs = require('fs');
+const path = require('path');
 const { spawnSync } = require('child_process');
+const presets = require('./oxe-presets.cjs');
 
 const MARKER = '<!-- oxe-ci-verdict -->';
 const DEFAULT_TRAIN = ['na-fila', 'no-batch', 'fix-main'];
 const DEFAULT_REQUIRED_STATUSES = ['marca/conformidade'];
+
+function resolveRequiredCommitStatuses(cwd, options = {}) {
+  if (Array.isArray(options.requiredStatuses)) {
+    return options.requiredStatuses.map((s) => String(s).toLowerCase()).filter(Boolean);
+  }
+  const hasConfigFile = Boolean(
+    cwd && (fs.existsSync(path.join(cwd, 'oxe.config.json')) || fs.existsSync(path.join(cwd, '.oxe', 'config.json')))
+  );
+  const presetCfg = cwd ? presets.resolvePresetConfig(cwd) : null;
+  if (presetCfg && Array.isArray(presetCfg.ship && presetCfg.ship.requiredCommitStatuses) && presetCfg.ship.requiredCommitStatuses.length) {
+    return presetCfg.ship.requiredCommitStatuses.map((s) => String(s).toLowerCase()).filter(Boolean);
+  }
+  if (presetCfg && presetCfg.hasExplicitPreset) return [];
+  if (cwd && fs.existsSync(path.join(cwd, 'src', 'design', 'targets'))) return DEFAULT_REQUIRED_STATUSES;
+  if (hasConfigFile) return [];
+  return Array.isArray(options.commitStatuses) ? DEFAULT_REQUIRED_STATUSES : [];
+}
 
 function gh(spawn, cwd, args, input) {
   const r = spawn('gh', args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 60_000, maxBuffer: 16 * 1024 * 1024, ...(input != null ? { input } : {}) });
@@ -30,10 +50,8 @@ const FIELDS = 'number,title,headRefName,headRefOid,url,labels,isDraft,state';
  * so a green Actions job never masks an enforced brand-conformance divergence posted as a commit status.
  */
 function inspectRequiredCommitStatuses(cwd, headSha, options = {}) {
-  const required = Array.isArray(options.requiredStatuses) && options.requiredStatuses.length
-    ? options.requiredStatuses.map((s) => String(s).toLowerCase())
-    : DEFAULT_REQUIRED_STATUSES;
-  if (!headSha) return { ok: true, checked: [], failures: [] };
+  const required = resolveRequiredCommitStatuses(cwd, options);
+  if (!headSha || !required.length) return { ok: true, checked: [], failures: [] };
   const spawn = options.spawn || spawnSync;
   let statuses = [];
   if (Array.isArray(options.commitStatuses)) {
@@ -101,12 +119,62 @@ function selectPrs(spawn, cwd, sel) {
 
 /**
  * `{ pr | card | repo }` → the PRs with their CI verdict. `known`: the known failures in force (not expired).
+ * Supports provider-agnostic delegation via `bin/lib/oxe-ci-adapter.cjs` (`github`, `gitlab`, `azure-devops`, `local`).
  */
 function status(cwd, sel, options = {}) {
   const spawn = options.spawn || spawnSync;
   const kf = require('./oxe-known-failures.cjs');
+  const ciAdapter = require('./oxe-ci-adapter.cjs');
   const known = (options.known || []).filter((k) => !k.expired);
   const trainLabels = options.trainLabels || DEFAULT_TRAIN;
+  const selector = sel.pr ? { pr: Number(String(sel.pr).replace(/^#/, '')) } : sel.card ? { card: String(sel.card).toUpperCase() } : { repo: true };
+
+  const explicitProvider = options.provider ? String(options.provider).toLowerCase() : null;
+  const detectedProvider = explicitProvider || ciAdapter.detectCiProvider(cwd);
+  // Preserve legacy GitHub behavior when caller supplies a mock `spawn` without explicit provider on a non-git temp dir
+  const effectiveProvider = explicitProvider || (['gitlab', 'azure-devops'].includes(detectedProvider) ? detectedProvider : (options.spawn ? 'github' : detectedProvider));
+
+  if (effectiveProvider === 'local') {
+    return { provider: 'local', offline: true, selector, prs: [], known: known.length, train_labels: trainLabels };
+  }
+  if (effectiveProvider !== 'github') {
+    const adapter = ciAdapter.resolveCiAdapter(cwd, { provider: effectiveProvider, spawn });
+    const listed = adapter.listPullRequests({ state: 'open', limit: sel.limit || 50 });
+    const ciRuns = adapter.inspectCiStatus({ limit: 20 });
+    const items = (listed.items || []).filter((it) => {
+      if (sel.pr) return Number(it.number) === Number(String(sel.pr).replace(/^#/, ''));
+      if (sel.card) {
+        const key = String(sel.card).trim().toUpperCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const re = new RegExp(`(^|[^A-Za-z0-9])${key.replace(/[-#]/g, '[-_#]?')}($|[^0-9])`, 'i');
+        return re.test(it.title || '') || re.test(it.branch || '');
+      }
+      return true;
+    });
+    const out = items.map((it) => {
+      const matchingRun = (ciRuns.runs || []).find((r) => !it.branch || !r.branch || r.branch === it.branch) || (ciRuns.runs || [])[0] || null;
+      let ciState = 'unknown';
+      if (matchingRun) {
+        if (matchingRun.conclusion === 'success') ciState = 'green';
+        else if (matchingRun.conclusion === 'failure' || matchingRun.conclusion === 'failed') ciState = 'regression';
+        else ciState = 'pending';
+      }
+      const labels = Array.isArray(it.labels) ? it.labels : [];
+      return {
+        pr: it.number,
+        title: it.title,
+        url: it.url,
+        branch: it.branch,
+        head_sha: it.head_sha || null,
+        draft: Boolean(it.draft),
+        state: it.state || 'OPEN',
+        labels,
+        train: labels.filter((l) => trainLabels.includes(l)),
+        ci: { state: ciState, failed: [] },
+      };
+    });
+    return { provider: effectiveProvider, offline: false, selector, prs: out, known: known.length, train_labels: trainLabels, ...(listed.ok ? {} : { error: listed.error }) };
+  }
+
   const prs = selectPrs(spawn, cwd, sel);
   const out = prs.map((p) => {
     const labels = (p.labels || []).map((l) => l.name || l);

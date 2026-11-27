@@ -969,6 +969,7 @@ function findUnrunFrozenAcceptanceCi(projectRoot, planDoc = null, options = {}) 
   };
   const inferRunner = (cmdOrPath, fileText) => {
     const s = `${cmdOrPath || ''}\n${fileText || ''}`;
+    if (/\bnode\s+--test\b|require\(['"]node:test['"]\)|from\s+['"]node:test['"]/i.test(s)) return 'node-test';
     if (/\bplaywright\b|@playwright\/test/i.test(s)) return 'playwright';
     if (/\bvitest\b|from\s+['"]vitest['"]/i.test(s)) return 'vitest';
     if (/\bjest\b/i.test(s)) return 'jest';
@@ -1060,6 +1061,20 @@ function findUnrunFrozenAcceptanceCi(projectRoot, planDoc = null, options = {}) 
         const excludesInCfg = vitestCfgText && new RegExp(`exclude[^\\]]*${esc}`, 'is').test(vitestCfgText);
         if (!explicitPaths.length && !excludesInCfg && !hasPwCfgFile) return true;
         if (explicitPaths.some((p) => cleanTarget.startsWith(norm(p).replace(/\/+$/, '')))) return true;
+      }
+      if ((runner === 'node-test' || runner === 'unknown') && /\bnode\s+--test\b/i.test(cmdText)) {
+        const cleanParent = path.posix.dirname(cleanTarget);
+        if (cleanParent && cleanParent !== '.' && new RegExp(`(?:^|[\\s"'=/:])${cleanParent.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:$|[/\\s"'])`, 'i').test(cmdText)) {
+          return true;
+        }
+      }
+      // OXB-222-07: inspect local Node test runner scripts invoked by package.json (e.g. `node scripts/quality-check.cjs test-root`)
+      for (const m of cmdText.matchAll(/\bnode\s+["']?([^\s"']+\.[cm]?js)["']?/gi)) {
+        const scriptRel = norm(m[1]);
+        const scriptText = readFile(scriptRel);
+        if (scriptText && new RegExp(`(?:^|[\\s"'=/:\\\\])${esc}(?:$|[/\\s"'\\\\])`, 'i').test(scriptText.replace(/\\/g, '/'))) {
+          return true;
+        }
       }
     }
     return false;

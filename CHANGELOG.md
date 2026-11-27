@@ -4,6 +4,94 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.22.2] — 2026-11-27
+
+Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-37`..`OB-60`, 9 fases `F1`–`F9`, 21 entregas + `RFC-1`) incorporando os achados de uso real no OXESpace `v1.6.3`, as fricções catalogadas no bench `v1.22.0`, gates mecânicos de qualidade de specs/cards, onboarding agnóstico multi-CI/multi-ALM com auto-proposta de config, higiene operacional segura de worktrees, `runtime verify` paralelo + cache incremental, coordenação multi-agente local, reavaliação contínua, `CiAdapter` multi-provedor e roteamento empírico de modelos (`OXB-222-01`..`OXB-222-21`).
+
+### Paridade pré-push, contexto compacto & coordenação de recursos (`OB-40`..`OB-43`, ADR `D-7`)
+
+- **Gates path-aware e disparo de `preflight.triggers` no `runtime verify` (`OB-40`):** `phase_gates` agora aceita `paths`/`globs` (disparando apenas quando `git diff` toca caminhos compatíveis, com fallback seguro quando não há base de diff); `runRuntimeVerify` incorpora `preflight.triggers` automaticamente antes do primeiro push; `bin/lib/oxe-preflight.cjs` exporta `getChangedFiles`/`resolveDiffBase` e `suggestPathGates(projectRoot)`.
+- **Saída `--json` compacta por padrão (`< 4 KB`) + `--summary` e `--full` (`OB-41`):** `runtime verify --json` / `--summary` grava o relatório completo em `.oxe/runs/<run_id>/verify-full.json` e imprime veredito enxuto sem truncamento de terminal nem poluição de banner; `plan lint --json` limita avisos a 25 com resumo de `suite_impact`; `status --json` omite `releaseReadiness.manifest` bruto por padrão (`--full` devolve payload completo em todos).
+- **Coordenação atômica de migrações e pinos de versão (`sync.version_pins`, `OB-42`):** `bin/lib/oxe-sync.cjs` adiciona `electron/main/db/migrations` a `DEFAULT_MIGRATION_DIRS`, implementa `planVersionPinSync` com atualização atômica em ordem reversa de offset e `finalizePromotedWorktree` dispara `syncSequentialResources` automaticamente durante `runtime promote`.
+- **Evolução auditada de escopo pós-CI (`plan scope add --auto-cr`, `OB-43`):** `oxe-cc plan scope add` aceita `--auto-cr`, `--task`, `--add-file` e `--session`, valida guarda de teste congelado antes de criar o CR, reabre tarefas `done` com evento `TaskReopenedForScope` e atualiza `PLAN.json` + `IMPLEMENTATION-PACK.json` atomicamente.
+
+### Ergonomia de descoberta, confiabilidade Windows & governança de sessão (`OB-44`..`OB-46`)
+
+- **Grill unificado e importação em lote (`OB-44`):** `oxe-cc grill import --from <briefing.md|json>` importa fatos, perguntas e respostas preservando confirmações estritamente como `unconfirmed` (nunca auto-confirma nem fecha); `oxe-cc grill promote --card <KEY>` promove grills de `.oxe/alm/grill/` para `.oxe/grill/`; `spec check --card <KEY>` lê diretamente o grill do card e `grill start --card` emite `card_notice`.
+- **Confiabilidade Windows/CLI e ergonomia `plan build` (`OB-45`):** `commitExactContent` substitui o loop per-file por um único `git update-index --index-info` com retry de `index.lock`; `runtimeProgramClose` reutiliza cache de `complexityAlarms`; `oxe-plan-build.cjs` infere membros de `const mod = require(...)` em CommonJS e preserva `symbols` do `role.json`; `origin.allow_no_alm_quick` libera `quick` sem `OXE-Card` mantendo bloqueio de commits comuns.
+- **Resolução de sessão, preservação de ADRs, `suite_impact`, `plan mutate` e LF (`OB-46`):** `prd lint --session` resolve `.oxe/sessions/<id>/PRD.md`; `decision add` preserva ADRs raiz `D-1..D-N` sem sobrescrever; `oxe-suite-impact.cjs` elimina falso positivo `unrun_acceptance_ci` para `node --test` / `scripts/quality-check.cjs`; `oxe-plan-mutate.cjs` prioriza mutantes nas linhas alteradas (`prioritizeMutants`); `packages/runtime/tsconfig*.json` fixa `"newLine": "lf"`.
+
+### Telemetria offline de CI, discovery nos workflows & corte `1.22.2` (`OB-47`..`OB-49`)
+
+- **Scorecard offline de CI e leadtime (`runtime scorecard --with-ci`, `OB-47`):** `computeLeadtimeAndCiMetrics` em `bin/lib/oxe-scorecard.cjs` calcula `first_pass_ci_green_rate`, `ci_rework_cycles` e `leadtime_breakdown` (`plan_to_verify_ms`, `verify_to_close_ms`, `post_verify_share_pct`) 100% offline a partir de `ci.ndjson` e `events.ndjson`, anexado sob `ci_telemetry` com `--with-ci` sem alterar o contrato padrão.
+- **Discovery nos workflows & detecção de vazamento `stripEnvPrefixes` (`OB-48`):** `oxe-cc doctor --project` reporta `leaked_env` (somente nomes) e emite aviso não-bloqueante quando variáveis do shell coincidem com `stripEnvPrefixes`; `oxe/workflows/lean/execute.md`, `oxe/workflows/ship.md` e `oxe/templates/CONFIG.md` documentam as novas capacidades da `1.22.2`.
+- **ADR `D-7` e sincronização `1.22.2` (`OB-49`):** decisão arquitetural formalizada em `docs/adr/D-7-*.md` preservando `D-1..D-6`, com versão `1.22.2` sincronizada nas 5 fontes.
+
+### Gates mecânicos de qualidade de specs e cards no upstream (`OB-50`, `RFC-1`)
+
+- **Validação mecânica no `alm refine lint`/`apply` e `spec check` (`OB-50`):** `oxe-alm-refine.lintSpec` agora valida no disco paths/ADRs citados em `Referências` e `Arquitetura e fluxo` (respeitando `(novo)`), alerta símbolos citados como existentes ausentes no arquivo e alerta cards `story`/`task` "combo" pouco coesos; `oxe-spec-check.checkSpec` alerta SPEC sem seção de `Bordas`/`Proibições`, critérios `A*` extensos (`> 320` chars) e reprova referências a ADRs/workflows inexistentes; `oxe-plan-build.cjs` corrige inferência CJS para ignorar strings/comentários (ex.: `'.../oxe-alm-refine.cjs'` não gera falso símbolo `cjs`).
+
+### Onboarding agnóstico multi-CI e multi-ALM (`OB-51`)
+
+- **Comando `oxe-cc onboard [--json] [--write]` (`bin/lib/oxe-onboard.cjs`, `OB-51`):** gera dossiê 100% read-only e offline para novos agentes ou desenvolvedores, adaptando-se de forma agnóstica a GitHub Actions, GitLab CI, Azure Pipelines, Bitbucket Pipelines, CircleCI, Jenkins ou operação local, e a Jira, Azure DevOps, provedor customizado ou operação sem ALM — cruzando checks do CI contra `phase_gates`/`preflight.triggers` locais e reportando `leaked_env` sem jamais expor valores de segredos.
+
+### Higiene operacional segura de worktrees (`OB-52`)
+
+- **Proteção de destinos de junctions NTFS, worktrees aninhados, `doctor --project`/`onboard` e `worktree.auto_gc` (`OB-52`):**
+  - `bin/lib/oxe-worktree-gc.cjs` protege por fecho transitivo qualquer worktree cujo diretório ou `node_modules` seja destino de junction/symlink usado por worktrees mantidas (`reason: "junction_target_in_use"`, `dependents`), desfaz junctions rasas (`depth <= 3`) antes de remover, sinaliza `has_real_node_modules` e `nested_agent`, e aceita `--include-nested` e `--ignore-agent-settings` (`.claude/worktrees/*` com apenas `.claude/settings.local.json` modificado).
+  - `oxe-cc doctor --project` (`bin/lib/oxe-project-env.cjs`) e `oxe-cc onboard` (`bin/lib/oxe-onboard.cjs`) reportam `worktrees` (`summarizeWorktreeHygiene`) com aviso não-bloqueante acima de `worktree.warn_above` (padrão `5`, silenciável por `worktree.hygiene: false`).
+  - `runtimeProgramClose` (`bin/lib/oxe-operational.cjs`) executa `runPostCloseWorktreeHygiene` conforme `worktree.auto_gc` (`"warn"` padrão, `"prune"`, `"apply"` ou `false`) e expõe `runtimeWorktreeHygiene` no SDK.
+
+### Velocidade, sessão única, segurança git & modularização Strangler Fig Fatia 2 (`OB-53`..`OB-55`, ADR `D-6`)
+
+- **Sessão unificada, proteção contra `$HOME/.git` e `verify.allow_oxe_refs` (`OB-53`):** `resolveEffectiveSession` unifica resolução da sessão ativa em `spec`/`program`/`prd` (com busca direta em `sessionRoot/SPEC.md` e `ROADMAP.md`); `bin/lib/oxe-git-root.cjs` (`resolveProjectGitRoot`, `detectHomeGitHazard`) impede herança acidental de `$HOME/.git` em pastas temporárias e avisa em `doctor --project`; `verify.allow_oxe_refs: true` elimina falso positivo `oxe_internal_reference` em projetos que manipulam `.oxe/`.
+- **Pool paralelo e cache incremental seguro no `runtime verify` (`OB-54`):** `packages/runtime/src/verification/verification-compiler.ts` executa checks independentes com pool concorrente não-bloqueante (`verify.concurrency`, ordem determinística preservada) e `bin/lib/oxe-verify-cache.cjs` armazena passes verdes válidos por `(check_id, command, tree_fingerprint)` em `.oxe/runs/verify-regression-cache.json` sem nunca cachear falhas ou arquivos adulterados (ganho medido `~4,6×` no próprio `oxe-build`: `3m50s → 50s`).
+- **Decomposição Strangler Fig Fatia 2 (`OB-55`, ADR `D-6`):** extração de `bin/lib/operational/promote-runtime.cjs` (`-1.089` linhas em `bin/lib/oxe-operational.cjs`) e `bin/lib/commands/spec-program-commands.cjs` (`-290` linhas em `bin/oxe-cc.js`) com 0 ciclos e 0 drift de SDK.
+
+### Coordenação multi-agente local & reavaliação contínua (`OB-56`..`OB-57`)
+
+- **Coordenação multi-agente agnóstica de IDE (`oxe-cc agents`, `OB-56`):** `bin/lib/oxe-agent-coord.cjs` mantém leases com TTL/PID em `<git-common-dir>/oxe/active-agents.json` e inbox cross-worktree em `agent-messages.ndjson`, com subcomandos `register|heartbeat|release|list|collisions|send|inbox`, aviso de colisão de `write_set` no `plan lint` e visibilidade `active_agents` em `status --all-worktrees`.
+- **Reavaliação contínua de solução (`oxe-cc reevaluate`, `OB-57`):** `bin/lib/oxe-reevaluate.cjs` (`reevaluateAgainstBase`, `runtimeReevaluate`) compara commits recentes na base (`--against <ref>`) contra tarefas pendentes do `PLAN.json`, classificando cada tarefa em `no_impact`, `mechanical_sync` (`oxe-cc sync`) ou `contract_drift` (CR focado).
+
+### Agnosticismo fim-a-fim (`CiAdapter`), auto-proposta no `onboard` & roteamento empírico (`OB-58`..`OB-60`)
+
+- **Auto-configuração assistida (`oxe-cc onboard --propose-config [--apply]`, `OB-58`):** `proposeOnboardingConfig` traduz comandos de CI detectados (GitHub/GitLab/Azure/Bitbucket/CircleCI/Jenkins) em proposta declarativa de `phase_gates`, `profile: "lean"` e `worktree.auto_gc` em `--dry-run` padrão (0 escritas) e mescla de forma não-destrutiva em `.oxe/config.json` com `--apply`.
+- **`CiAdapter` provider-agnóstico (`bin/lib/oxe-ci-adapter.cjs`, `OB-59`):** `detectCiProvider`, `resolveCiAdapter`, `inspectCiStatus`, `listReleaseAssets` e `runtimeCiAdapterStatus` abstraem `github` (`gh`), `gitlab` (`glab`), `azure-devops` (`az`) e `local` (100% offline sem `gh`), integrados a `oxe-ship-pr.cjs` e `oxe-release-ops.cjs`.
+- **Roteamento empírico de modelos (`OB-60`):** `computeModelRoutingStats` e `suggestModelHint` em `bin/lib/oxe-scorecard.cjs` expõem `oxe-cc runtime scorecard --with-routing` offline por categoria de tarefa e anotam `suggested_model_hint` + `routing_reason` no `plan build` preservando sempre qualquer `model_hint` explícito do usuário.
+
+---
+
+## [1.22.1] — 2026-11-26
+
+Construída ponta a ponta com o próprio `oxe-build v1.22.0` em perfil `lean` como bench controlado (`OB-21`..`OB-36`, 3 fases `F1`–`F3`, 12 entregas + 1 hotfix P0 descoberto no dogfooding).
+
+### Distribuição, higiene Windows & correções (`OB-25`..`OB-27`, `Q-20261126-0408`)
+
+- **Correção `alm.jira.*` em `bin/lib/oxe-release-ops.cjs` (`OB-25`):** `makeJiraClient` agora resolve o formato canônico `alm.jira.site`/`alm.jira.project` com precedência `options > alm.jira > alm > env`, mantendo compatibilidade total com configs legadas.
+- **Higiene EOL no Windows (`.gitattributes`, `OB-26`):** imposição de `eol=lf` para código, Markdown, JSON, YAML e scripts shell, `eol=crlf` para `.cmd`/`.bat`/`.ps1` e `binary` para `.png`/`.vsix`/`.tgz`, zerando diffs falsos CRLF pós-sync e pós-build.
+- **Publicação automatizada no npm (`.github/workflows/release.yml`, `OB-27`):** job `publish-npm` dependente de `validate` e `create-release`, com `environment: npm-release`, Actions pinadas por SHA, `--provenance --access public` (OIDC Trusted Publishing / fallback `NPM_TOKEN`) e verificação `npm view oxe-cc@${VERSION} version`, documentado em `docs/RELEASE-READINESS.md`.
+- **Correção P0 de ReDoS em `bin/lib/oxe-complexity.cjs` (`Q-20261126-0408`):** eliminou backtracking exponencial em `START_RES[2]` que travava `oxe-cc phase close` em arquivos longos (ex.: `bin/lib/oxe-operational.cjs` caiu de hang infinito para ~212 ms).
+
+### Core 100% agnóstico por presets declarativos (`OB-28`..`OB-30`, ADR `D-5`)
+
+- **Presets declarativos (`bin/lib/oxe-presets.cjs`, `OB-28`):** 4 presets canônicos (`cli`, `web`, `desktop-mobile`, `brand-strict`), `resolvePresetConfig` / `mergePresetIntoConfig`, precedência `config explícita > preset > default agnóstico` e chaves `preset`/`presets` aceitas em `ALLOWED_CONFIG_KEYS`.
+- **Desacoplamento de heurísticas OXESpace (`OB-29`):** `uiCardGaps`, `oxe-ship-pr.cjs` (`inspectRequiredCommitStatuses`), `oxe-env-sanitize.cjs`, `oxe-vitest-batch.cjs` (`verify.noBatchPatterns`) e `oxe-preflight.cjs` passam a ler o preset/config resolvido, preservando 100% de retrocompatibilidade para `brand-strict`, `src/design/targets/` e `area-marca`. Formalizado em `docs/adr/D-5-core-agnostico-vs-presets-declarativos-de-dominio.md`.
+- **Assets de release por preset (`OB-30`):** `checkReleaseReadiness` e `finalizeRelease` em `bin/lib/oxe-release-ops.cjs` adaptam `expectedAssets` ao preset (`cli` não exige `.apk`/`.exe`; `desktop-mobile` e legado mantêm Desktop + Android APK + checksums; `release.expectedAssets` explícito sobrescreve tudo).
+
+### Velocidade de feedback & modularização Strangler Fig Fatia 1 (`OB-31`..`OB-33`, ADR `D-6`)
+
+- **Runner paralelo, `--timings` e `--shard` (`scripts/quality-check.cjs`, `OB-31`):** `test-root` passa a aceitar `--concurrency <N>` (ou `OXE_TEST_CONCURRENCY`, limitado a `<= 4` no Windows por padrão), `--timings [N]`, `--shard <k>/<total>` (particionamento 100% determinístico) e `--dry-run`, com helpers puros exportados sem efeitos colaterais no `require`.
+- **Extração de comandos CLI (`bin/lib/commands/ops-commands.cjs`, `OB-32`):** extraídos `acceptance-audit`, `release-readiness`, `release-finalize`, `preflight`, `sync`, `gc-worktrees`, `worktree`, `session` e `quick` via `oxe-command-registry.cjs`, reduzindo `bin/oxe-cc.js` em 517 linhas líquidas (`10.669 → 10.152`).
+- **Extração Strangler Fig Fatia 1 de `oxe-operational.cjs` (`OB-33`):** criados `bin/lib/operational/child-env.cjs` e `bin/lib/operational/alm-refine-runtime.cjs` com injeção explícita de dependências (0 `require` circular), reduzindo `bin/lib/oxe-operational.cjs` em 783 linhas (`15.949 → 15.166`) mantendo 209/209 exports e 0 drift em `check:sdk-types`. Formalizado em `docs/adr/D-6-decomposicao-strangler-fig-de-oxe-cc-e-oxe-operational.md`.
+
+### Benchmark multi-modelo, multi-stack Python & corte `1.22.1` (`OB-34`..`OB-36`)
+
+- **Split de modelos e ROI em `scripts/reference-projects.cjs` (`OB-34`):** suporte a `--plan-model`, `--execute-model`, `--compare <baseline.json>`, `cost_by_tier`, `turns_by_phase` e função pura `compareReferenceReports(baseline, candidate)` com detecção de regressão de oráculo / `false_green`.
+- **3º projeto de referência em Python 3 stdlib (`pycsv`, `OB-35`):** `scripts/reference-projects/pycsv.cjs` + 11 módulos solução em `scripts/reference-projects/solutions/pycsv/` (2 fases, 10 tarefas congeladas, oráculos `unittest` independentes, zero `pip`, detecção cross-platform `resolvePythonBinary` com skip limpo quando Python < 3.9).
+- **Dependências seguras & sincronização `1.22.1` (`OB-36`):** atualização de `@types/node` (`^18.19.130`), `semver` (`^7.8.6`) e `globals` (`^15.15.0`) preservando `engines.node >= 18.0.0` e `0` vulnerabilidades em `npm audit --omit=dev`.
+
+---
+
 ## [1.22.0] — 2026-11-26
 
 Reúne o que foi feito depois da tag pública `v1.21.2` de 11/11 (parte disso foi registrada no desenvolvimento com o rótulo 1.21.2): jornada guiada, correções do uso real no OXESpace (`v1.5.2`–`v1.6.1`) e dos benches, perfil `lean`, desambiguação executável, força dos testes congelados, e o pacote completo de estabilidade/CI rápido/governança de release (`OXB-G01`..`OXB-G17`) com rastreabilidade de artefatos OXE no `alm refine`.

@@ -218,6 +218,210 @@ function computeScorecard(input = {}) {
   };
 }
 
+function readNdjsonQuiet(file) {
+  try {
+    return fs.readFileSync(file, 'utf8')
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((l) => {
+        try { return JSON.parse(l); } catch { return null; }
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 1.22.2 (OXB-222-08): Offline CI rework & leadtime breakdown from local `.oxe/` records
+ * (`ci.ndjson` + `events.ndjson` / `OXE-EVENTS.ndjson`). Zero network or `gh` calls.
+ *
+ * @param {string} projectRoot
+ * @param {{ activeSession?: string|null, since?: string|null, events?: object[] }} [options]
+ */
+function computeLeadtimeAndCiMetrics(projectRoot, options = {}) {
+  let since = null;
+  if (options.since) {
+    const d = new Date(options.since);
+    if (Number.isNaN(d.getTime())) throw new Error(`scorecard: data --since inválida (${options.since})`);
+    since = d.toISOString();
+  }
+  const after = (ts) => !since || String(ts || '') >= since;
+
+  // 1. Collect CI records from session program dir (when set) and root `.oxe/program/ci.ndjson`
+  const ciCandidates = [];
+  if (options.activeSession) {
+    ciCandidates.push(path.join(projectRoot, '.oxe', options.activeSession, 'program', 'ci.ndjson'));
+  }
+  ciCandidates.push(path.join(projectRoot, '.oxe', 'program', 'ci.ndjson'));
+  const seenCiPaths = new Set();
+  const ciRuns = [];
+  for (const candidate of ciCandidates) {
+    const resolved = path.resolve(candidate);
+    if (seenCiPaths.has(resolved)) continue;
+    seenCiPaths.add(resolved);
+    for (const rec of readNdjsonQuiet(resolved)) {
+      if (rec && typeof rec === 'object' && (!rec.kind || rec.kind === 'ci') && after(rec.at || rec.timestamp)) {
+        ciRuns.push(rec);
+      }
+    }
+  }
+
+  // Group CI runs by phase
+  const ciByPhase = new Map();
+  for (const rec of ciRuns) {
+    const ph = String(rec.phase || 'unknown');
+    if (!ciByPhase.has(ph)) ciByPhase.set(ph, []);
+    ciByPhase.get(ph).push(rec);
+  }
+
+  let firstPassGreenCount = 0;
+  let ciReworkCycles = 0;
+  const phaseCiSummary = new Map();
+  for (const [phase, runs] of ciByPhase.entries()) {
+    const sorted = [...runs].sort((a, b) => String(a.at || a.timestamp || '').localeCompare(String(b.at || b.timestamp || '')));
+    const first = sorted[0];
+    const concl = String((first && (first.conclusion || first.status)) || '').toLowerCase();
+    const firstPassGreen = first
+      ? (first.ok === true
+        || concl === 'success'
+        || concl === 'passed'
+        || concl === 'green'
+        || (!concl && sorted.length === 1))
+      : false;
+    const rework = Math.max(0, sorted.length - 1);
+    if (firstPassGreen) firstPassGreenCount += 1;
+    ciReworkCycles += rework;
+    phaseCiSummary.set(phase, {
+      ci_runs: sorted.length,
+      first_pass_green: firstPassGreen,
+      rework_cycles: rework,
+    });
+  }
+
+  const phasesWithCi = ciByPhase.size;
+  const firstPassRate = phasesWithCi > 0 ? Math.round((firstPassGreenCount / phasesWithCi) * 100) / 100 : null;
+
+  // 2. Collect lifecycle events (passed-in + local ndjson files) and deduplicate
+  const rawEvents = [];
+  if (Array.isArray(options.events)) rawEvents.push(...options.events);
+  const eventCandidates = [];
+  if (options.activeSession) {
+    eventCandidates.push(path.join(projectRoot, '.oxe', options.activeSession, 'events', 'events.ndjson'));
+    eventCandidates.push(path.join(projectRoot, '.oxe', options.activeSession, 'OXE-EVENTS.ndjson'));
+  }
+  eventCandidates.push(path.join(projectRoot, '.oxe', 'events', 'events.ndjson'));
+  eventCandidates.push(path.join(projectRoot, '.oxe', 'OXE-EVENTS.ndjson'));
+  const seenEventPaths = new Set();
+  for (const candidate of eventCandidates) {
+    const resolved = path.resolve(candidate);
+    if (seenEventPaths.has(resolved)) continue;
+    seenEventPaths.add(resolved);
+    rawEvents.push(...readNdjsonQuiet(resolved));
+  }
+
+  const seenEventKey = new Set();
+  const events = [];
+  for (const e of rawEvents) {
+    if (!e || typeof e !== 'object' || !e.type) continue;
+    const ts = String(e.timestamp || e.at || '');
+    if (!after(ts)) continue;
+    const phase = (e.payload && e.payload.phase) || e.phase || '';
+    const status = (e.payload && e.payload.status) || '';
+    const dedupKey = `${e.type}|${ts}|${phase}|${status}|${e.run_id || ''}`;
+    if (seenEventKey.has(dedupKey)) continue;
+    seenEventKey.add(dedupKey);
+    events.push({ ...e, _ts: ts });
+  }
+  events.sort((a, b) => a._ts.localeCompare(b._ts));
+
+  // Build phase windows for inferring phase when events omit payload.phase
+  const phaseWindows = [];
+  for (const e of events) {
+    if (e.type === 'PhaseStarted' && e.payload && e.payload.phase) {
+      phaseWindows.push({ phase: String(e.payload.phase), at: e._ts });
+    }
+  }
+  const inferPhaseAt = (ts) => {
+    let ph = null;
+    for (const w of phaseWindows) {
+      if (w.at <= ts) ph = w.phase;
+      else break;
+    }
+    return ph;
+  };
+
+  const phaseTimes = new Map();
+  const ensurePhaseTime = (ph) => {
+    if (!phaseTimes.has(ph)) phaseTimes.set(ph, { started: null, verified: null, closed: null });
+    return phaseTimes.get(ph);
+  };
+  for (const e of events) {
+    const ms = Date.parse(e._ts);
+    if (Number.isNaN(ms)) continue;
+    const ph = (e.payload && e.payload.phase) ? String(e.payload.phase) : inferPhaseAt(e._ts);
+    if (!ph) continue;
+    const rec = ensurePhaseTime(ph);
+    if (e.type === 'PhaseStarted') {
+      if (rec.started == null || ms < rec.started) rec.started = ms;
+    } else if (e.type === 'VerificationCompleted' && e.payload && (e.payload.status === 'passed' || e.payload.ok === true)) {
+      if (rec.verified == null || ms < rec.verified) rec.verified = ms;
+    } else if (e.type === 'PhaseClosed') {
+      if (rec.closed == null || ms < rec.closed) rec.closed = ms;
+    }
+  }
+
+  const planToVerifySamples = [];
+  const verifyToCloseSamples = [];
+  const totalSamples = [];
+  const allPhases = new Set([...phaseCiSummary.keys(), ...phaseTimes.keys()]);
+  const byPhase = [];
+
+  for (const ph of [...allPhases].sort()) {
+    const ci = phaseCiSummary.get(ph) || { ci_runs: 0, first_pass_green: null, rework_cycles: 0 };
+    const tm = phaseTimes.get(ph) || { started: null, verified: null, closed: null };
+    const p2v = tm.started != null && tm.verified != null && tm.verified >= tm.started ? tm.verified - tm.started : null;
+    const v2c = tm.verified != null && tm.closed != null && tm.closed >= tm.verified ? tm.closed - tm.verified : null;
+    const tot = tm.started != null && tm.closed != null && tm.closed >= tm.started ? tm.closed - tm.started : null;
+    if (p2v != null) planToVerifySamples.push(p2v);
+    if (v2c != null) verifyToCloseSamples.push(v2c);
+    if (tot != null) totalSamples.push(tot);
+    byPhase.push({
+      phase: ph,
+      ci_runs: ci.ci_runs,
+      first_pass_green: ci.first_pass_green,
+      rework_cycles: ci.rework_cycles,
+      plan_to_verify_ms: p2v,
+      verify_to_close_ms: v2c,
+      total_ms: tot,
+    });
+  }
+
+  const avg = (arr) => (arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : null);
+  const avgPlanToVerify = avg(planToVerifySamples);
+  const avgVerifyToClose = avg(verifyToCloseSamples);
+  const avgTotal = avg(totalSamples);
+  const postVerifySharePct = avgPlanToVerify != null && avgVerifyToClose != null && (avgPlanToVerify + avgVerifyToClose) > 0
+    ? Math.round((avgVerifyToClose / (avgPlanToVerify + avgVerifyToClose)) * 1000) / 10
+    : null;
+
+  return {
+    offline: true,
+    total_ci_runs: ciRuns.length,
+    phases_with_ci: phasesWithCi,
+    first_pass_ci_green_rate: firstPassRate,
+    ci_rework_cycles: ciReworkCycles,
+    leadtime_breakdown: {
+      avg_plan_to_verify_ms: avgPlanToVerify,
+      avg_verify_to_close_ms: avgVerifyToClose,
+      avg_total_ms: avgTotal,
+      post_verify_share_pct: postVerifySharePct,
+      phases_measured: Math.max(planToVerifySamples.length, verifyToCloseSamples.length, totalSamples.length),
+    },
+    by_phase: byPhase,
+  };
+}
+
 function scorecardForProject(projectRoot, readEvents, options = {}) {
   const events = typeof readEvents === 'function' ? readEvents() : [];
   let changeLines = [];
@@ -231,4 +435,193 @@ function scorecardForProject(projectRoot, readEvents, options = {}) {
   return computeScorecard({ events, changeLines, ledgers: readLedgers(projectRoot), since: options.since || null });
 }
 
-module.exports = { TARGETS, computeScorecard, scorecardForProject, foldChanges };
+const DOC_CFG_FILE_RE = /\.(md|txt|json|ya?ml|toml|ini|cfg|conf)$|^(docs|\.oxe|\.github)\//i;
+const TEST_ONLY_FILE_RE = /(^|\/)(tests?|__tests__|spec|e2e)\/|\.(test|spec)\.[cm]?[jt]sx?$/i;
+const HEURISTIC_TIER_BY_CATEGORY = Object.freeze({
+  'docs-config': 'fast',
+  'test-only': 'fast',
+  'small-edit': 'balanced',
+  'multi-file-refactor': 'powerful',
+  architecture: 'powerful',
+  general: 'balanced',
+});
+
+/**
+ * 1.22.2 (OXB-222-21): Classifies a task into a coarse routing category from its kind, files and title.
+ */
+function classifyTaskCategory(task = {}) {
+  const kind = String(task.kind || '').toLowerCase();
+  const files = (Array.isArray(task.files) ? task.files : []).map((f) => String(f || '').replace(/\\/g, '/'));
+  const title = String(task.title || '');
+  if (kind === 'test-only' || (files.length > 0 && files.every((f) => TEST_ONLY_FILE_RE.test(f)))) return 'test-only';
+  if (kind === 'config-only' || (files.length > 0 && files.every((f) => DOC_CFG_FILE_RE.test(f)))) return 'docs-config';
+  if (files.length >= 4 || /\b(refactor|refator|migrat|modulariz|strangler|arquitetura|architecture)\b/i.test(title)) return 'multi-file-refactor';
+  return 'small-edit';
+}
+
+/**
+ * 1.22.2 (OXB-222-21): Offline empirical model-routing statistics per task category and tier.
+ * Reads historical `ExecutorUsage`, `RetryScheduled`, and `WorkItemCompleted` events (zero network calls).
+ */
+function computeModelRoutingStats(events = [], options = {}) {
+  let since = null;
+  if (options.since) {
+    const d = new Date(options.since);
+    if (!Number.isNaN(d.getTime())) since = d.toISOString();
+  }
+  const combined = Array.isArray(events) ? [...events] : [];
+  if (options.projectRoot) {
+    const evCandidates = [];
+    if (options.activeSession) {
+      evCandidates.push(path.join(options.projectRoot, '.oxe', options.activeSession, 'events', 'events.ndjson'));
+      evCandidates.push(path.join(options.projectRoot, '.oxe', options.activeSession, 'OXE-EVENTS.ndjson'));
+    }
+    evCandidates.push(path.join(options.projectRoot, '.oxe', 'events', 'events.ndjson'));
+    evCandidates.push(path.join(options.projectRoot, '.oxe', 'OXE-EVENTS.ndjson'));
+    const seenPaths = new Set();
+    for (const c of evCandidates) {
+      const abs = path.resolve(c);
+      if (seenPaths.has(abs)) continue;
+      seenPaths.add(abs);
+      combined.push(...readNdjsonQuiet(abs));
+    }
+  }
+  const seenKey = new Set();
+  const list = [];
+  for (const e of combined) {
+    if (!e || typeof e !== 'object') continue;
+    const ts = String(e.timestamp || e.at || '');
+    if (since && ts < since) continue;
+    const dk = `${e.type || ''}|${e.run_id || ''}|${e.work_item_id || ''}|${ts}|${JSON.stringify(e.payload || {})}`;
+    if (seenKey.has(dk)) continue;
+    seenKey.add(dk);
+    list.push(e);
+  }
+
+  const taskState = new Map();
+  const ensure = (key) => {
+    if (!taskState.has(key)) {
+      taskState.set(key, { category: 'general', firstTier: null, finalTier: null, turns: 0, costUsd: 0, retried: false, completed: false, attempt1: false, tierAttempts: [] });
+    }
+    return taskState.get(key);
+  };
+
+  for (const e of list) {
+    const wid = e.work_item_id || (e.payload && e.payload.task);
+    if (!wid) continue;
+    const key = `${e.run_id || 'default'}::${wid}`;
+    const p = e.payload || {};
+    const st = ensure(key);
+    const cat = p.category || p.task_category || null;
+    if (cat) st.category = String(cat);
+    const tier = p.tier || p.model_tier || p.model_hint || null;
+    if (e.type === 'ExecutorUsage') {
+      if (tier && !st.firstTier) st.firstTier = String(tier);
+      if (tier) st.finalTier = String(tier);
+      st.turns += Number(p.turns) || 0;
+      st.costUsd += Number(p.cost_usd) || 0;
+      if (p.success === false) st.retried = true;
+      st.tierAttempts.push({ tier: String(tier || 'balanced'), success: p.success !== false });
+    } else if (e.type === 'RetryScheduled') {
+      st.retried = true;
+    } else if (e.type === 'WorkItemCompleted') {
+      if (tier && !st.finalTier) st.finalTier = String(tier);
+      if (tier && !st.firstTier) st.firstTier = String(tier);
+      st.completed = true;
+      const attempt = Number(p.attempt_number ?? p.attempt ?? 1);
+      if (attempt === 1 && !st.retried) st.attempt1 = true;
+    }
+  }
+
+  const byCatRaw = new Map();
+  for (const st of taskState.values()) {
+    const cat = st.category || 'general';
+    if (!byCatRaw.has(cat)) byCatRaw.set(cat, []);
+    byCatRaw.get(cat).push(st);
+  }
+
+  const byCategory = {};
+  let totalSamples = 0;
+  for (const [cat, items] of byCatRaw.entries()) {
+    const samples = items.length;
+    totalSamples += samples;
+    const firstPass = items.filter((x) => x.attempt1).length;
+    const firstAttemptRate = samples ? Math.round((firstPass / samples) * 100) / 100 : null;
+    const avgTurns = samples ? Math.round((items.reduce((a, b) => a + b.turns, 0) / samples) * 100) / 100 : 0;
+    const avgCost = samples ? Math.round((items.reduce((a, b) => a + b.costUsd, 0) / samples) * 10000) / 10000 : 0;
+
+    const tierAgg = {};
+    for (const tierName of ['fast', 'balanced', 'powerful']) {
+      const attempts = items.flatMap((x) => x.tierAttempts.filter((a) => a.tier === tierName));
+      if (!attempts.length) continue;
+      const okCount = attempts.filter((a) => a.success).length;
+      tierAgg[tierName] = {
+        attempts: attempts.length,
+        successes: okCount,
+        success_rate: Math.round((okCount / attempts.length) * 100) / 100,
+      };
+    }
+
+    let recommended = HEURISTIC_TIER_BY_CATEGORY[cat] || 'balanced';
+    if (tierAgg.fast && tierAgg.fast.attempts >= 1 && tierAgg.fast.success_rate >= 0.8) {
+      recommended = 'fast';
+    } else if (tierAgg.balanced && tierAgg.balanced.attempts >= 1 && tierAgg.balanced.success_rate < 0.7) {
+      recommended = 'powerful';
+    } else if (tierAgg.balanced && tierAgg.balanced.attempts >= 1 && tierAgg.balanced.success_rate >= 0.8) {
+      recommended = 'balanced';
+    } else if (tierAgg.powerful && tierAgg.powerful.attempts >= 1 && tierAgg.powerful.success_rate >= 0.7) {
+      recommended = 'powerful';
+    }
+
+    byCategory[cat] = {
+      samples,
+      first_attempt_rate: firstAttemptRate,
+      avg_turns: avgTurns,
+      avg_cost_usd: avgCost,
+      tiers: tierAgg,
+      recommended_tier: recommended,
+    };
+  }
+
+  return {
+    offline: true,
+    total_samples: totalSamples,
+    by_category: byCategory,
+  };
+}
+
+/**
+ * Suggests a `model_hint` (`fast` | `balanced` | `powerful`) for a task using empirical stats when
+ * available, falling back deterministically to category heuristics. Never overrides an explicit `model_hint`.
+ */
+function suggestModelHint(task = {}, routingStats = null) {
+  const category = classifyTaskCategory(task);
+  const catStats = routingStats && routingStats.by_category && routingStats.by_category[category];
+  if (catStats && catStats.samples >= 1 && catStats.recommended_tier) {
+    const pct = catStats.first_attempt_rate != null ? `${Math.round(catStats.first_attempt_rate * 100)}%` : 'n/a';
+    return {
+      category,
+      suggested_model_hint: catStats.recommended_tier,
+      routing_reason: `empírico (${category}: ${catStats.samples} amostra(s), first-attempt ${pct})`,
+      source: 'empirical',
+    };
+  }
+  const fallback = HEURISTIC_TIER_BY_CATEGORY[category] || 'balanced';
+  return {
+    category,
+    suggested_model_hint: fallback,
+    routing_reason: `heurístico (${category}, sem amostras históricas suficientes)`,
+    source: 'heuristic',
+  };
+}
+
+module.exports = {
+  TARGETS,
+  computeScorecard,
+  scorecardForProject,
+  foldChanges,
+  computeLeadtimeAndCiMetrics,
+  classifyTaskCategory,
+  computeModelRoutingStats,
+  suggestModelHint,
+};

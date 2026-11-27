@@ -79,7 +79,13 @@ O gate completo roda em Node 20. Um job de compatibilidade separado compila o ru
 
 Em checkout limpo, um único `npm ci` na raiz instala as dependências da raiz, do runtime e da extensão por npm workspaces. Não mantenha lockfiles aninhados: o `package-lock.json` raiz é a fonte única de resolução.
 
-O workflow de release valida a tag, executa os gates, empacota o VSIX e cria a GitHub Release sem publicar no npm. A promoção ao registry é manual e posterior. As GitHub Actions ficam fixadas por SHA, e o Dependabot acompanha as revisões desses SHAs.
+O workflow de release valida a tag, executa os gates, empacota o VSIX, cria a GitHub Release e dispara o job `publish-npm` protegido pelo environment `npm-release`. As GitHub Actions ficam fixadas por SHA, e o Dependabot acompanha as revisões desses SHAs.
+
+### Publicação no npm (OIDC Trusted Publishing / `npm-release`)
+
+- O job `publish-npm` em `.github/workflows/release.yml` exige aprovação no environment `npm-release`, usa `permissions: { contents: read, id-token: write }` e executa `npm publish --provenance --access public --ignore-scripts` (aproveitando o gate já validado pelo job `validate`), conferindo ao final `npm view oxe-cc@<versão> version`.
+- **Configuração única no npmjs.org:** em *Package Settings → Trusted Publisher (GitHub Actions)*, vincule `propagno/oxe-build`, workflow `release.yml` e environment `npm-release`. Alternativamente, configure `NPM_TOKEN` como secret restrito ao environment `npm-release`.
+- Publicação manual local continua suportada via `npm login && npm publish`.
 
 ## Observações operacionais
 

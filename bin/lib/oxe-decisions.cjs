@@ -28,10 +28,14 @@ function list(programDir) {
   return [...byId.values()];
 }
 
-function nextId(existing, phase) {
+function nextId(existing, phase, extraIds = []) {
   const p = phase ? String(phase).toUpperCase().replace(/[^A-Z0-9.]/g, '') : '';
   const re = p ? new RegExp(`^D-${p.replace(/\./g, '\\.')}-(\\d+)$`) : /^D-(\d+)$/;
-  const max = existing.reduce((m, d) => { const hit = re.exec(String(d.id)); return hit ? Math.max(m, Number(hit[1])) : m; }, 0);
+  const allIds = [
+    ...(Array.isArray(existing) ? existing.map((d) => String(d && d.id ? d.id : '')) : []),
+    ...(Array.isArray(extraIds) ? extraIds.map((id) => String(id || '')) : []),
+  ];
+  const max = allIds.reduce((m, id) => { const hit = re.exec(id); return hit ? Math.max(m, Number(hit[1])) : m; }, 0);
   return p ? `D-${p}-${max + 1}` : `D-${max + 1}`;
 }
 
@@ -94,9 +98,11 @@ function add(programDir, input = {}) {
     if (!old) throw new Error(`--supersedes ${supersedes}: decisão inexistente (oxe-cc decision list)`);
     if (old.status && old.status !== 'active') throw new Error(`--supersedes ${supersedes}: a decisão já está ${old.status}`);
   }
+  const knownIds = Array.isArray(input.knownIds) ? input.knownIds.map(String) : [];
+  const existingIdSet = new Set([...existing.map((d) => d.id), ...knownIds]);
   const record = {
     kind: 'decision',
-    id: input.id && DECISION_ID_RE.test(String(input.id)) && !existing.some((d) => d.id === input.id) ? String(input.id) : nextId(existing, input.phase),
+    id: input.id && DECISION_ID_RE.test(String(input.id)) && !existingIdSet.has(String(input.id)) ? String(input.id) : nextId(existing, input.phase, knownIds),
     title,
     text: String(input.text || '').trim() || null,
     phase: input.phase || null,

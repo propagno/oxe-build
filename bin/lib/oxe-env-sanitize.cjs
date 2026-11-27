@@ -13,6 +13,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const presets = require('./oxe-presets.cjs');
 
 const DEFAULT_STRIP_PREFIXES = Object.freeze(['OXESPACE_', 'AI_MEMORY_']);
 const DEFAULT_STRIP_EXACT = Object.freeze(['NODE_TEST_CONTEXT']);
@@ -44,7 +45,11 @@ function resolveEnvSanitizeConfig(projectRootOrCfg) {
     : (projectRootOrCfg && typeof projectRootOrCfg === 'object' ? projectRootOrCfg : {});
   const es = cfg.envSanitize;
   const enabled = es === false || (es && typeof es === 'object' && es.enabled === false) ? false : true;
-  const prefixSet = new Set(enabled ? DEFAULT_STRIP_PREFIXES : []);
+  const presetCfg = presets.resolvePresetConfig(cfg);
+  const basePrefixes = presetCfg.hasExplicitPreset
+    ? (presetCfg.envSanitize && Array.isArray(presetCfg.envSanitize.stripEnvPrefixes) ? presetCfg.envSanitize.stripEnvPrefixes : [])
+    : DEFAULT_STRIP_PREFIXES;
+  const prefixSet = new Set(enabled ? basePrefixes : []);
   const addPrefixes = (arr) => {
     if (!Array.isArray(arr)) return;
     for (const p of arr) {

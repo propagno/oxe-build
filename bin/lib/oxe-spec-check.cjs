@@ -8,6 +8,8 @@
  * covering every criterion. Pure: the caller reads the files.
  */
 
+const fs = require('fs');
+const path = require('path');
 const criteriaIds = require('./oxe-criteria-ids.cjs');
 
 const RISKS = ['P0', 'P1', 'P2', 'P3'];
@@ -204,6 +206,36 @@ function checkSpec(input) {
   const risky = crit.list.filter((c) => c.risk === 'P0' || c.risk === 'P1').map((c) => c.id);
   if (mode !== 'never' && risky.length && !(input.rfcs || []).length) {
     (mode === 'risk' || mode === 'always' ? errors : warnings).push(`critério(s) de risco ${risky.join(', ')} sem RFC — rascunhe a proposta técnica: oxe-cc rfc new --title "…"`);
+  }
+
+  // OXB-222-11: SPEC depth & real-path checks (Bordas/Proibições, overloaded criteria, doc paths on disk)
+  if (crit.list.length) {
+    const cleanSpec = stripMarkdownNoise(specText);
+    if (!/^#{2,3}\s*(?:bordas|proibi[cç][oõ]es|restri[cç][oõ]es|contratos\s+observ[aá]veis|invariantes)/im.test(cleanSpec)) {
+      warnings.push('SPEC sem seção de Bordas/Proibições (ex.: "## Bordas e proibições") — feche limites e casos de erro antes do /oxe-plan');
+    }
+    for (const c of crit.list) {
+      if (c.text && c.text.length > 320) {
+        warnings.push(`${c.id}: critério extenso/sobrecarregado (${c.text.length} chars) — considere dividir em critérios menores e independentes`);
+      }
+    }
+    if (input.projectRoot) {
+      const rootAbs = path.resolve(input.projectRoot);
+      const DOC_PATH_RE = /`((?:docs\/adr|oxe\/workflows|oxe\/templates)\/[^`\r\n*<>]+\.(?:md|json))`/g;
+      const NEW_HINT_RE = /\b(?:novo|nova|criar|a\s+criar|new)\b/i;
+      const seenDocPaths = new Set();
+      let dm;
+      while ((dm = DOC_PATH_RE.exec(cleanSpec))) {
+        const rel = dm[1].trim().replace(/#.*$/, '');
+        if (!rel || seenDocPaths.has(rel) || rel.includes('..')) continue;
+        const after = cleanSpec.slice(dm.index + dm[0].length, dm.index + dm[0].length + 35);
+        if (NEW_HINT_RE.test(after)) continue;
+        seenDocPaths.add(rel);
+        if (!fs.existsSync(path.join(rootAbs, rel))) {
+          errors.push(`referência inexistente na SPEC: \`${rel}\` (verifique o caminho real no repositório)`);
+        }
+      }
+    }
   }
 
   return {

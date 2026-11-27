@@ -18,7 +18,7 @@ const DECISION_RE_KT = /\b(if|for|while|when|catch)\b|&&|\|\||\?:/g;
 const START_RES = [
   /\bfunction\s*\*?\s*([A-Za-z_$][\w$]*)\s*\([^)]*\)[^{;]*\{/g,
   /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*(?::[^=]+)?=>\s*\{/g,
-  /^\s*(?:public|private|protected|static|async|override|suspend|\s)*\b(?!if\b|for\b|while\b|switch\b|when\b|catch\b|return\b)([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*(?::\s*[^{]+)?\{/gm,
+  /^[ \t]*(?:(?:public|private|protected|static|async|override|suspend)[ \t]+)*\b(?!if\b|for\b|while\b|switch\b|when\b|catch\b|return\b)([A-Za-z_$][\w$]*)[ \t]*\([^)\n]*\)[ \t]*(?::[ \t]*[^{\n]+)?\{/gm,
   /\bfun\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)[^{=]*\{/g,
 ];
 

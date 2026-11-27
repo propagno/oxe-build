@@ -15,10 +15,29 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const presets = require('./oxe-presets.cjs');
 
 const DEFAULT_REQUIRED_GATES = Object.freeze(['hml-packaged-pass', 'perf-gate', 'packaged-smoke', 'acceptance']);
 const DEFAULT_READY_STATES = Object.freeze(['homologado', 'done', 'lançado', 'lancado', 'released']);
 const DEFAULT_TARGET_STATE = 'Lançado';
+const DEFAULT_DESKTOP_MOBILE_ASSETS = Object.freeze([
+  { label: 'Desktop installer (.exe/.dmg/.AppImage/.deb)', patterns: ['*.exe', '*.dmg', '*.AppImage', '*.deb', '*.msi'] },
+  { label: 'Android APK (.apk)', patterns: ['*.apk'] },
+  { label: 'Checksums (SHA256SUMS / checksums)', patterns: ['*checksum*', '*sha256*'] },
+]);
+
+function resolveExpectedAssets(cfg = {}) {
+  if (cfg && cfg.release && Array.isArray(cfg.release.expectedAssets)) {
+    return cfg.release.expectedAssets;
+  }
+  const presetCfg = presets.resolvePresetConfig(cfg);
+  if (presetCfg.hasExplicitPreset) {
+    return Array.isArray(presetCfg.release && presetCfg.release.expectedAssets)
+      ? presetCfg.release.expectedAssets
+      : [];
+  }
+  return DEFAULT_DESKTOP_MOBILE_ASSETS;
+}
 
 function readJsonQuiet(file) {
   try { return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null; } catch { return null; }
@@ -45,13 +64,14 @@ function assetMatchesPattern(name, pattern) {
 
 function checkMultiPlatformAssets(assets, cfgRelease = {}) {
   const names = (Array.isArray(assets) ? assets : []).map((a) => (typeof a === 'string' ? a : (a && a.name) || '')).filter(Boolean);
-  const expected = Array.isArray(cfgRelease.expectedAssets) && cfgRelease.expectedAssets.length
-    ? cfgRelease.expectedAssets
-    : [
-      { label: 'Desktop installer (.exe/.dmg/.AppImage/.deb)', patterns: ['*.exe', '*.dmg', '*.AppImage', '*.deb', '*.msi'] },
-      { label: 'Android APK (.apk)', patterns: ['*.apk'] },
-      { label: 'Checksums (SHA256SUMS / checksums)', patterns: ['*checksum*', '*sha256*'] },
-    ];
+  let expected;
+  if (cfgRelease && Array.isArray(cfgRelease.expectedAssets)) {
+    expected = cfgRelease.expectedAssets;
+  } else if (cfgRelease && (cfgRelease.preset || cfgRelease.presets || cfgRelease.release)) {
+    expected = resolveExpectedAssets(cfgRelease);
+  } else {
+    expected = DEFAULT_DESKTOP_MOBILE_ASSETS;
+  }
   const missing = [];
   const matched = [];
   for (const spec of expected) {
@@ -67,15 +87,22 @@ function checkMultiPlatformAssets(assets, cfgRelease = {}) {
 function fetchReleaseAssets(root, tag, options = {}) {
   if (Array.isArray(options.assets)) return { ok: true, tag, assets: options.assets };
   const spawn = options.spawn || spawnSync;
+  const ciAdapter = require('./oxe-ci-adapter.cjs');
+  const explicitProvider = options.provider ? String(options.provider).toLowerCase() : null;
+  const detected = explicitProvider || ciAdapter.detectCiProvider(root);
+  const effectiveProvider = explicitProvider || (['gitlab', 'azure-devops'].includes(detected) ? detected : 'github');
+  if (effectiveProvider !== 'github') {
+    return ciAdapter.listReleaseAssets(root, tag, { ...options, provider: effectiveProvider, spawn });
+  }
   const r = spawn('gh', ['release', 'view', tag, '--json', 'tagName,isDraft,assets'], { cwd: root, encoding: 'utf8', windowsHide: true });
   if (r.status !== 0) {
-    return { ok: false, tag, assets: [], error: String(r.stderr || r.stdout || 'gh release view falhou').trim() };
+    return { ok: false, provider: 'github', tag, assets: [], error: String(r.stderr || r.stdout || 'gh release view falhou').trim() };
   }
   try {
     const j = JSON.parse(String(r.stdout || '{}'));
-    return { ok: true, tag: j.tagName || tag, draft: Boolean(j.isDraft), assets: Array.isArray(j.assets) ? j.assets : [] };
+    return { ok: true, provider: 'github', tag: j.tagName || tag, draft: Boolean(j.isDraft), assets: Array.isArray(j.assets) ? j.assets : [] };
   } catch (err) {
-    return { ok: false, tag, assets: [], error: err.message };
+    return { ok: false, provider: 'github', tag, assets: [], error: err.message };
   }
 }
 
@@ -97,10 +124,11 @@ function validateChecksumsText(checksumsText, assetNames) {
 }
 
 function makeJiraClient(cfg, options = {}) {
-  const alm = cfg && cfg.alm && typeof cfg.alm === 'object' ? cfg.alm : {};
-  const site = String(options.site || alm.site || process.env.JIRA_SITE || '').replace(/\/+$/, '');
-  const project = String(options.project || alm.project || '').trim();
   const env = options.env || process.env;
+  const alm = cfg && cfg.alm && typeof cfg.alm === 'object' ? cfg.alm : {};
+  const almJira = alm.jira && typeof alm.jira === 'object' ? alm.jira : {};
+  const site = String(options.site || almJira.site || alm.site || env.JIRA_SITE || '').trim().replace(/\/+$/, '');
+  const project = String(options.project || almJira.project || alm.project || env.JIRA_PROJECT || '').trim();
   if (typeof options.jiraRequest === 'function') {
     return { configured: true, site, project, request: options.jiraRequest };
   }
@@ -131,7 +159,10 @@ async function checkReleaseReadiness(projectRoot, options = {}) {
   if (!version) throw new Error('informe a versão: oxe-cc release-readiness --version <X.Y.Z>');
   const rootAbs = path.resolve(projectRoot);
   const cfg = options.config || readMergedConfig(rootAbs);
-  const relCfg = cfg.release && typeof cfg.release === 'object' ? cfg.release : {};
+  const relCfg = {
+    ...(cfg.release && typeof cfg.release === 'object' ? cfg.release : {}),
+    expectedAssets: resolveExpectedAssets(cfg),
+  };
   const tag = `v${version}`;
   const blockers = [];
   const warnings = [];
@@ -229,7 +260,10 @@ async function finalizeRelease(projectRoot, options = {}) {
   if (!version) throw new Error('informe a versão: oxe-cc release-finalize --version <X.Y.Z>');
   const rootAbs = path.resolve(projectRoot);
   const cfg = options.config || readMergedConfig(rootAbs);
-  const relCfg = cfg.release && typeof cfg.release === 'object' ? cfg.release : {};
+  const relCfg = {
+    ...(cfg.release && typeof cfg.release === 'object' ? cfg.release : {}),
+    expectedAssets: resolveExpectedAssets(cfg),
+  };
   const tag = `v${version}`;
   const apply = Boolean(options.apply);
   const errors = [];
@@ -318,6 +352,8 @@ async function finalizeRelease(projectRoot, options = {}) {
 
 module.exports = {
   DEFAULT_REQUIRED_GATES,
+  makeJiraClient,
+  fetchReleaseAssets,
   checkMultiPlatformAssets,
   validateChecksumsText,
   checkReleaseReadiness,

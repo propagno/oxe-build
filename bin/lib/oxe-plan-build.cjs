@@ -250,6 +250,22 @@ function importedSymbols(root, testFile, files) {
     const file = resolve(m[2]);
     if (file) for (const n of m[1].split(',').map((x) => x.trim().split(':')[0].trim()).filter(Boolean)) out.push({ name: n, path: norm(file) });
   }
+  // OXB-222-06 / OXB-222-11: infer CJS namespace require() member accesses (`const mod = require('./a.cjs'); mod.fn()`)
+  // Strip comments and string literals before scanning member accesses so e.g. `'.../oxe-alm-refine.cjs'` never matches `refine.cjs`.
+  const codeOnly = text
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/[^\r\n]*/g, ' ')
+    .replace(/(["'`])(?:\\[\s\S]|(?!\1)[^\\])*\1/g, ' ');
+  const BUILTIN_PROPS = new Set(['prototype', 'constructor', 'toString', 'valueOf', 'hasOwnProperty', 'keys', 'values', 'entries', 'length', 'cjs', 'mjs', 'js', 'ts', 'json', 'md']);
+  for (const m of text.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*['"]([^'"]+)['"]\s*\)/g)) {
+    const alias = m[1];
+    const file = resolve(m[2]);
+    if (!file) continue;
+    const accessRe = new RegExp(`(?<![A-Za-z0-9_$-])${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.([A-Za-z_$][\\w$]*)\\b`, 'g');
+    for (const am of codeOnly.matchAll(accessRe)) {
+      if (am[1] && !BUILTIN_PROPS.has(am[1])) out.push({ name: am[1], path: norm(file) });
+    }
+  }
   return out;
 }
 
@@ -286,7 +302,17 @@ function packEntry(root, task, role, frozenFiles, frozenTests) {
   const moves = Array.isArray(role.moves) ? role.moves.map((m) => ({ from: norm(m.from), to: norm(m.to) })) : [];
   const exact = uniq([...(task.files || []).map(norm), ...deleted, ...created, ...edited, ...moves.flatMap((m) => [m.from, m.to])]).filter((f) => !frozenFiles.has(f));
   const symbols = [];
-  for (const t of frozenTests) for (const s of importedSymbols(root, t, exact)) if (!symbols.some((x) => x.name === s.name && x.path === s.path)) symbols.push(s);
+  const pushSymbol = (s) => {
+    if (!s || typeof s !== 'object' || !s.name || !s.path) return;
+    const entrySym = { ...(s.kind ? { kind: String(s.kind) } : {}), name: String(s.name), path: norm(s.path) };
+    if (!symbols.some((x) => x.name === entrySym.name && x.path === entrySym.path)) symbols.push(entrySym);
+  };
+  for (const t of frozenTests) for (const s of importedSymbols(root, t, exact)) pushSymbol(s);
+  // OXB-222-06: preserve explicit symbols declared on tasks in role.json
+  for (const s of Array.isArray(task.symbols) ? task.symbols : []) pushSymbol(s);
+  for (const rt of Array.isArray(role.rawTasks) ? role.rawTasks : []) {
+    for (const s of Array.isArray(rt && rt.symbols) ? rt.symbols : []) pushSymbol(s);
+  }
   const editedClean = edited.filter((f) => !frozenFiles.has(f));
   const symbolsRemoved = [];
   for (const rt of Array.isArray(role.rawTasks) ? role.rawTasks : []) {
@@ -1162,7 +1188,20 @@ function expandRolePaths(root, ref, list) {
   return uniq(expanded);
 }
 
-function build(inputs, ctx = {}) {
+function build(first, second = {}, third = {}) {
+  let rawInputs = first;
+  let ctx = second || {};
+  if (typeof first === 'string' && Array.isArray(second)) {
+    rawInputs = second;
+    ctx = { ...(third || {}), root: first };
+  }
+  const inputs = (Array.isArray(rawInputs) ? rawInputs : []).map((entry, idx) => {
+    if (entry && typeof entry === 'object' && entry.doc && typeof entry.file === 'string') return entry;
+    if (entry && typeof entry === 'object' && Array.isArray(entry.tasks)) {
+      return { file: `${entry.role || `role-${idx + 1}`}.role.json`, doc: entry };
+    }
+    return entry;
+  });
   const root = ctx.root || process.cwd();
   const ref = ctx.ref || 'HEAD';
   const coupledRules = loadCoupledScope(root, ctx);
@@ -1380,6 +1419,27 @@ function build(inputs, ctx = {}) {
       warnings.push(...fsg.fileSizeHeadroomMessages(annotated.findings).warnings);
     }
   } catch { /* */ }
+  // OXB-222-21: annotate empirical/heuristic `suggested_model_hint` + `routing_reason` while preserving any explicit `model_hint`.
+  try {
+    const scorecardMod = require('./oxe-scorecard.cjs');
+    const histEvents = [];
+    const evCandidates = [
+      path.join(root, '.oxe', 'events', 'events.ndjson'),
+      path.join(root, '.oxe', 'OXE-EVENTS.ndjson'),
+    ];
+    for (const evFile of evCandidates) {
+      if (!fs.existsSync(evFile)) continue;
+      for (const line of fs.readFileSync(evFile, 'utf8').split(/\r?\n/).filter(Boolean)) {
+        try { histEvents.push(JSON.parse(line)); } catch { /* skip corrupt */ }
+      }
+    }
+    const routingStats = scorecardMod.computeModelRoutingStats(histEvents);
+    for (const t of plan.tasks) {
+      const suggestion = scorecardMod.suggestModelHint(t, routingStats);
+      t.suggested_model_hint = suggestion.suggested_model_hint;
+      t.routing_reason = suggestion.routing_reason;
+    }
+  } catch { /* sugestão de roteamento auxiliar */ }
   // OXB-C25: the preflight needs `ready: true`; without it, execute stopped on execution_rationality:not_ready with an
   // empty gap list while plan lint said ok. The build's own checks decide it.
   pack.ready = errors.length === 0;
