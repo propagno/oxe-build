@@ -2773,7 +2773,7 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
   npx oxe-cc runtime execute ... [--checkpoint-commits] [--budget-turns N] [--budget-usd X (teto acumulado do run)] [--budget-add-usd X | --budget-add-turns N (mais X sobre o já gasto)] [--budget-reset] [--max-retries N] [--wave N | --mode wave|full] [--strict-external] [--retry-policy-once] [--parallel-mutating [--max-parallel N]] [--json → NDJSON por evento de tarefa]
   (qualquer comando) --plain  saída ASCII sem banner (padrão quando o stdout não é TTY; OXE_PLAIN=0 desliga)
   npx oxe-cc runtime verify [--no-gates]
-  npx oxe-cc runtime scorecard [--since <data>] [--write] [--release-report <arquivo> --name <projeto>] [--json]
+  npx oxe-cc runtime scorecard [--since <data>] [--with-ci] [--write] [--release-report <arquivo> --name <projeto>] [--json]
   npx oxe-cc runtime ci --attach <run-id|url> [--repo owner/repo] [--head <sha>]
   npx oxe-cc runtime signal --from <relatório do HML>|<url de issue>|github:<owner/repo> [--dry-run] [--by <papel>]   (achado → CR na fase dele)
   npx oxe-cc runtime deploy --attach <env> --version <v> --ref <tag|url> [--check "<cmd>"]… [--phase Fn]   (registra e verifica; nunca faz o deploy)
@@ -4494,6 +4494,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--max-parallel' && argv[i + 1]) out.maxParallel = Number(argv[++i]);
     else if (a === '--release-report' && argv[i + 1]) out.releaseReport = String(argv[++i]);
     else if (a === '--since' && argv[i + 1]) out.since = String(argv[++i]);
+    else if (a === '--with-ci') out.withCi = true;
     else if (a === '--name' && argv[i + 1]) out.name = String(argv[++i]);
     else if (a === '--max-retries' && argv[i + 1]) out.maxRetries = Number(argv[++i]);
     else if (a === '--force') out.force = true;
@@ -6736,7 +6737,13 @@ async function runRuntime(opts) {
   }
 
   if (opts.action === 'scorecard') {
-    const card = oxeOperational.runtimeScorecard(opts.dir, activeSession, { write: Boolean(opts.writeReport), releaseReport: opts.releaseReport || null, name: opts.name || null, since: opts.since || null });
+    const card = oxeOperational.runtimeScorecard(opts.dir, activeSession, {
+      write: Boolean(opts.writeReport),
+      releaseReport: opts.releaseReport || null,
+      name: opts.name || null,
+      since: opts.since || null,
+      withCi: Boolean(opts.withCi),
+    });
     if (opts.jsonOutput) {
       console.log(JSON.stringify(card, null, 2));
     } else {
@@ -6745,6 +6752,12 @@ async function runRuntime(opts) {
       for (const m of card.metrics) {
         const mark = m.ok === null ? `${c ? dim : ''}·${c ? reset : ''}` : m.ok ? `${c ? green : ''}✓${c ? reset : ''}` : `${c ? red : ''}✗${c ? reset : ''}`;
         console.log(`  ${mark} ${m.metric}: ${m.value == null ? 'sem dados' : m.value} (meta ${m.target})`);
+      }
+      if (card.ci_telemetry) {
+        const ci = card.ci_telemetry;
+        const rate = ci.first_pass_ci_green_rate == null ? 'sem dados' : `${Math.round(ci.first_pass_ci_green_rate * 100)}%`;
+        const post = ci.leadtime_breakdown && ci.leadtime_breakdown.post_verify_share_pct != null ? ` · pós-verify ${ci.leadtime_breakdown.post_verify_share_pct}%` : '';
+        console.log(`  ${c ? dim : ''}CI (offline):${c ? reset : ''} ${ci.total_ci_runs} run(s) · ${ci.phases_with_ci} fase(s) · first-pass green ${rate} · retrabalho CI ${ci.ci_rework_cycles} ciclo(s)${post}`);
       }
       console.log(card.ok ? `  ${c ? green : ''}✓ scorecard dentro das metas${c ? reset : ''}` : `  ${c ? red : ''}✗ scorecard fora das metas${c ? reset : ''}`);
       if (card.path) console.log(`  ${c ? dim : ''}Relatório:${c ? reset : ''} ${card.path}`);

@@ -5440,9 +5440,18 @@ function programCloseGateReasons(projectRoot, activeSession, ctx) {
   return out;
 }
 
-/** `oxe-cc runtime scorecard [--write]` (1.21): maturity metrics from the project's own records. */
+/** `oxe-cc runtime scorecard [--with-ci] [--write]` (1.21/1.22.2): maturity metrics from the project's own records. */
 function runtimeScorecard(projectRoot, activeSession, options = {}) {
-  const card = require('./oxe-scorecard.cjs').scorecardForProject(projectRoot, () => readEvents(projectRoot, activeSession), { since: options.since || null });
+  const scorecardLib = require('./oxe-scorecard.cjs');
+  const events = readEvents(projectRoot, activeSession);
+  const card = scorecardLib.scorecardForProject(projectRoot, () => events, { since: options.since || null });
+  if (options.withCi) {
+    card.ci_telemetry = scorecardLib.computeLeadtimeAndCiMetrics(projectRoot, {
+      activeSession,
+      since: options.since || null,
+      events,
+    });
+  }
   if (options.write) {
     const file = path.join(projectRoot, '.oxe', 'release', 'scorecard-report.json');
     ensureDirForFile(file);

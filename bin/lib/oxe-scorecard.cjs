@@ -218,6 +218,210 @@ function computeScorecard(input = {}) {
   };
 }
 
+function readNdjsonQuiet(file) {
+  try {
+    return fs.readFileSync(file, 'utf8')
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((l) => {
+        try { return JSON.parse(l); } catch { return null; }
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 1.22.2 (OXB-222-08): Offline CI rework & leadtime breakdown from local `.oxe/` records
+ * (`ci.ndjson` + `events.ndjson` / `OXE-EVENTS.ndjson`). Zero network or `gh` calls.
+ *
+ * @param {string} projectRoot
+ * @param {{ activeSession?: string|null, since?: string|null, events?: object[] }} [options]
+ */
+function computeLeadtimeAndCiMetrics(projectRoot, options = {}) {
+  let since = null;
+  if (options.since) {
+    const d = new Date(options.since);
+    if (Number.isNaN(d.getTime())) throw new Error(`scorecard: data --since inválida (${options.since})`);
+    since = d.toISOString();
+  }
+  const after = (ts) => !since || String(ts || '') >= since;
+
+  // 1. Collect CI records from session program dir (when set) and root `.oxe/program/ci.ndjson`
+  const ciCandidates = [];
+  if (options.activeSession) {
+    ciCandidates.push(path.join(projectRoot, '.oxe', options.activeSession, 'program', 'ci.ndjson'));
+  }
+  ciCandidates.push(path.join(projectRoot, '.oxe', 'program', 'ci.ndjson'));
+  const seenCiPaths = new Set();
+  const ciRuns = [];
+  for (const candidate of ciCandidates) {
+    const resolved = path.resolve(candidate);
+    if (seenCiPaths.has(resolved)) continue;
+    seenCiPaths.add(resolved);
+    for (const rec of readNdjsonQuiet(resolved)) {
+      if (rec && typeof rec === 'object' && (!rec.kind || rec.kind === 'ci') && after(rec.at || rec.timestamp)) {
+        ciRuns.push(rec);
+      }
+    }
+  }
+
+  // Group CI runs by phase
+  const ciByPhase = new Map();
+  for (const rec of ciRuns) {
+    const ph = String(rec.phase || 'unknown');
+    if (!ciByPhase.has(ph)) ciByPhase.set(ph, []);
+    ciByPhase.get(ph).push(rec);
+  }
+
+  let firstPassGreenCount = 0;
+  let ciReworkCycles = 0;
+  const phaseCiSummary = new Map();
+  for (const [phase, runs] of ciByPhase.entries()) {
+    const sorted = [...runs].sort((a, b) => String(a.at || a.timestamp || '').localeCompare(String(b.at || b.timestamp || '')));
+    const first = sorted[0];
+    const concl = String((first && (first.conclusion || first.status)) || '').toLowerCase();
+    const firstPassGreen = first
+      ? (first.ok === true
+        || concl === 'success'
+        || concl === 'passed'
+        || concl === 'green'
+        || (!concl && sorted.length === 1))
+      : false;
+    const rework = Math.max(0, sorted.length - 1);
+    if (firstPassGreen) firstPassGreenCount += 1;
+    ciReworkCycles += rework;
+    phaseCiSummary.set(phase, {
+      ci_runs: sorted.length,
+      first_pass_green: firstPassGreen,
+      rework_cycles: rework,
+    });
+  }
+
+  const phasesWithCi = ciByPhase.size;
+  const firstPassRate = phasesWithCi > 0 ? Math.round((firstPassGreenCount / phasesWithCi) * 100) / 100 : null;
+
+  // 2. Collect lifecycle events (passed-in + local ndjson files) and deduplicate
+  const rawEvents = [];
+  if (Array.isArray(options.events)) rawEvents.push(...options.events);
+  const eventCandidates = [];
+  if (options.activeSession) {
+    eventCandidates.push(path.join(projectRoot, '.oxe', options.activeSession, 'events', 'events.ndjson'));
+    eventCandidates.push(path.join(projectRoot, '.oxe', options.activeSession, 'OXE-EVENTS.ndjson'));
+  }
+  eventCandidates.push(path.join(projectRoot, '.oxe', 'events', 'events.ndjson'));
+  eventCandidates.push(path.join(projectRoot, '.oxe', 'OXE-EVENTS.ndjson'));
+  const seenEventPaths = new Set();
+  for (const candidate of eventCandidates) {
+    const resolved = path.resolve(candidate);
+    if (seenEventPaths.has(resolved)) continue;
+    seenEventPaths.add(resolved);
+    rawEvents.push(...readNdjsonQuiet(resolved));
+  }
+
+  const seenEventKey = new Set();
+  const events = [];
+  for (const e of rawEvents) {
+    if (!e || typeof e !== 'object' || !e.type) continue;
+    const ts = String(e.timestamp || e.at || '');
+    if (!after(ts)) continue;
+    const phase = (e.payload && e.payload.phase) || e.phase || '';
+    const status = (e.payload && e.payload.status) || '';
+    const dedupKey = `${e.type}|${ts}|${phase}|${status}|${e.run_id || ''}`;
+    if (seenEventKey.has(dedupKey)) continue;
+    seenEventKey.add(dedupKey);
+    events.push({ ...e, _ts: ts });
+  }
+  events.sort((a, b) => a._ts.localeCompare(b._ts));
+
+  // Build phase windows for inferring phase when events omit payload.phase
+  const phaseWindows = [];
+  for (const e of events) {
+    if (e.type === 'PhaseStarted' && e.payload && e.payload.phase) {
+      phaseWindows.push({ phase: String(e.payload.phase), at: e._ts });
+    }
+  }
+  const inferPhaseAt = (ts) => {
+    let ph = null;
+    for (const w of phaseWindows) {
+      if (w.at <= ts) ph = w.phase;
+      else break;
+    }
+    return ph;
+  };
+
+  const phaseTimes = new Map();
+  const ensurePhaseTime = (ph) => {
+    if (!phaseTimes.has(ph)) phaseTimes.set(ph, { started: null, verified: null, closed: null });
+    return phaseTimes.get(ph);
+  };
+  for (const e of events) {
+    const ms = Date.parse(e._ts);
+    if (Number.isNaN(ms)) continue;
+    const ph = (e.payload && e.payload.phase) ? String(e.payload.phase) : inferPhaseAt(e._ts);
+    if (!ph) continue;
+    const rec = ensurePhaseTime(ph);
+    if (e.type === 'PhaseStarted') {
+      if (rec.started == null || ms < rec.started) rec.started = ms;
+    } else if (e.type === 'VerificationCompleted' && e.payload && (e.payload.status === 'passed' || e.payload.ok === true)) {
+      if (rec.verified == null || ms < rec.verified) rec.verified = ms;
+    } else if (e.type === 'PhaseClosed') {
+      if (rec.closed == null || ms < rec.closed) rec.closed = ms;
+    }
+  }
+
+  const planToVerifySamples = [];
+  const verifyToCloseSamples = [];
+  const totalSamples = [];
+  const allPhases = new Set([...phaseCiSummary.keys(), ...phaseTimes.keys()]);
+  const byPhase = [];
+
+  for (const ph of [...allPhases].sort()) {
+    const ci = phaseCiSummary.get(ph) || { ci_runs: 0, first_pass_green: null, rework_cycles: 0 };
+    const tm = phaseTimes.get(ph) || { started: null, verified: null, closed: null };
+    const p2v = tm.started != null && tm.verified != null && tm.verified >= tm.started ? tm.verified - tm.started : null;
+    const v2c = tm.verified != null && tm.closed != null && tm.closed >= tm.verified ? tm.closed - tm.verified : null;
+    const tot = tm.started != null && tm.closed != null && tm.closed >= tm.started ? tm.closed - tm.started : null;
+    if (p2v != null) planToVerifySamples.push(p2v);
+    if (v2c != null) verifyToCloseSamples.push(v2c);
+    if (tot != null) totalSamples.push(tot);
+    byPhase.push({
+      phase: ph,
+      ci_runs: ci.ci_runs,
+      first_pass_green: ci.first_pass_green,
+      rework_cycles: ci.rework_cycles,
+      plan_to_verify_ms: p2v,
+      verify_to_close_ms: v2c,
+      total_ms: tot,
+    });
+  }
+
+  const avg = (arr) => (arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : null);
+  const avgPlanToVerify = avg(planToVerifySamples);
+  const avgVerifyToClose = avg(verifyToCloseSamples);
+  const avgTotal = avg(totalSamples);
+  const postVerifySharePct = avgPlanToVerify != null && avgVerifyToClose != null && (avgPlanToVerify + avgVerifyToClose) > 0
+    ? Math.round((avgVerifyToClose / (avgPlanToVerify + avgVerifyToClose)) * 1000) / 10
+    : null;
+
+  return {
+    offline: true,
+    total_ci_runs: ciRuns.length,
+    phases_with_ci: phasesWithCi,
+    first_pass_ci_green_rate: firstPassRate,
+    ci_rework_cycles: ciReworkCycles,
+    leadtime_breakdown: {
+      avg_plan_to_verify_ms: avgPlanToVerify,
+      avg_verify_to_close_ms: avgVerifyToClose,
+      avg_total_ms: avgTotal,
+      post_verify_share_pct: postVerifySharePct,
+      phases_measured: Math.max(planToVerifySamples.length, verifyToCloseSamples.length, totalSamples.length),
+    },
+    by_phase: byPhase,
+  };
+}
+
 function scorecardForProject(projectRoot, readEvents, options = {}) {
   const events = typeof readEvents === 'function' ? readEvents() : [];
   let changeLines = [];
@@ -231,4 +435,4 @@ function scorecardForProject(projectRoot, readEvents, options = {}) {
   return computeScorecard({ events, changeLines, ledgers: readLedgers(projectRoot), since: options.since || null });
 }
 
-module.exports = { TARGETS, computeScorecard, scorecardForProject, foldChanges };
+module.exports = { TARGETS, computeScorecard, scorecardForProject, foldChanges, computeLeadtimeAndCiMetrics };
