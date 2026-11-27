@@ -250,6 +250,17 @@ function importedSymbols(root, testFile, files) {
     const file = resolve(m[2]);
     if (file) for (const n of m[1].split(',').map((x) => x.trim().split(':')[0].trim()).filter(Boolean)) out.push({ name: n, path: norm(file) });
   }
+  // OXB-222-06: infer CJS namespace require() member accesses (`const mod = require('./a.cjs'); mod.fn()`)
+  const BUILTIN_PROPS = new Set(['prototype', 'constructor', 'toString', 'valueOf', 'hasOwnProperty', 'keys', 'values', 'entries', 'length']);
+  for (const m of text.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*['"]([^'"]+)['"]\s*\)/g)) {
+    const alias = m[1];
+    const file = resolve(m[2]);
+    if (!file) continue;
+    const accessRe = new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.([A-Za-z_$][\\w$]*)\\b`, 'g');
+    for (const am of text.matchAll(accessRe)) {
+      if (am[1] && !BUILTIN_PROPS.has(am[1])) out.push({ name: am[1], path: norm(file) });
+    }
+  }
   return out;
 }
 
@@ -286,7 +297,17 @@ function packEntry(root, task, role, frozenFiles, frozenTests) {
   const moves = Array.isArray(role.moves) ? role.moves.map((m) => ({ from: norm(m.from), to: norm(m.to) })) : [];
   const exact = uniq([...(task.files || []).map(norm), ...deleted, ...created, ...edited, ...moves.flatMap((m) => [m.from, m.to])]).filter((f) => !frozenFiles.has(f));
   const symbols = [];
-  for (const t of frozenTests) for (const s of importedSymbols(root, t, exact)) if (!symbols.some((x) => x.name === s.name && x.path === s.path)) symbols.push(s);
+  const pushSymbol = (s) => {
+    if (!s || typeof s !== 'object' || !s.name || !s.path) return;
+    const entrySym = { ...(s.kind ? { kind: String(s.kind) } : {}), name: String(s.name), path: norm(s.path) };
+    if (!symbols.some((x) => x.name === entrySym.name && x.path === entrySym.path)) symbols.push(entrySym);
+  };
+  for (const t of frozenTests) for (const s of importedSymbols(root, t, exact)) pushSymbol(s);
+  // OXB-222-06: preserve explicit symbols declared on tasks in role.json
+  for (const s of Array.isArray(task.symbols) ? task.symbols : []) pushSymbol(s);
+  for (const rt of Array.isArray(role.rawTasks) ? role.rawTasks : []) {
+    for (const s of Array.isArray(rt && rt.symbols) ? rt.symbols : []) pushSymbol(s);
+  }
   const editedClean = edited.filter((f) => !frozenFiles.has(f));
   const symbolsRemoved = [];
   for (const rt of Array.isArray(role.rawTasks) ? role.rawTasks : []) {

@@ -42,6 +42,7 @@ function originConfig(config = {}) {
     problems: Array.isArray(ex.commits) ? ex.commits.filter((c) => !(c && /^[0-9a-f]{40}$/i.test(String(c.sha || '')) && String(c.reason || '').trim().length >= 8 && String(c.by || '').trim())).map((c) => `origin.exempt.commits: entrada recusada ${JSON.stringify(c)} — exige sha completo (40 hex), reason (uma frase) e by`) : [],
     commit_msg: ['require', 'append', 'off'].includes(o.commit_msg) ? o.commit_msg : 'require',
     require_card: o.require_card != null ? o.require_card === true : almOn,
+    allow_no_alm_quick: o.allow_no_alm_quick === true,
     base: typeof o.base === 'string' && o.base ? o.base : null,
     // G19: the cut — only commits after it are charged (a date, or a commit: what it already contains is history)
     since: typeof o.since === 'string' && o.since.trim() ? o.since.trim() : null,
@@ -186,8 +187,10 @@ function classify(commit, ocfg, ctx = {}) {
   const q = QUICK_RE.exec(msg);
   if (q) {
     const card = CARD_RE.exec(msg);
-    if (ocfg.require_card && !card) return { ...base, ok: false, kind: 'quick', quick: q[1], reason: 'OXE-Quick sem OXE-Card (com ALM, o quick nomeia o card)' };
     const known = typeof ctx.quickExists === 'function' ? ctx.quickExists(q[1]) : null;
+    if (ocfg.require_card && !card && !(ocfg.allow_no_alm_quick && known === true)) {
+      return { ...base, ok: false, kind: 'quick', quick: q[1], reason: 'OXE-Quick sem OXE-Card (com ALM, o quick nomeia o card)' };
+    }
     // OxeSpace 15/11 (#854, coordination): a commit made by `quick commit` (its trailers) whose local record was lost —
     // the commit is OLDER than the first record this checkout keeps, and the quick id's date is not after the commit.
     // A distinct, audited status: neither a pass nor a fail, listed in every report.

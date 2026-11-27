@@ -11989,6 +11989,31 @@ function changedEntriesUnder(projectRoot, files) {
 
 const gitOut = (projectRoot, args, input) => spawnSync('git', args, { cwd: projectRoot, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024, ...(input != null ? { input } : {}) });
 
+const INDEX_LOCK_RE = /index\.lock|Unable to create ['"]?[^'"]*\.lock['"]?|File exists/i;
+function sleepSyncMs(ms) {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(1, Number(ms) || 1));
+  } catch {
+    const end = Date.now() + (Number(ms) || 1);
+    while (Date.now() < end) { /* short backoff fallback */ }
+  }
+}
+
+/**
+ * OXB-222-06: Runs a git command retrying briefly on transient Windows `.git/index.lock` contention.
+ */
+function gitOutRetry(projectRoot, args, input, maxAttempts = 5) {
+  let res = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    res = gitOut(projectRoot, args, input);
+    if (res.status === 0) return res;
+    const errText = `${res.stderr || ''}\n${res.stdout || ''}`;
+    if (!INDEX_LOCK_RE.test(errText) || attempt === maxAttempts) return res;
+    sleepSyncMs(60 * attempt);
+  }
+  return res;
+}
+
 /** A blob for the current file content (stored), or null when the file does not exist. */
 function storeBlob(projectRoot, rel) {
   if (!fs.existsSync(path.join(projectRoot, rel))) return null;
@@ -12074,24 +12099,26 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
   const paths = Object.keys(entries || {});
   if (!paths.length) return { committed: false, reason: 'nada da tarefa para commitar' };
   const oldHead = gitOut(projectRoot, ['rev-parse', 'HEAD']).stdout.trim();
-  const saved = gitOut(projectRoot, ['write-tree']);
+  const saved = gitOutRetry(projectRoot, ['write-tree']);
   if (saved.status !== 0) return { committed: false, failed: true, reason: `índice com conflito: ${saved.stderr.trim()}` };
   const restore = () => {
-    gitOut(projectRoot, ['read-tree', saved.stdout.trim()]);
+    gitOutRetry(projectRoot, ['read-tree', saved.stdout.trim()]);
     // these paths in the index follow the (new) HEAD, so nothing appears staged/reverted
     const known = paths.filter((p) => gitOut(projectRoot, ['ls-files', '--error-unmatch', '--', p]).status === 0 || gitOut(projectRoot, ['cat-file', '-e', `HEAD:${p}`]).status === 0);
-    if (known.length) gitOut(projectRoot, ['reset', '-q', 'HEAD', '--', ...known]);
+    if (known.length) gitOutRetry(projectRoot, ['reset', '-q', 'HEAD', '--', ...known]);
   };
-  const rt = gitOut(projectRoot, ['read-tree', 'HEAD']);
+  const rt = gitOutRetry(projectRoot, ['read-tree', 'HEAD']);
   if (rt.status !== 0) return { committed: false, failed: true, reason: `read-tree falhou: ${rt.stderr.trim()}` };
-  for (const p of paths) {
+  // OXB-222-06: batch all path updates into a single `git update-index --index-info` call (avoids per-file index.lock races on Windows).
+  const indexInfoLines = paths.map((p) => {
     const v = entries[p];
-    const r = v === 'deleted'
-      ? gitOut(projectRoot, ['update-index', '--force-remove', '--', p])
-      : gitOut(projectRoot, ['update-index', '--add', '--cacheinfo', `${modeFor(projectRoot, p)},${v},${p}`]);
-    if (r.status !== 0) { restore(); return { committed: false, failed: true, reason: `update-index ${p}: ${r.stderr.trim()}` }; }
-  }
-  const commit = gitOut(projectRoot, ['commit', '-q', '-F', '-'], message);
+    const cleanPath = String(p).replace(/\\/g, '/');
+    if (v === 'deleted') return `0 0000000000000000000000000000000000000000\t${cleanPath}`;
+    return `${modeFor(projectRoot, cleanPath)} ${v}\t${cleanPath}`;
+  }).join('\n') + '\n';
+  const ui = gitOutRetry(projectRoot, ['update-index', '--index-info'], indexInfoLines);
+  if (ui.status !== 0) { restore(); return { committed: false, failed: true, reason: `update-index --index-info: ${ui.stderr.trim()}` }; }
+  const commit = gitOutRetry(projectRoot, ['commit', '-q', '-F', '-'], message);
   if (commit.status !== 0) {
     restore();
     return { committed: false, failed: true, reason: `git commit falhou: ${String(commit.stderr || commit.stdout).trim().split(/\r?\n/).slice(-8).join(' · ')}`, snapshot: entries };
@@ -13422,9 +13449,11 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     }
     if (sc.require_retro) for (const a of sm.report.retro_open) closeGates.reasons.push(`costura: ação da retro ${a.id} sem evidência (${a.action})`);
   } catch { /* auxiliar */ }
-  // OXB-115: complexity alarms — a proposal always; a block in strict (profile strict or complexity.block).
+  // OXB-115 + OXB-222-06: complexity alarms — compute once and cache for the phase report.
+  let cachedComplexity = null;
   try {
     const cx = runtimeComplexity(projectRoot, activeSession, { phase: phase.id });
+    cachedComplexity = cx;
     if (cx.block) for (const a of cx.alarms.slice(0, 10)) closeGates.reasons.push(`complexidade: ${a.name} (${a.file}:${a.line}) ${a.before == null ? 'nova' : a.before}→${a.after} — veja .oxe/REFACTOR-PROPOSALS.md`);
   } catch { /* auxiliar */ }
   // OXB-110: open defects (stubs, TODO/FIXME, skipped tests, verify missing, open signal/standing CRs) block the close
@@ -13615,8 +13644,10 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     const crsR = require('./oxe-change.cjs').listChanges(paths.programDir).filter((cr) => !cr.phase || cr.phase === phase.id);
     let defectsReg = null;
     try { defectsReg = require('./oxe-open-defects.cjs').read(projectRoot); } catch { defectsReg = null; }
-    let cxR = null;
-    try { cxR = require('./oxe-complexity.cjs').complexityAlarms(projectRoot, phase.base_commit, readProjectConfig(projectRoot) || {}); } catch { cxR = null; }
+    let cxR = cachedComplexity;
+    if (!cxR) {
+      try { cxR = runtimeComplexity(projectRoot, activeSession, { phase: phase.id }); } catch { cxR = null; }
+    }
     let scoreR = null;
     try { scoreR = require('./oxe-scorecard.cjs').scorecardForProject(projectRoot, () => readEvents(projectRoot, activeSession)); } catch { scoreR = null; }
     const tasksR = ((docR && docR.tasks) || []).filter(Boolean);
