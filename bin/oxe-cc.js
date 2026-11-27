@@ -8001,6 +8001,7 @@ async function main() {
       else if (a === '--ears') o.ears = true;
       else if (a === '--strict-ears') { o.ears = true; o.strictEars = true; }
       else if (a === '--by' && argv[i + 1]) o.by = String(argv[++i]);
+      else if (a === '--card' && argv[i + 1]) o.card = String(argv[++i]);
       else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
       else if (!a.startsWith('-')) o.dir = path.resolve(a);
       else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
@@ -9296,7 +9297,7 @@ async function main() {
   }
 
   if (command === 'grill') {
-    const SUBS = ['start', 'ask', 'answer', 'fact', 'mark', 'defer', 'confirm', 'term', 'conflict', 'resolve', 'status', 'close', 'export'];
+    const SUBS = ['start', 'ask', 'answer', 'fact', 'mark', 'defer', 'confirm', 'term', 'conflict', 'resolve', 'status', 'close', 'export', 'promote', 'import'];
     const sub = SUBS.includes(argv[0]) ? argv[0] : 'status';
     const o = { dir: process.cwd(), json: false };
     const positional = [];
@@ -9304,12 +9305,13 @@ async function main() {
       const a = argv[i];
       if (a === '--json') o.json = true;
       else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
-      else if (['--type', '--title', '--branch', '--question', '--options', '--recommended', '--why', '--affects', '--depends', '--choice', '--text', '--by', '--source', '--reason', '--definition', '--synonyms', '--note', '--card', '--playback'].includes(a) && argv[i + 1] != null) o[a.slice(2)] = String(argv[++i]);
+      else if (['--type', '--title', '--branch', '--question', '--options', '--recommended', '--why', '--affects', '--depends', '--choice', '--text', '--by', '--source', '--reason', '--definition', '--synonyms', '--note', '--card', '--playback', '--from'].includes(a) && argv[i + 1] != null) o[a.slice(2)] = String(argv[++i]);
       else if (['--case', '--need'].includes(a) && argv[i + 1] != null) (o[a.slice(2)] = o[a.slice(2)] || []).push(String(argv[++i]));
       else if (a === '--decision') o.decision = true;
       else if (a === '--stale') o.stale = true;
       else if (a === '--late') o.late = argv[i + 1] && !argv[i + 1].startsWith('-') ? String(argv[++i]) : true;
       else if (a === '--restart') o.restart = true;
+      else if (a === '--force') o.force = true;
       else if (a === '--empty') o.empty = true;
       else if (a === '--none') o.none = true;
       else if (!a.startsWith('-')) positional.push(a);
@@ -9319,12 +9321,18 @@ async function main() {
     else if (sub === 'confirm') o.branch = positional[0] || o.branch;
     else if (sub === 'term') o.term = positional[0];
     else if (sub === 'conflict') o.ids = positional[0];
+    else if (sub === 'promote' && positional[0] && !o.card) o.card = positional[0];
+    else if (sub === 'import' && positional[0] && !o.from) o.from = positional[0];
     else if (sub === 'start' && positional[0] && !o.type) o.type = positional[0];
     try {
       const out = oxeOperational.runtimeGrill(o.dir, null, { action: sub, ...o });
       if (o.json) { console.log(JSON.stringify({ oxeGrillSchema: 1, ...out }, null, 2)); return; }
       const g = out.grill || out;
-      if (sub === 'ask') {
+      if (sub === 'promote') {
+        console.log(`  ${green}✓${reset} grill do card ${out.card} promovido de ${out.from} para ${out.to}`);
+      } else if (sub === 'import') {
+        console.log(`  ${green}✓${reset} grill importado (${out.type}): ${out.facts_imported} fato(s), ${out.questions_imported} pergunta(s), ${out.terms_imported} termo(s) — ramos mantidos unconfirmed (confirme via playback)`);
+      } else if (sub === 'ask') {
         // Bench B05: in headless/SDK runs the human never saw the question (it lived only in the argv); the block below
         // is what the agent repeats in its reply, verbatim.
         console.log(`  ${green}?${reset} ${out.id} (${out.branch}) registrada. Mostre ao usuário, na sua resposta:`);
@@ -9355,6 +9363,9 @@ async function main() {
         for (const b of g.branches) console.log(`    ${b.confirmed ? `${green}✓${reset}` : b.open.length ? `${yellow}?${reset}` : '·'} ${b.title.padEnd(40)} ${b.decided} decidida(s)${b.open.length ? ` · aberta(s): ${b.open.join(', ')}` : ''}${b.blocking ? '' : ` ${dim}(opcional)${reset}`}`);
         if (g.next_branch) console.log(`  próximo ramo: ${g.next_branch}`);
         if (!g.closed && g.blockers.length && sub === 'status') console.log(`  falta para fechar: ${g.blockers.length} item(ns) (oxe-cc grill status --json)`);
+      }
+      if (out.card_notice) {
+        console.log(`  ${yellow}!${reset} ${out.card_notice}`);
       }
     } catch (err) {
       console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);

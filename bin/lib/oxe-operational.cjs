@@ -1510,10 +1510,42 @@ function grillExportDecisions(projectRoot, activeSession, decisions, by, card = 
  */
 function runtimeGrill(projectRoot, activeSession, options = {}) {
   const lib = require('./oxe-grill.cjs');
-  const gp = grillPaths(projectRoot, activeSession, options.card);
   const a = options.action || 'status';
+  if (a === 'promote') {
+    if (!options.card) throw new Error('grill promote precisa do card: oxe-cc grill promote --card <KEY>');
+    const cardKey = String(options.card).toUpperCase();
+    const srcGp = grillPaths(projectRoot, activeSession, cardKey);
+    const srcFile = path.join(srcGp.dir, 'grill.ndjson');
+    if (!fs.existsSync(srcFile)) throw new Error(`grill do card ${cardKey} não encontrado em ${path.relative(projectRoot, srcFile).replace(/\\/g, '/')}`);
+    const dstGp = grillPaths(projectRoot, activeSession, null);
+    const dstFile = path.join(dstGp.dir, 'grill.ndjson');
+    if (fs.existsSync(dstFile) && !options.force) {
+      throw new Error(`já existe um grill ativo em ${path.relative(projectRoot, dstFile).replace(/\\/g, '/')} — passe --force para sobrescrever`);
+    }
+    fs.mkdirSync(dstGp.dir, { recursive: true });
+    fs.copyFileSync(srcFile, dstFile);
+    const s = lib.writeProjection(dstGp.dir);
+    appendEvent(projectRoot, activeSession, { type: 'GrillPromoted', payload: { card: cardKey, to: path.relative(projectRoot, dstGp.dir).replace(/\\/g, '/') } });
+    const view = { type: s.type, closed: s.closed, next_branch: s.next_branch, blockers: s.blockers, branches: s.branches.map((b) => ({ id: b.id, title: b.title, blocking: b.blocking, decided: b.decided, open: b.open, deferred: b.deferred, confirmed: b.confirmed, ready: b.ready, asks: b.asks })), file: path.relative(projectRoot, path.join(dstGp.dir, 'GRILL.md')).replace(/\\/g, '/') };
+    return {
+      promoted: true,
+      card: cardKey,
+      from: path.relative(projectRoot, srcGp.dir).replace(/\\/g, '/'),
+      to: path.relative(projectRoot, dstGp.dir).replace(/\\/g, '/'),
+      grill: view,
+    };
+  }
+  const gp = grillPaths(projectRoot, activeSession, options.card);
   let out;
-  if (a === 'start') {
+  if (a === 'import') {
+    if (!options.from) throw new Error('grill import precisa do arquivo: oxe-cc grill import --from <briefing.json>');
+    const absFrom = path.resolve(projectRoot, String(options.from));
+    if (!fs.existsSync(absFrom)) throw new Error(`arquivo de briefing não encontrado: ${options.from}`);
+    let parsed;
+    try { parsed = JSON.parse(fs.readFileSync(absFrom, 'utf8')); } catch (err) { throw new Error(`briefing JSON inválido (${options.from}): ${err && err.message ? err.message : err}`); }
+    out = lib.importBriefing(gp.dir, parsed, { restart: Boolean(options.restart), source: path.basename(absFrom), by: options.by || null, type: options.type || null, title: options.title || null });
+    appendEvent(projectRoot, activeSession, { type: 'GrillImported', payload: { from: path.relative(projectRoot, absFrom).replace(/\\/g, '/'), facts: out.facts_imported, questions: out.questions_imported, terms: out.terms_imported, card: gp.card || null } });
+  } else if (a === 'start') {
     // with --card and no --type: the card's own kind, from the refine collect (.oxe/alm/refine/<KEY>.json)
     let type = options.type;
     if (!type && options.card) { try { type = JSON.parse(fs.readFileSync(path.join(projectRoot, '.oxe', 'alm', 'refine', `${String(options.card).toUpperCase()}.json`), 'utf8')).kind || null; } catch { type = null; } }
@@ -1537,10 +1569,16 @@ function runtimeGrill(projectRoot, activeSession, options = {}) {
     const decisions = grillExportDecisions(projectRoot, activeSession, s.decisions, options.by, gp.card || null);
     out = { ...(out || {}), glossary: glossary ? path.relative(projectRoot, glossary.file).replace(/\\/g, '/') : null, decisions_recorded: decisions, assumptions: s.assumptions };
     if (a === 'close') appendEvent(projectRoot, activeSession, { type: 'GrillClosed', payload: { decisions: s.decisions.length, terms: s.terms.length, assumptions: s.assumptions.length } });
-  } else if (a !== 'status') throw new Error(`grill ${a}: ação desconhecida (start | ask | answer | fact | defer | confirm | term | conflict | resolve | status | close | export)`);
+  } else if (a !== 'status') throw new Error(`grill ${a}: ação desconhecida (start | ask | answer | fact | defer | confirm | term | conflict | resolve | status | close | export | promote | import)`);
   const s = lib.writeProjection(gp.dir);
   const view = { type: s.type, closed: s.closed, next_branch: s.next_branch, blockers: s.blockers, branches: s.branches.map((b) => ({ id: b.id, title: b.title, blocking: b.blocking, decided: b.decided, open: b.open, deferred: b.deferred, confirmed: b.confirmed, ready: b.ready, asks: b.asks })), file: path.relative(projectRoot, path.join(gp.dir, 'GRILL.md')).replace(/\\/g, '/') };
-  return a === 'status' ? { ...view, examples: s.examples, open_questions: s.questions.filter((q) => q.status === 'open' || q.status === 'reopened'), assumptions: s.assumptions, terms: s.terms } : { ...out, grill: view };
+  const cardNotice = gp.card
+    ? `grill --card ${gp.card} grava em .oxe/alm/grill/${gp.card}/ (não em .oxe/grill/). Use \`oxe-cc spec check --card ${gp.card}\` ou \`oxe-cc grill promote --card ${gp.card}\` para promover ao grill ativo.`
+    : null;
+  const extra = cardNotice ? { card: gp.card, card_notice: cardNotice } : {};
+  return a === 'status'
+    ? { ...view, ...extra, examples: s.examples, open_questions: s.questions.filter((q) => q.status === 'open' || q.status === 'reopened'), assumptions: s.assumptions, terms: s.terms }
+    : { ...out, ...extra, grill: view };
 }
 
 /** Updates the comment of a card that starts with `marker`, or posts it (one comment per card, in place). */
@@ -1628,7 +1666,8 @@ function runtimeSpecCheck(projectRoot, activeSession, options = {}) {
   const prdFile = prdPathFor(projectRoot, activeSession);
   const prdLib = require('./oxe-prd.cjs');
   const grillLib = require('./oxe-grill.cjs');
-  const gp = grillPaths(projectRoot, activeSession);
+  const gp = grillPaths(projectRoot, activeSession, options.card || null);
+  const activeGp = options.card ? grillPaths(projectRoot, activeSession, null) : gp;
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
   const grill = grillLib.readRecords(gp.dir).length ? grillLib.status(gp.dir) : null;
   const out = require('./oxe-spec-check.cjs').checkSpec({
@@ -1638,7 +1677,7 @@ function runtimeSpecCheck(projectRoot, activeSession, options = {}) {
     prdText: readTextIfExists(prdFile) || '',
     lintPrd: prdLib.lintPrd,
     prdRequired: Boolean(config.prd && typeof config.prd === 'object' && config.prd.required === true),
-    glossary: grillLib.readGlossary(gp.glossary),
+    glossary: grillLib.readGlossary(gp.glossary || activeGp.glossary),
     grill,
     fast: Boolean(options.fast),
     decisionSources: require('./oxe-decisions.cjs').list(programDir).map((d) => d.source).filter(Boolean),

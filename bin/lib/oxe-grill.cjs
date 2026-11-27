@@ -342,6 +342,95 @@ function close(dir, input = {}) {
   return { closed: true, decisions: s.decisions.length, assumptions: s.assumptions.length, terms: s.terms.length };
 }
 
+/**
+ * OXB-222-05: Declarative batch import of a structured briefing JSON (facts, questions, optional answers, terms).
+ * Strictly preserves human playback rigor: NEVER emits `confirm` or `close` events regardless of payload fields.
+ */
+function importBriefing(dir, doc, options = {}) {
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
+    throw new Error('grill import: briefing JSON deve ser um objeto { type?, title?, facts?, questions?, terms? }');
+  }
+  const started = start(dir, {
+    type: doc.type || options.type || 'feature',
+    title: doc.title || options.title || null,
+    restart: Boolean(options.restart),
+  });
+  let factsImported = 0;
+  let questionsImported = 0;
+  let answersImported = 0;
+  let termsImported = 0;
+  const defaultSource = options.source || 'briefing';
+
+  for (const rawFact of Array.isArray(doc.facts) ? doc.facts : []) {
+    if (!rawFact || typeof rawFact !== 'object') continue;
+    fact(dir, {
+      branch: rawFact.branch,
+      text: rawFact.text,
+      question: rawFact.question,
+      source: rawFact.source || defaultSource,
+      affects: rawFact.affects,
+      decision: Boolean(rawFact.decision),
+      stale: Boolean(rawFact.stale),
+    });
+    factsImported += 1;
+  }
+
+  for (const rawQ of Array.isArray(doc.questions) ? doc.questions : []) {
+    if (!rawQ || typeof rawQ !== 'object') continue;
+    const asked = ask(dir, {
+      branch: rawQ.branch,
+      question: rawQ.question,
+      options: rawQ.options,
+      recommended: rawQ.recommended,
+      why: rawQ.why,
+      affects: rawQ.affects,
+      depends: rawQ.depends,
+      decision: Boolean(rawQ.decision),
+      case: rawQ.case || rawQ.cases,
+      need: rawQ.need,
+    });
+    questionsImported += 1;
+    if (rawQ.answer != null && String(rawQ.answer).trim() !== '') {
+      const rawAns = String(rawQ.answer).trim();
+      const isChoice = /^(ok|sim|recomendad[ao]|rec|\d+|[a-z]\)?)$/i.test(rawAns);
+      answer(dir, asked.id, {
+        ...(isChoice ? { choice: rawAns } : { text: rawAns }),
+        by: rawQ.by || options.by || 'import',
+        source: rawQ.answer_source || rawQ.source || defaultSource,
+        decision: rawQ.decision,
+      });
+      answersImported += 1;
+    }
+  }
+
+  for (const rawTerm of Array.isArray(doc.terms) ? doc.terms : []) {
+    if (!rawTerm || typeof rawTerm !== 'object') continue;
+    if (rawTerm.none) {
+      term(dir, { none: true });
+    } else {
+      term(dir, {
+        term: rawTerm.term,
+        definition: rawTerm.definition,
+        synonyms: rawTerm.synonyms,
+        source: rawTerm.source || defaultSource,
+      });
+      termsImported += 1;
+    }
+  }
+
+  const ignoredAutoConfirm = Boolean(doc.confirm || doc.confirmed || doc.close || doc.closed);
+  return {
+    imported: true,
+    type: started.type,
+    facts_imported: factsImported,
+    questions_imported: questionsImported,
+    answers_imported: answersImported,
+    terms_imported: termsImported,
+    unconfirmed: true,
+    ...(ignoredAutoConfirm ? { ignored_auto_confirm: true } : {}),
+  };
+}
+
 // ── projections ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 const esc = (s) => String(s == null ? '' : s).replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
@@ -439,6 +528,6 @@ function rfcSuggestion(s, specText = '') {
 }
 
 module.exports = {
-  BRANCHES, BRANCH_IDS, BLOCKING_BY_TYPE, TYPES, dirFor, readRecords, replay, status, start, ask, answer, fact, mark, defer, confirm, term, conflict, resolve, close,
+  BRANCHES, BRANCH_IDS, BLOCKING_BY_TYPE, TYPES, dirFor, readRecords, replay, status, start, ask, answer, fact, mark, defer, confirm, term, conflict, resolve, close, importBriefing,
   renderMarkdown, writeProjection, writeGlossary, readGlossary, dependents, rfcSuggestion,
 };
