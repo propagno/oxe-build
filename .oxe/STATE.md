@@ -11,11 +11,11 @@
 
 ## Programa
 
-▶ F1 Hardening de Release/CI, Doctor CI-Parity & Fim do Flake de PID (verifying) · · F2 Fechamento dos Loops Automáticos da 1.22.2 (pending) · · F3 Ecossistema Aberto — Servidor MCP Nativo & ALM GitHub/GitLab Issues (pending) · · F4 Dashboard v2 Multi-Agente, Strangler Fig Fatia 3 & Corte `1.23.0` (pending)
+✓ F1 Hardening de Release/CI, Doctor CI-Parity & Fim do Flake de PID (closed) · ▶ F2 Fechamento dos Loops Automáticos da 1.22.2 (verifying) · · F3 Ecossistema Aberto — Servidor MCP Nativo & ALM GitHub/GitLab Issues (pending) · · F4 Dashboard v2 Multi-Agente, Strangler Fig Fatia 3 & Corte `1.23.0` (pending)
 
 ## Run
 
-- **run:** `oxe-run-mwzcscrb-8evsrp` · **status:** completed · checks 13/13 verdes
+- **run:** `oxe-run-mwzddxra-8xawrr` · **status:** completed · checks 22/22 verdes
 
 ## Próximo passo sugerido
 
@@ -33,13 +33,13 @@
 ### Fase atual
 
 - **Status da run:** completed
-- **Run ID:** oxe-run-mwzcscrb-8evsrp
+- **Run ID:** oxe-run-mwzddxra-8xawrr
 - **Modo:** completo
 
 ### Runtime operacional
 
 - **runtime_status:** completed
-- **active_run_ref:** oxe-run-mwzcscrb-8evsrp
+- **active_run_ref:** oxe-run-mwzddxra-8xawrr
 
 ### Progresso
 

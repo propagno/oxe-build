@@ -1,37 +1,36 @@
 # PLAN
 
-> Gerado por `oxe-cc plan build` a partir de F1.role.json. A fonte é o PLAN.json; este arquivo é a leitura humana.
+> Gerado por `oxe-cc plan build` a partir de F2.role.json. A fonte é o PLAN.json; este arquivo é a leitura humana.
 
 ## Onda 1
 
-### T1 — OB-62: Hardening CI/release.yml (publish-npm OIDC Node 24, retry npm view, Actions SHA-pinadas)
+### T1 — OB-65: Auto-lease multi-agente em quick, runtime commit-task e runtime execute
 
-- **Arquivos prováveis:** `.github/workflows/release.yml`, `.github/workflows/ci.yml`
+- **Arquivos prováveis:** `bin/lib/oxe-agent-coord.cjs`, `bin/lib/oxe-quick.cjs`, `bin/lib/oxe-operational.cjs`, `bin/lib/oxe-project-health.cjs`
 - **Depende de:** —
 - **Onda:** 1
-- **Tipo:** config-only
 - **Verificar:**
-  - Comando: `node --test tests/acceptance/oxe-1230-a1-release-ci-hardening.test.cjs`
-- **Aceite vinculado:** A1
+  - Comando: `node --test tests/acceptance/oxe-1230-a4-auto-lease.test.cjs`
+- **Aceite vinculado:** A4
 
 ## Onda 2
 
-### T2 — OB-63: Isolamento .oxe/ em product_package no doctor e gate oxe-cc doctor --ci-parity
+### T2 — OB-66: Integracao automatica de reevaluateAgainstBase no preflight de execute e promote
 
-- **Arquivos prováveis:** `bin/lib/oxe-ci-parity.cjs`, `bin/lib/oxe-project-health.cjs`, `bin/lib/oxe-core-command-handlers.cjs`, `bin/oxe-cc.js`, `bin/lib/oxe-operational.cjs`, `lib/sdk/index.d.ts`
+- **Arquivos prováveis:** `bin/lib/oxe-operational.cjs`, `bin/lib/operational/promote-runtime.cjs`, `bin/lib/oxe-project-health.cjs`
 - **Depende de:** T1
 - **Onda:** 2
 - **Verificar:**
-  - Comando: `node --test tests/acceptance/oxe-1230-a2-doctor-ci-parity.test.cjs`
-- **Aceite vinculado:** A2
+  - Comando: `node --test tests/acceptance/oxe-1230-a5-auto-reevaluate.test.cjs`
+- **Aceite vinculado:** A5
 
 ## Onda 3
 
-### T3 — OB-64: findGuaranteedDeadPid anti-flake PID reuse no Windows e adocao em promote-fixtures
+### T3 — OB-67: Roteamento empirico opt-in models.auto_route consumindo suggested_model_hint
 
-- **Arquivos prováveis:** `bin/lib/oxe-agent-coord.cjs`, `tests/oxe-1212-promote-fixtures.test.cjs`
+- **Arquivos prováveis:** `bin/lib/oxe-model-tiers.cjs`
 - **Depende de:** T2
 - **Onda:** 3
 - **Verificar:**
-  - Comando: `node --test tests/acceptance/oxe-1230-a3-pid-flake-hygiene.test.cjs tests/oxe-1212-promote-fixtures.test.cjs`
-- **Aceite vinculado:** A3
+  - Comando: `node --test tests/acceptance/oxe-1230-a6-auto-route.test.cjs`
+- **Aceite vinculado:** A6
