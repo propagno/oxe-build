@@ -31,6 +31,27 @@ function isPidAlive(pid) {
 }
 
 /**
+ * 1.23.0 (OXB-230-03): Deterministically locates an unused/dead OS PID (`ESRCH`) without
+ * spawning an ephemeral child process (which suffers from aggressive PID reuse on Windows).
+ */
+function findGuaranteedDeadPid(options = {}) {
+  const start = Number.isInteger(options.start) && options.start > 0
+    ? options.start
+    : 200000 + crypto.randomInt(0, 500000);
+  const maxAttempts = Number.isInteger(options.maxAttempts) && options.maxAttempts > 0 ? options.maxAttempts : 500;
+  for (let i = 0; i < maxAttempts; i += 1) {
+    // On Windows PIDs are multiples of 4; stepping by 4 keeps probing well-distributed across OSes.
+    const candidate = start + (i * 4);
+    try {
+      process.kill(candidate, 0);
+    } catch (err) {
+      if (err && err.code === 'ESRCH') return candidate;
+    }
+  }
+  throw new Error('findGuaranteedDeadPid: não foi possível encontrar um PID inativo (ESRCH)');
+}
+
+/**
  * Resolves the shared `<git-common-dir>/oxe` directory for all worktrees of `projectRoot`.
  * When `options.readOnly === true`, never creates directories on disk.
  */
@@ -236,6 +257,7 @@ function readAgentMessages(projectRoot, options = {}) {
 
 module.exports = {
   coordDirOf,
+  findGuaranteedDeadPid,
   registerAgentLease,
   heartbeatAgentLease,
   releaseAgentLease,
