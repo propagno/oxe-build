@@ -40,8 +40,12 @@ describe('A10 — OXB-222-10: ADR D-7 and v1.22.2 synchronized version cut', () 
     assert.match(readme, /\*\*Versão:\*\*\s*`1\.22\.2`/);
     assert.match(changelog, /^[\s\S]{0,400}## \[1\.22\.2\]/);
 
-    // Release consistency module reads matching target version 1.22.2
+    // Release consistency module reads matching target version 1.22.2 with zero version drift blockers
     const readiness = releaseLib.inspectReleaseReadiness(REPO_ROOT, { packageRoot: REPO_ROOT });
-    assert.equal(readiness.targetVersion, '1.22.2');
+    assert.equal(readiness.manifest.versions.rootPackage.version, '1.22.2');
+    assert.ok(
+      !readiness.blockers.some((b) => /diverge da versão raiz/i.test(b)),
+      `expected zero version-drift blockers, got: ${JSON.stringify(readiness.blockers)}`,
+    );
   });
 });
