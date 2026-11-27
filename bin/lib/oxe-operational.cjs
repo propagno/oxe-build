@@ -15187,6 +15187,13 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
   return summary;
 }
 
+function runtimeOnboard(projectRoot, activeSession, options = {}) {
+  return require('./oxe-onboard.cjs').buildOnboardingPack(projectRoot, {
+    ...options,
+    activeSession: activeSession || options.activeSession || null,
+  });
+}
+
 module.exports = {
   relatedTestsCommand,
   relatedRedsOfTask,
@@ -15397,4 +15404,5 @@ module.exports = {
   readRuntimeMultiAgentStatus,
   applySpecChecklistSync,
   isPathInScope,
+  runtimeOnboard,
 };

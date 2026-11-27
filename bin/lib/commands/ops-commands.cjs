@@ -548,6 +548,43 @@ function createOpsCommandRegistry(deps = {}) {
         } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
       },
     },
+    {
+      name: 'onboard',
+      handler(argv) {
+        if (argv.includes('--help') || argv.includes('-h')) {
+          console.log(`\n  oxe-cc onboard [--json] [--write] [--dir <pasta>] [--session <id>]
+  Gera dossiê de onboarding 100% read-only e agnóstico para qualquer agente ou dev recém-chegado:
+  detecta stack, pipelines de CI (GitHub Actions, GitLab CI, Azure Pipelines, Bitbucket, CircleCI,
+  Jenkins ou local), ALM (Jira, Azure DevOps, custom ou sem ALM), vazamento stripEnvPrefixes e
+  lacunas de espelhamento entre CI e phase_gates locais. Use --write para gravar .oxe/ONBOARDING.md.\n`);
+          return;
+        }
+        const o = { dir: process.cwd(), json: false, write: false, activeSession: null };
+        for (let i = 0; i < argv.length; i += 1) {
+          const a = argv[i];
+          if (a === '--json') o.json = true;
+          else if (a === '--write') o.write = true;
+          else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+          else if (a === '--session' && argv[i + 1]) o.activeSession = String(argv[++i]).replace(/\\/g, '/');
+          else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+        }
+        try {
+          const pack = require('../oxe-onboard.cjs').buildOnboardingPack(o.dir, {
+            write: o.write,
+            activeSession: o.activeSession || (typeof sessionDirId === 'function' ? sessionDirId(o.dir) : null),
+          });
+          if (o.json) {
+            console.log(JSON.stringify({ oxeOnboardSchema: 1, ...pack }, null, 2));
+          } else {
+            console.log(pack.prompt_markdown);
+            if (pack.written_path) console.log(`\n  ${green}✓${reset} gravado em ${pack.written_path}`);
+          }
+        } catch (err) {
+          console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
+          process.exitCode = 1;
+        }
+      },
+    },
   ]);
 }
 

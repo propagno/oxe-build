@@ -71,6 +71,7 @@ Copie `oxe/templates/config.template.json` para **`.oxe/config.json`** no seu pr
 | `sync.version_pins` | array | Opcional (OXB-222-03). Constantes de versão de schema atualizadas atomicamente pelo `oxe-cc sync` (e no `runtime promote`) junto com a renumeração de migrações SQLite: `[{ "file": "src/db/schema.ts", "pattern": "LATEST_DB_VERSION\\s*=\\s*(\\d+)", "source": "max_migration" }]`. |
 | `stripEnvPrefixes` / `envSanitize` | array \| object | Opcional (OXB-G02 / OXB-222-09). Prefixos de variáveis de ambiente removidos de subprocessos do runtime (padrão `["OXESPACE_", "AI_MEMORY_"]`). `oxe-cc doctor --project` também alerta (sem bloquear) quando variáveis do shell atual coincidem com `stripEnvPrefixes`. |
 | `grill` (CLI) | — | Fluxo guiado de descoberta: `oxe-cc grill import --from <briefing.md\|json>` importa fatos/perguntas/respostas em lote (mantendo confirmações abertas para o humano) e `oxe-cc grill promote --card <KEY>` promove um grill de `.oxe/alm/grill/` para `.oxe/grill/` para uso com `spec check`. |
+| `onboard` (CLI) | — | `oxe-cc onboard [--json] [--write]`: gera dossiê 100% read-only e agnóstico de onboarding detectando stack, CI (GitHub Actions, GitLab CI, Azure Pipelines, Bitbucket, CircleCI, Jenkins ou local), ALM (Jira, Azure DevOps, custom ou sem ALM), `leaked_env` e lacunas entre CI e `phase_gates` locais. |
 
 ## ALM (`alm`): Jira ou Azure DevOps
 

@@ -6,7 +6,7 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ## [1.22.2] — 2026-11-26
 
-Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-37`..`OB-50`, 4 fases `F1`–`F4`, 11 entregas + `RFC-1`) incorporando os achados de uso real no OXESpace `v1.6.3`, as fricções catalogadas no bench `v1.22.0` e gates mecânicos de qualidade de specs e cards no upstream (`OXB-222-01`..`OXB-222-11`).
+Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-37`..`OB-51`, 5 fases `F1`–`F5`, 12 entregas + `RFC-1`) incorporando os achados de uso real no OXESpace `v1.6.3`, as fricções catalogadas no bench `v1.22.0`, gates mecânicos de qualidade de specs/cards e onboarding agnóstico multi-CI/multi-ALM (`OXB-222-01`..`OXB-222-12`).
 
 ### Paridade pré-push, contexto compacto & coordenação de recursos (`OB-40`..`OB-43`, ADR `D-7`)
 
@@ -30,6 +30,10 @@ Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-37`..
 ### Gates mecânicos de qualidade de specs e cards no upstream (`OB-50`, `RFC-1`)
 
 - **Validação mecânica no `alm refine lint`/`apply` e `spec check` (`OB-50`):** `oxe-alm-refine.lintSpec` agora valida no disco paths/ADRs citados em `Referências` e `Arquitetura e fluxo` (respeitando `(novo)`), alerta símbolos citados como existentes ausentes no arquivo e alerta cards `story`/`task` "combo" pouco coesos; `oxe-spec-check.checkSpec` alerta SPEC sem seção de `Bordas`/`Proibições`, critérios `A*` extensos (`> 320` chars) e reprova referências a ADRs/workflows inexistentes; `oxe-plan-build.cjs` corrige inferência CJS para ignorar strings/comentários (ex.: `'.../oxe-alm-refine.cjs'` não gera falso símbolo `cjs`).
+
+### Onboarding agnóstico multi-CI e multi-ALM (`OB-51`)
+
+- **Comando `oxe-cc onboard [--json] [--write]` (`bin/lib/oxe-onboard.cjs`, `OB-51`):** gera dossiê 100% read-only e offline para novos agentes ou desenvolvedores, adaptando-se de forma agnóstica a GitHub Actions, GitLab CI, Azure Pipelines, Bitbucket Pipelines, CircleCI, Jenkins ou operação local, e a Jira, Azure DevOps, provedor customizado ou operação sem ALM — cruzando checks do CI contra `phase_gates`/`preflight.triggers` locais e reportando `leaked_env` sem jamais expor valores de segredos.
 
 ---
 

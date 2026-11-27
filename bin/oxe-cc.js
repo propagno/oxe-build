@@ -2748,6 +2748,7 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
     npx oxe-cc@latest --dir /caminho/do/projeto
     npx oxe-cc doctor [--release] [--write-manifest] [opções] [pasta-do-projeto]
     npx oxe-cc status [opções] [pasta-do-projeto]
+    npx oxe-cc onboard [--json] [--write] [--dir <pasta>] [--session <id>]   dossiê read-only agnóstico (multi-CI, multi-ALM, ambiente)
     npx oxe-cc init-oxe [opções] [pasta-do-projeto]
     npx oxe-cc context <build|inspect> [opções] [pasta-do-projeto]
     npx oxe-cc dashboard [opções] [pasta-do-projeto]
@@ -7716,6 +7717,7 @@ async function main() {
     argv[0] === 'acceptance-audit' ||
     argv[0] === 'release-readiness' ||
     argv[0] === 'release-finalize' ||
+    argv[0] === 'onboard' ||
     argv[0] === 'install'
   ) {
     command = argv[0];
@@ -7725,7 +7727,7 @@ async function main() {
   } else if (argv[0] && /^[a-z][a-z-]*$/.test(argv[0]) && !fs.existsSync(argv[0])) {
     // 1.21.2 (OXB-G10): a word that is no command used to fall into the install with exit 0 — "oxe-cc quick --help"
     // printed the install help. It is an error now, with the closest command or the workflow it names.
-    const KNOWN = ['doctor', 'status', 'init-oxe', 'context', 'dashboard', 'events', 'map', 'runtime', 'azure', 'uninstall', 'update', 'capabilities', 'plugins', 'plan', 'spec', 'program', 'phase', 'policy', 'decision', 'prd', 'grill', 'ship', 'trace', 'rfc', 'alm', 'review', 'docs', 'eval', 'design', 'release', 'customize', 'state', 'guards', 'verify', 'install', 'member', 'queue', 'quick', 'workflow', 'report', 'change', 'session', 'gc-worktrees', 'worktree', 'preflight', 'sync', 'acceptance-audit', 'release-readiness', 'release-finalize'];
+    const KNOWN = ['doctor', 'status', 'onboard', 'init-oxe', 'context', 'dashboard', 'events', 'map', 'runtime', 'azure', 'uninstall', 'update', 'capabilities', 'plugins', 'plan', 'spec', 'program', 'phase', 'policy', 'decision', 'prd', 'grill', 'ship', 'trace', 'rfc', 'alm', 'review', 'docs', 'eval', 'design', 'release', 'customize', 'state', 'guards', 'verify', 'install', 'member', 'queue', 'quick', 'workflow', 'report', 'change', 'session', 'gc-worktrees', 'worktree', 'preflight', 'sync', 'acceptance-audit', 'release-readiness', 'release-finalize'];
     const WORKFLOWS = { execute: '/oxe-execute (ou oxe-cc runtime execute)', discuss: '/oxe-discuss', scan: '/oxe-scan', debug: '/oxe-execute --debug', retro: '/oxe-retro', next: '/oxe-next (ou oxe-cc status)', oxe: '/oxe' };
     const word = argv[0];
     const dist = (a, b) => { const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]); for (let j = 1; j <= b.length; j += 1) d[0][j] = j; for (let i = 1; i <= a.length; i += 1) for (let j = 1; j <= b.length; j += 1) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); return d[a.length][b.length]; };
