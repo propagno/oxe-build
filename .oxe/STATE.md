@@ -11,11 +11,11 @@
 
 ## Programa
 
-▶ F1 Paridade Pré-Push, JSON Compacto, Sync & Escopo Pós-CI (E1) (verifying) · · F2 Grill Unificado, Confiabilidade Windows/CLI & Polimento (E2) (pending) · · F3 Telemetria CI, Discovery & Corte 1.22.2 (E3) (pending)
+✓ F1 Paridade Pré-Push, JSON Compacto, Sync & Escopo Pós-CI (E1) (closed) · ▶ F2 Grill Unificado, Confiabilidade Windows/CLI & Polimento (E2) (verifying) · · F3 Telemetria CI, Discovery & Corte 1.22.2 (E3) (pending)
 
 ## Run
 
-- **run:** `oxe-run-mwyc3kc1-3s4bc6` · **status:** completed · checks 16/16 verdes
+- **run:** `oxe-run-mwydaihe-dugy8x` · **status:** completed · checks 25/25 verdes
 
 ## Próximo passo sugerido
 
@@ -33,17 +33,17 @@
 ### Fase atual
 
 - **Status da run:** completed
-- **Run ID:** oxe-run-mwyc3kc1-3s4bc6
+- **Run ID:** oxe-run-mwydaihe-dugy8x
 - **Modo:** completo
 
 ### Runtime operacional
 
 - **runtime_status:** completed
-- **active_run_ref:** oxe-run-mwyc3kc1-3s4bc6
+- **active_run_ref:** oxe-run-mwydaihe-dugy8x
 
 ### Progresso
 
-- **Concluídos (4):** T1, T2, T3, T4
+- **Concluídos (3):** T1, T2, T3
 - **Falhos (0):** —
 - **Bloqueados (0):** —
 

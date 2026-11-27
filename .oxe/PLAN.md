@@ -1,45 +1,36 @@
-# PLAN — F1
+# PLAN — F2
 
-> Gerado por `oxe-cc plan build` a partir de F1.role.json. A fonte é o PLAN.json; este arquivo é a leitura humana.
+> Gerado por `oxe-cc plan build` a partir de F2.role.json. A fonte é o PLAN.json; este arquivo é a leitura humana.
 
 ## Onda 1
 
-### T1 — OB-40: Path-aware phase_gates (paths/globs) + preflight.triggers no runtime verify + suggestPathGates
+### T1 — OB-44: Aviso em grill --card, grill promote --card, spec check --card e grill import (unconfirmed)
 
-- **Arquivos prováveis:** `bin/lib/oxe-phase-gates.cjs`, `bin/lib/oxe-preflight.cjs`, `bin/lib/oxe-operational.cjs`
+- **Arquivos prováveis:** `bin/lib/oxe-grill.cjs`, `bin/lib/oxe-operational.cjs`, `bin/oxe-cc.js`
 - **Depende de:** —
 - **Onda:** 1
 - **Verificar:**
-  - Comando: `node --test tests/acceptance/oxe-1222-a1-path-gates.test.cjs tests/oxe-phase-gates.test.cjs tests/oxe-1230-lote2-ci-rework.test.cjs`
-- **Aceite vinculado:** A1
-
-### T2 — OB-41: Saida --json compacta (< 4 KB) por padrao em runtime verify, plan lint e status (--full opt-in)
-
-- **Arquivos prováveis:** `bin/oxe-cc.js`
-- **Depende de:** —
-- **Onda:** 1
-- **Verificar:**
-  - Comando: `node --test tests/acceptance/oxe-1222-a2-compact-json.test.cjs tests/oxe-status-summary.test.cjs tests/oxe-cli-purity.test.cjs`
-- **Aceite vinculado:** A2
+  - Comando: `node --test tests/acceptance/oxe-1222-a5-grill-card-import.test.cjs tests/oxe-1212-grill.test.cjs`
+- **Aceite vinculado:** A5
 
 ## Onda 2
 
-### T3 — OB-42: oxe-cc sync com sync.version_pins, electron/main/db/migrations e hook no runtimePromote
+### T2 — OB-45: Confiabilidade Windows/CLI (--index-info + retry index.lock, cache complexity, program init exit 1, plan build CJS/symbols, origin allow_no_alm_quick)
 
-- **Arquivos prováveis:** `bin/lib/oxe-sync.cjs`, `bin/lib/oxe-operational.cjs`
+- **Arquivos prováveis:** `bin/lib/oxe-operational.cjs`, `bin/lib/oxe-plan-build.cjs`, `bin/lib/oxe-origin.cjs`, `bin/oxe-cc.js`
 - **Depende de:** T1
 - **Onda:** 2
 - **Verificar:**
-  - Comando: `node --test tests/acceptance/oxe-1222-a3-sync-version-pins.test.cjs tests/oxe-1230-lote2-ci-rework.test.cjs`
-- **Aceite vinculado:** A3
+  - Comando: `node --test tests/acceptance/oxe-1222-a6-win-cli-reliability.test.cjs tests/oxe-lean-origin-guard.test.cjs tests/oxe-1212-complexity-api.test.cjs`
+- **Aceite vinculado:** A6
 
 ## Onda 3
 
-### T4 — OB-43: oxe-cc plan scope add --auto-cr atomico com reabertura automatica de tarefa done
+### T3 — OB-46: Polimento (prd lint --session, decision add safe, fim de unrun_acceptance_ci falso, plan mutate symbol-first, tsconfig newLine lf)
 
-- **Arquivos prováveis:** `bin/lib/oxe-operational.cjs`, `bin/oxe-cc.js`
-- **Depende de:** T2, T3
+- **Arquivos prováveis:** `bin/lib/oxe-operational.cjs`, `bin/lib/oxe-decisions.cjs`, `bin/lib/oxe-suite-impact.cjs`, `bin/lib/oxe-plan-mutate.cjs`, `bin/oxe-cc.js`, `packages/runtime/tsconfig.json`, `packages/runtime/tsconfig.test.json`
+- **Depende de:** T2
 - **Onda:** 3
 - **Verificar:**
-  - Comando: `node --test tests/acceptance/oxe-1222-a4-scope-auto-cr.test.cjs tests/oxe-1212-amend-scope.test.cjs`
-- **Aceite vinculado:** A4
+  - Comando: `node --test tests/acceptance/oxe-1222-a7-session-mutate-lf.test.cjs tests/oxe-plan-lint.test.cjs tests/oxe-lean-disambiguation-mutate.test.cjs`
+- **Aceite vinculado:** A7
