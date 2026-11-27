@@ -24,6 +24,7 @@ Entregar a versão `1.22.2` do `oxe-build` em 4 fases (`F1`, `F2`, `F3`, `F4`), 
 | R9 | Discovery atualizado nos workflows canônicos e aviso não-bloqueante de vazamento `stripEnvPrefixes` em `doctor --project` (`OXB-222-09`) | v1 | A9 |
 | R10 | ADR `D-7` preservando `D-1..D-6`, versão `1.22.2` sincronizada nas 5 fontes e `CHANGELOG.md` atualizado (`OXB-222-10`) | v1 | A10 |
 | R11 | Gates mecânicos de qualidade no upstream: validação de paths/ADRs/símbolos e coesão anti-"combo" em `alm refine lint`, e validação de profundidade (Bordas/Proibições) + paths reais em `spec check` (`OXB-222-11`) | v1 | A11 |
+| R12 | Comando agnóstico `oxe-cc onboard [--json] [--write]` para onboarding read-only multi-CI, multi-ALM e multi-stack com análise de lacunas de gates (`OXB-222-12`) | v1 | A12 |
 
 ## Critérios de aceite
 
@@ -40,6 +41,7 @@ Entregar a versão `1.22.2` do `oxe-build` em 4 fases (`F1`, `F2`, `F3`, `F4`), 
 | A9 | `checkProjectEnvironment` (`doctor --project`) reporta `leaked_env` (somente nomes) e emite aviso não-bloqueante quando variáveis coincidem com `stripEnvPrefixes`; `oxe/workflows/lean/execute.md`, `oxe/workflows/ship.md` e `oxe/templates/CONFIG.md` documentam as novas capacidades da `1.22.2` com wrappers sincronizados (`OXB-222-09`) | P2 | `node --test tests/acceptance/oxe-1222-a9-discovery-env-doctor.test.cjs` |
 | A10 | ADR `D-7` existe em `docs/adr/` preservando `D-1..D-6`, versão `1.22.2` está sincronizada nas 5 fontes + `CHANGELOG.md` e `inspectReleaseReadiness` reporta `manifest.versions.rootPackage.version === "1.22.2"` com zero blockers de divergência de versão (`OXB-222-10`) | P2 | `node --test tests/acceptance/oxe-1222-a10-release-1222.test.cjs` |
 | A11 | `lintSpec` (quando recebe `projectRoot`) reprova paths inexistentes citados em `Referências`/`Arquitetura e fluxo`, alerta símbolos citados como existentes ausentes no arquivo e alerta cards `story`/`task` "combo" pouco coesos; `checkSpec` alerta SPEC sem seção de Bordas/Proibições, critérios sobrecarregados e paths de documentação/workflow inexistentes no disco (`OXB-222-11`) | P1 | `node --test tests/acceptance/oxe-1222-a11-spec-card-quality.test.cjs` |
+| A12 | Comando `onboard` (`--json` / `--write`) gera dossiê 100% read-only e agnóstico detectando CI (GitHub/GitLab/Azure/Bitbucket/CircleCI/Jenkins/none), ALM (Jira/Azure DevOps/none), stack, `leaked_env` e lacunas vs `phase_gates`, sem vazar segredos (`OXB-222-12`) | P1 | `node --test tests/acceptance/oxe-1222-a12-agnostic-onboard.test.cjs` |
 
 ## Contratos observáveis (I/O e casos de erro)
 
@@ -69,6 +71,11 @@ Entregar a versão `1.22.2` do `oxe-build` em 4 fases (`F1`, `F2`, `F3`, `F4`), 
      - Quando `SPEC.md` possui critérios `A*` mas não possui seção `## Bordas` / `## Proibições` / `## Restrições` / `## Contratos`, gera **aviso** acionável.
      - Quando um critério `A*` excede `320` caracteres com múltiplas cláusulas independentes, gera **aviso** de sobrecarga de critério.
      - Quando `input.projectRoot` é fornecido e `SPEC.md` cita paths em crases de `docs/adr/*.md`, `oxe/workflows/...` ou `oxe/templates/...` ausentes no disco (sem marcação de novo), gera **erro** (`referência inexistente na SPEC: \`<path>\``).
+7. **Onboarding agnóstico `oxe-cc onboard` (`A12`):**
+   - Modo padrão e `--json`: **estritamente read-only e offline** (0 arquivos criados/modificados no disco, 0 chamadas de rede, 0 vazamento de valores de credenciais/tokens — apenas nomes de env vars e booleano `present`).
+   - Modo `--write`: grava `.oxe/ONBOARDING.md` (opt-in explícito).
+   - Detecta automaticamente provedor(es) de CI (`github-actions`, `gitlab-ci`, `azure-pipelines`, `bitbucket-pipelines`, `circleci`, `jenkins`, ou `none`), provedor de ALM (`jira`, `azure-devops`, `none`, ou provedor customizado declarado), stack(s) (`node`, `python`, `go`, `rust`, `java`, `dotnet`, `legacy`), políticas de `delivery`/`origin`/`sync.version_pins` e compara checks do CI contra `phase_gates` / `preflight.triggers` locais.
+   - Emite `oxeOnboardSchema: 1` com `ok`, `read_only`, `project`, `oxe`, `environment`, `ci`, `alm`, `delivery`, `rules`, `gaps` e `prompt_markdown`.
 
 ## Bordas e proibições
 
