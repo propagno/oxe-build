@@ -255,9 +255,80 @@ function readAgentMessages(projectRoot, options = {}) {
   return msgs.slice(-limit);
 }
 
+function readMergedConfigQuiet(projectRoot) {
+  const rootAbs = path.resolve(projectRoot || process.cwd());
+  const readOne = (f) => {
+    try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; }
+  };
+  const base = readOne(path.join(rootAbs, 'oxe.config.json'));
+  const local = readOne(path.join(rootAbs, '.oxe', 'config.json'));
+  return {
+    ...(base && typeof base === 'object' ? base : {}),
+    ...(local && typeof local === 'object' ? local : {}),
+  };
+}
+
+/**
+ * 1.23.0 (OXB-230-04): Returns whether automatic multi-agent lease lifecycle is active.
+ * Enabled by default; opt-out via `.oxe/config.json` -> `{ "agents": { "auto_lease": false } }`.
+ */
+function isAutoLeaseEnabled(projectRoot, configOverride = null) {
+  const cfg = configOverride && typeof configOverride === 'object'
+    ? configOverride
+    : readMergedConfigQuiet(projectRoot);
+  if (cfg && cfg.agents && cfg.agents.auto_lease === false) return false;
+  return true;
+}
+
+/**
+ * Best-effort auto-lease helper used by `quick`, `runtime commit-task`, and `runtime execute`.
+ * Never throws on auxiliary coordination errors.
+ */
+function tryAutoLease(projectRoot, action, payload = {}, options = {}) {
+  try {
+    if (!isAutoLeaseEnabled(projectRoot, options.config || null)) {
+      return { enabled: false, skipped: true, released: false };
+    }
+    if (action === 'register') {
+      const lease = registerAgentLease(projectRoot, payload, options);
+      return { enabled: true, registered: true, agent_id: lease.agent_id, lease };
+    }
+    if (action === 'heartbeat') {
+      const id = String(payload.agent_id || '');
+      const updated = id ? heartbeatAgentLease(projectRoot, id, payload, options) : null;
+      const lease = updated || registerAgentLease(projectRoot, payload, options);
+      return { enabled: true, heartbeated: true, agent_id: lease.agent_id, lease };
+    }
+    if (action === 'release') {
+      const rootNorm = normPath(path.resolve(projectRoot || process.cwd()));
+      const id = payload.agent_id ? String(payload.agent_id) : null;
+      let releasedAny = false;
+      if (id) {
+        const r = releaseAgentLease(projectRoot, id, options);
+        if (r && r.released) releasedAny = true;
+      }
+      if (payload.task) {
+        const active = listActiveAgents(projectRoot, { ...options, readOnly: true });
+        for (const a of active) {
+          if (a && a.task === String(payload.task) && normPath(a.worktree) === rootNorm) {
+            const r = releaseAgentLease(projectRoot, a.agent_id, options);
+            if (r && r.released) releasedAny = true;
+          }
+        }
+      }
+      return { enabled: true, released: releasedAny, agent_id: id };
+    }
+    return { enabled: true, skipped: true };
+  } catch {
+    return { enabled: true, skipped: true, released: false };
+  }
+}
+
 module.exports = {
   coordDirOf,
   findGuaranteedDeadPid,
+  isAutoLeaseEnabled,
+  tryAutoLease,
   registerAgentLease,
   heartbeatAgentLease,
   releaseAgentLease,

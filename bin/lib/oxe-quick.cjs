@@ -155,13 +155,24 @@ function start(root, input = {}) {
   const rec = { schema: 1, id: newId(input.now), key, objective, by: input.by || null, worktree, branch, started_at: new Date().toISOString(), status: 'open', commits: [], verify: null, closed_at: null, ...(prevAbandoned ? { follows: prevAbandoned.id } : {}) };
   // --dry-run: validated, nothing written (no record, no QUICK.md, no current)
   if (input.dryRun) return { resumed: false, dry_run: true, ...rec, trailers: trailers(rec), would_replace: open ? open.id : null };
-  if (open && input.replace) write(root, { ...open, status: 'replaced', closed_at: new Date().toISOString() });
+  if (open && input.replace) {
+    write(root, { ...open, status: 'replaced', closed_at: new Date().toISOString() });
+    require('./oxe-agent-coord.cjs').tryAutoLease(root, 'release', { agent_id: `quick:${open.id}`, task: open.id }, { spawn: input.spawn || spawnSync });
+  }
   write(root, rec);
   fs.writeFileSync(currentFile(root), `${JSON.stringify({ id: rec.id }, null, 2)}\n`);
   if (input.quickFile) {
     fs.mkdirSync(path.dirname(input.quickFile), { recursive: true });
     fs.writeFileSync(input.quickFile, quickMd(rec));
   }
+  require('./oxe-agent-coord.cjs').tryAutoLease(root, 'register', {
+    agent_id: `quick:${rec.id}`,
+    provider: input.by || 'oxe-quick',
+    role: 'quick',
+    task: rec.id,
+    branch,
+    write_set: Array.isArray(input.write_set) ? input.write_set : [],
+  }, { spawn: input.spawn || spawnSync });
   return { resumed: false, ...rec, trailers: trailers(rec) };
 }
 
@@ -223,6 +234,7 @@ function done(root, input = {}) {
   const closed = { ...rec, status: 'done', commits, verify, closed_at: new Date().toISOString(), by_close: input.by || null };
   write(root, closed);
   try { fs.unlinkSync(currentFile(root)); } catch { /* */ }
+  require('./oxe-agent-coord.cjs').tryAutoLease(root, 'release', { agent_id: `quick:${rec.id}`, task: rec.id }, { spawn });
   const marked = markClosed(root, closed, input);
   return { ...closed, closed: true, ...marked };
 }
@@ -329,6 +341,7 @@ function cancel(root, input = {}) {
   if (input.dryRun) return { ...closed, dry_run: true, status: rec.status, would_status: 'abandoned' };
   write(root, closed);
   try { fs.unlinkSync(currentFile(root)); } catch { /* */ }
+  require('./oxe-agent-coord.cjs').tryAutoLease(root, 'release', { agent_id: `quick:${rec.id}`, task: rec.id }, { spawn: input.spawn || spawnSync });
   return { ...closed, cancelled: true };
 }
 

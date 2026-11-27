@@ -3860,9 +3860,21 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
 
   async function runRuntimeExecute(projectRoot, activeSession, options = {}) {
     const restoreChildEnv = applyChildEnvPolicy(projectRoot);
+    const coord = require('./oxe-agent-coord.cjs');
+    const execLeaseId = `execute:${process.pid}`;
+    const execLease = coord.tryAutoLease(projectRoot, 'register', {
+      agent_id: execLeaseId,
+      provider: options.provider || 'oxe-runtime',
+      role: 'executor',
+      task: options.task || (options.wave != null ? `wave:${options.wave}` : 'execute'),
+      write_set: [],
+    });
     try {
       return await runRuntimeExecuteInner(projectRoot, activeSession, options);
     } finally {
+      if (execLease && execLease.registered) {
+        coord.tryAutoLease(projectRoot, 'release', { agent_id: execLeaseId });
+      }
       restoreChildEnv();
     }
   }
@@ -9543,6 +9555,15 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
   if (!allowedScope.length) {
     throw new Error(`Tarefa ${taskId} não possui arquivos declarados em files.`);
   }
+  const coord = require('./oxe-agent-coord.cjs');
+  const taskLeaseId = `task:${taskId}`;
+  coord.tryAutoLease(projectRoot, 'heartbeat', {
+    agent_id: taskLeaseId,
+    provider: actor || 'oxe-runtime',
+    role: 'executor',
+    task: taskId,
+    write_set: allowedScope,
+  });
 
   const allEntries = changedEntriesUnder(projectRoot, ['.'])
     .map((e) => ({ path: normPath(e.path), code: e.code }))
@@ -9732,6 +9753,11 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
     payload: { task: taskId, phase, commit: cp.commit, files: cp.files, by: actor, verify_skipped: verifySkipped },
   });
 
+  const autoLeaseRelease = coord.tryAutoLease(projectRoot, 'release', {
+    agent_id: taskLeaseId,
+    task: taskId,
+  });
+
   return {
     ok: true,
     task: taskId,
@@ -9741,6 +9767,11 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
     ignored_out_of_scope: outOfScopeDirty,
     verify_skipped: verifySkipped,
     by: actor,
+    auto_lease: {
+      enabled: Boolean(autoLeaseRelease && autoLeaseRelease.enabled),
+      released: Boolean(autoLeaseRelease && autoLeaseRelease.released),
+      agent_id: taskLeaseId,
+    },
     ...(cp.check ? { check: cp.check } : {}),
   };
 }
