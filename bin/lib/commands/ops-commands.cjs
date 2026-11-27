@@ -603,6 +603,124 @@ function createOpsCommandRegistry(deps = {}) {
         }
       },
     },
+    {
+      name: 'agents',
+      handler(argv) {
+        const sub = argv[0] && !argv[0].startsWith('-') ? argv[0] : 'list';
+        if (sub === 'help' || argv.includes('--help') || argv.includes('-h')) {
+          console.log(`\n  oxe-cc agents <register|heartbeat|release|list|collisions|send|inbox> [opções] [--json]
+  Coordenação multi-agente local via <git-common-dir>/oxe/active-agents.json e agent-messages.ndjson:
+    register   --id <id> [--provider <nome>] [--role <papel>] [--task <Tn>] [--files a,b] [--ttl-ms <ms>]
+    heartbeat  --id <id> [--task <Tn>] [--files a,b]
+    release    --id <id>
+    list       [--dir <pasta>] [--json]
+    collisions --files a,b [--exclude <id>] [--dir <pasta>] [--json]
+    send       --from <id> [--to <id|all>] [--topic <t>] --body "…"
+    inbox      [--to <id>] [--limit <N>] [--json]\n`);
+          return;
+        }
+        const o = { dir: process.cwd(), json: false, strict: false, id: null, provider: null, role: null, task: null, files: [], ttlMs: null, pid: null, exclude: null, from: null, to: null, topic: null, body: null, limit: 50 };
+        const startIdx = argv[0] && !argv[0].startsWith('-') ? 1 : 0;
+        for (let i = startIdx; i < argv.length; i += 1) {
+          const a = argv[i];
+          if (a === '--json') o.json = true;
+          else if (a === '--strict') o.strict = true;
+          else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+          else if (a === '--id' && argv[i + 1]) o.id = String(argv[++i]);
+          else if (a === '--provider' && argv[i + 1]) o.provider = String(argv[++i]);
+          else if (a === '--role' && argv[i + 1]) o.role = String(argv[++i]);
+          else if (a === '--task' && argv[i + 1]) o.task = String(argv[++i]);
+          else if (a === '--files' && argv[i + 1]) o.files.push(...String(argv[++i]).split(',').map((s) => s.trim()).filter(Boolean));
+          else if (a === '--ttl-ms' && argv[i + 1]) o.ttlMs = Number(argv[++i]);
+          else if (a === '--pid' && argv[i + 1]) o.pid = Number(argv[++i]);
+          else if (a === '--exclude' && argv[i + 1]) o.exclude = String(argv[++i]);
+          else if (a === '--from' && argv[i + 1]) o.from = String(argv[++i]);
+          else if (a === '--to' && argv[i + 1]) o.to = String(argv[++i]);
+          else if (a === '--topic' && argv[i + 1]) o.topic = String(argv[++i]);
+          else if (a === '--body' && argv[i + 1]) o.body = String(argv[++i]);
+          else if (a === '--limit' && argv[i + 1]) o.limit = Number(argv[++i]) || 50;
+          else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+        }
+        const coord = require('../oxe-agent-coord.cjs');
+        try {
+          let payload;
+          if (sub === 'register') {
+            const lease = coord.registerAgentLease(o.dir, { agent_id: o.id, provider: o.provider, role: o.role, task: o.task, write_set: o.files, pid: o.pid != null ? o.pid : null, ttl_ms: o.ttlMs != null ? o.ttlMs : undefined });
+            payload = { ok: true, action: 'register', lease };
+          } else if (sub === 'heartbeat') {
+            if (!o.id) throw new Error('informe --id <agent_id>');
+            const lease = coord.heartbeatAgentLease(o.dir, o.id, { ...(o.task != null ? { task: o.task } : {}), ...(o.files.length ? { write_set: o.files } : {}), ...(o.ttlMs != null ? { ttl_ms: o.ttlMs } : {}) });
+            payload = { ok: Boolean(lease), action: 'heartbeat', lease };
+          } else if (sub === 'release') {
+            if (!o.id) throw new Error('informe --id <agent_id>');
+            payload = { ok: true, action: 'release', ...coord.releaseAgentLease(o.dir, o.id) };
+          } else if (sub === 'collisions') {
+            const col = coord.detectWriteSetCollisions(o.dir, o.files, { excludeAgentId: o.exclude, excludeWorktree: o.exclude ? null : o.dir });
+            payload = { action: 'collisions', ...col };
+            if (!col.ok && o.strict) process.exitCode = 1;
+          } else if (sub === 'send') {
+            if (!o.body) throw new Error('informe --body "…"');
+            const message = coord.postAgentMessage(o.dir, { from: o.from || o.id || 'agent', to: o.to || 'all', topic: o.topic, body: o.body });
+            payload = { ok: true, action: 'send', message };
+          } else if (sub === 'inbox') {
+            const messages = coord.readAgentMessages(o.dir, { to: o.to || o.id || null, limit: o.limit });
+            payload = { ok: true, action: 'inbox', messages };
+          } else {
+            const agents = coord.listActiveAgents(o.dir);
+            payload = { ok: true, action: 'list', agents };
+          }
+          if (o.json) {
+            console.log(JSON.stringify({ oxeAgentsSchema: 1, ...payload }, null, 2));
+          } else if (sub === 'list') {
+            console.log(`  Agentes ativos: ${payload.agents.length}`);
+            for (const a of payload.agents) console.log(`    - ${a.agent_id} [${a.provider}] ${a.branch || '—'} · tarefa=${a.task || '—'} · files=${(a.write_set || []).length}`);
+          } else if (sub === 'collisions') {
+            console.log(payload.ok ? `  ${green}✓${reset} 0 colisões de write_set` : `  ${yellow}!${reset} ${payload.collisions.length} colisão(ões) de write_set`);
+            for (const c of payload.collisions) console.log(`    - ${c.file} em uso por ${c.agent_id} (${c.provider}, ${c.branch || c.worktree})`);
+          } else {
+            console.log(`  ${green}✓${reset} agents ${sub} concluído`);
+          }
+        } catch (err) {
+          console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
+          process.exitCode = 1;
+        }
+      },
+    },
+    {
+      name: 'reevaluate',
+      handler(argv) {
+        if (argv.includes('--help') || argv.includes('-h')) {
+          console.log(`\n  oxe-cc reevaluate [--against <ref>] [--since <sha>] [--dir <pasta>] [--json]
+  Compara commits que pousaram na base (padrão origin/main) contra as tarefas pendentes do PLAN.json,
+  classificando cada tarefa em no_impact, mechanical_sync (oxe-cc sync) ou contract_drift (CR focado).\n`);
+          return;
+        }
+        const o = { dir: process.cwd(), against: null, since: null, json: false };
+        for (let i = 0; i < argv.length; i += 1) {
+          const a = argv[i];
+          if (a === '--json') o.json = true;
+          else if ((a === '--against' || a === '--base') && argv[i + 1]) o.against = String(argv[++i]);
+          else if (a === '--since' && argv[i + 1]) o.since = String(argv[++i]);
+          else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+          else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+        }
+        try {
+          const out = require('../oxe-reevaluate.cjs').reevaluateAgainstBase(o.dir, o);
+          if (o.json) {
+            console.log(JSON.stringify({ oxeReevaluateSchema: 1, ...out }, null, 2));
+          } else {
+            console.log(`  reevaluate vs ${out.base} (${out.upstream_commits_count} commit(s) upstream) → ${out.overall_status}`);
+            for (const t of out.tasks) {
+              const icon = t.classification === 'contract_drift' ? `${red}✗${reset}` : t.classification === 'mechanical_sync' ? `${yellow}!${reset}` : `${green}✓${reset}`;
+              console.log(`    ${icon} ${t.id} [${t.classification}] ${t.title} → ${t.recommended_action}`);
+            }
+          }
+        } catch (err) {
+          console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
+          process.exitCode = 1;
+        }
+      },
+    },
   ]);
 }
 

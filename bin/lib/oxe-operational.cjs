@@ -5736,6 +5736,25 @@ function parsePlanArtifact(parsers, planText, planPath) {
   return require('./oxe-vitest-batch.cjs').batchPlanVerifies(plan, { noBatchPatterns });
 }
 
+function collectAgentCollisionWarnings(projectRoot, tasks) {
+  try {
+    const allFiles = [];
+    for (const t of Array.isArray(tasks) ? tasks : []) {
+      if (t && !t.done && Array.isArray(t.files)) allFiles.push(...t.files);
+    }
+    if (!allFiles.length) return { warnings: [], collisions: [] };
+    const coord = require('./oxe-agent-coord.cjs');
+    const col = coord.detectWriteSetCollisions(projectRoot, allFiles, { excludeWorktree: projectRoot });
+    if (col.ok || !col.collisions.length) return { warnings: [], collisions: [] };
+    return {
+      warnings: col.collisions.slice(0, 10).map((c) => `colisão de write_set: \`${c.file}\` já está reivindicado pelo agente ativo ${c.agent_id} (${c.provider}, ${c.branch || c.worktree})`),
+      collisions: col.collisions,
+    };
+  } catch {
+    return { warnings: [], collisions: [] };
+  }
+}
+
 /**
  * `oxe-cc plan lint`: schema do PLAN.json + regras estruturais (ids, dependências, escopo por onda,
  * cobertura de A*, pack para tarefas mutáveis, A* restritos à fase ativa do programa).
@@ -5753,7 +5772,17 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
   try {
     plan = planJson.readPlanArtifact(paths.plan, planText, parsers.parsePlan);
   } catch (err) {
-    return { ok: false, errors: [err.message], warnings: [], source: hasJson ? 'PLAN.json' : 'PLAN.md', tasks: 0, phase: null };
+    const rawDoc = hasJson ? readJsonQuiet(jsonPath) : null;
+    const colFallback = collectAgentCollisionWarnings(projectRoot, rawDoc && rawDoc.tasks);
+    return {
+      ok: false,
+      errors: [err.message],
+      warnings: colFallback.warnings,
+      ...(colFallback.collisions.length ? { agent_collisions: colFallback.collisions } : {}),
+      source: hasJson ? 'PLAN.json' : 'PLAN.md',
+      tasks: 0,
+      phase: null,
+    };
   }
   // OXB-049: copy anchors join the task's verify (the dry-verify runs the effective command); unusable ones warn.
   const anchorCopy = require('./oxe-anchor-copy.cjs');
@@ -6419,6 +6448,16 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
       }
     }
   } catch { /* auxiliar */ }
+  // OXB-222-17: warn when planned write_set collides with an active sibling agent lease in .git/oxe/active-agents.json
+  {
+    const { doc: pjCoord } = readPlanJsonDoc(projectRoot, activeSession);
+    const planTasks = pjCoord && Array.isArray(pjCoord.tasks) ? pjCoord.tasks : (Array.isArray(plan.tasks) ? plan.tasks : []);
+    const colInfo = collectAgentCollisionWarnings(projectRoot, planTasks);
+    if (colInfo.warnings.length) {
+      result.warnings.push(...colInfo.warnings);
+      result.agent_collisions = colInfo.collisions;
+    }
+  }
   result.ok = result.errors.length === 0;
   return { ...result, source: plan.source, tasks: plan.tasks.length, phase: phase ? phase.id : null, plan_json: hasJson ? jsonPath : null, dry_verify: dryVerify ? dryVerify.results : null };
 }
@@ -14196,6 +14235,14 @@ function runtimeWorktreeHygiene(projectRoot, options = {}) {
   return require('./oxe-worktree-gc.cjs').summarizeWorktreeHygiene(projectRoot, options);
 }
 
+function runtimeAgentsCoord(projectRoot, options = {}) {
+  return require('./oxe-agent-coord.cjs').listActiveAgents(projectRoot, options);
+}
+
+function runtimeReevaluate(projectRoot, options = {}) {
+  return require('./oxe-reevaluate.cjs').reevaluateAgainstBase(projectRoot, options);
+}
+
 module.exports = {
   relatedTestsCommand,
   relatedRedsOfTask,
@@ -14408,5 +14455,7 @@ module.exports = {
   isPathInScope,
   runtimeOnboard,
   runtimeWorktreeHygiene,
+  runtimeAgentsCoord,
+  runtimeReevaluate,
   resolveEffectiveSession,
 };
