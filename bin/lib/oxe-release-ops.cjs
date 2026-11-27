@@ -87,15 +87,22 @@ function checkMultiPlatformAssets(assets, cfgRelease = {}) {
 function fetchReleaseAssets(root, tag, options = {}) {
   if (Array.isArray(options.assets)) return { ok: true, tag, assets: options.assets };
   const spawn = options.spawn || spawnSync;
+  const ciAdapter = require('./oxe-ci-adapter.cjs');
+  const explicitProvider = options.provider ? String(options.provider).toLowerCase() : null;
+  const detected = explicitProvider || ciAdapter.detectCiProvider(root);
+  const effectiveProvider = explicitProvider || (['gitlab', 'azure-devops'].includes(detected) ? detected : 'github');
+  if (effectiveProvider !== 'github') {
+    return ciAdapter.listReleaseAssets(root, tag, { ...options, provider: effectiveProvider, spawn });
+  }
   const r = spawn('gh', ['release', 'view', tag, '--json', 'tagName,isDraft,assets'], { cwd: root, encoding: 'utf8', windowsHide: true });
   if (r.status !== 0) {
-    return { ok: false, tag, assets: [], error: String(r.stderr || r.stdout || 'gh release view falhou').trim() };
+    return { ok: false, provider: 'github', tag, assets: [], error: String(r.stderr || r.stdout || 'gh release view falhou').trim() };
   }
   try {
     const j = JSON.parse(String(r.stdout || '{}'));
-    return { ok: true, tag: j.tagName || tag, draft: Boolean(j.isDraft), assets: Array.isArray(j.assets) ? j.assets : [] };
+    return { ok: true, provider: 'github', tag: j.tagName || tag, draft: Boolean(j.isDraft), assets: Array.isArray(j.assets) ? j.assets : [] };
   } catch (err) {
-    return { ok: false, tag, assets: [], error: err.message };
+    return { ok: false, provider: 'github', tag, assets: [], error: err.message };
   }
 }
 
@@ -346,6 +353,7 @@ async function finalizeRelease(projectRoot, options = {}) {
 module.exports = {
   DEFAULT_REQUIRED_GATES,
   makeJiraClient,
+  fetchReleaseAssets,
   checkMultiPlatformAssets,
   validateChecksumsText,
   checkReleaseReadiness,

@@ -5519,7 +5519,7 @@ function programCloseGateReasons(projectRoot, activeSession, ctx) {
   return out;
 }
 
-/** `oxe-cc runtime scorecard [--with-ci] [--write]` (1.21/1.22.2): maturity metrics from the project's own records. */
+/** `oxe-cc runtime scorecard [--with-ci] [--with-routing] [--write]` (1.21/1.22.2): maturity metrics from the project's own records. */
 function runtimeScorecard(projectRoot, activeSession, options = {}) {
   const scorecardLib = require('./oxe-scorecard.cjs');
   const events = readEvents(projectRoot, activeSession);
@@ -5529,6 +5529,13 @@ function runtimeScorecard(projectRoot, activeSession, options = {}) {
       activeSession,
       since: options.since || null,
       events,
+    });
+  }
+  if (options.withRouting) {
+    card.model_routing = scorecardLib.computeModelRoutingStats(events, {
+      projectRoot,
+      activeSession,
+      since: options.since || null,
     });
   }
   if (options.write) {
@@ -5552,6 +5559,18 @@ function runtimeScorecard(projectRoot, activeSession, options = {}) {
     card.release_report = file;
   }
   return card;
+}
+
+/** 1.22.2 (OXB-222-20): Provider-agnostic CI adapter status (`github`, `gitlab`, `azure-devops`, `local`). */
+function runtimeCiAdapterStatus(projectRoot, options = {}) {
+  const ciAdapter = require('./oxe-ci-adapter.cjs');
+  const adapter = ciAdapter.resolveCiAdapter(projectRoot, options);
+  const ci = adapter.inspectCiStatus(options);
+  return {
+    provider: adapter.provider,
+    offline: adapter.offline,
+    ...ci,
+  };
 }
 
 /** `oxe-cc runtime ci --attach <run|url>` (1.21): ties a CI run to the active phase for `kind: ci` gates. */
@@ -14335,6 +14354,7 @@ module.exports = {
   isolateFailedTask,
   planSourceHash,
   runtimeCiAttach,
+  runtimeCiAdapterStatus,
   runtimeScorecard,
   runtimePlanDone,
   runtimeCommitTask,
