@@ -67,6 +67,10 @@ Copie `oxe/templates/config.template.json` para **`.oxe/config.json`** no seu pr
 | `alm` | object | Opcional. ALM do projeto (Jira ou Azure DevOps); sem ele, o fluxo segue igual. Ver a seção abaixo. |
 | `delivery` | string | object | Opcional. `"pr"` ou `{ "mode": "pr", "deploy_env": "staging" }`: depois do verify verde, o próximo passo guia a entrega (`/oxe-ship`: PR → CI/merge → deploy anexado → close). Sem ela, a fase fecha com o commit local do close, como antes. |
 | `verify` | object | Opcional. `verify.remote` roda os checks pesados no CI do repositório (ver a seção abaixo); `verify.where` força onde roda cada check, critério ou tarefa (`{ "A7": "remote", "gate-lint": "local" }`). |
+| `phase_gates` | array | Opcional. Gates de fase (`{ "id", "kind", "command", "paths" \| "globs" }`). Com `paths` ou `globs`, o gate só dispara quando o diff da fase toca algum padrão correspondente (com fallback seguro para rodar o gate quando não há base de diff); sem `paths`/`globs`, roda sempre. Também suporta gatilhos em `preflight.triggers`. |
+| `sync.version_pins` | array | Opcional (OXB-222-03). Constantes de versão de schema atualizadas atomicamente pelo `oxe-cc sync` (e no `runtime promote`) junto com a renumeração de migrações SQLite: `[{ "file": "src/db/schema.ts", "pattern": "LATEST_DB_VERSION\\s*=\\s*(\\d+)", "source": "max_migration" }]`. |
+| `stripEnvPrefixes` / `envSanitize` | array \| object | Opcional (OXB-G02 / OXB-222-09). Prefixos de variáveis de ambiente removidos de subprocessos do runtime (padrão `["OXESPACE_", "AI_MEMORY_"]`). `oxe-cc doctor --project` também alerta (sem bloquear) quando variáveis do shell atual coincidem com `stripEnvPrefixes`. |
+| `grill` (CLI) | — | Fluxo guiado de descoberta: `oxe-cc grill import --from <briefing.md\|json>` importa fatos/perguntas/respostas em lote (mantendo confirmações abertas para o humano) e `oxe-cc grill promote --card <KEY>` promove um grill de `.oxe/alm/grill/` para `.oxe/grill/` para uso com `spec check`. |
 
 ## ALM (`alm`): Jira ou Azure DevOps
 
@@ -190,6 +194,7 @@ Regra: nada chega a um PR sem vir do `oxe-cc runtime execute` (trailer `OXE-Task
 | `commit_msg` | o hook `commit-msg` do `oxe-cc guards install`: `require` (padrão) recusa commit sem origem; `append` só avisa; `off` desliga. Com um quick aberto, o hook acrescenta os trailers dele |
 | `exempt.authored` | um autor isento só nos caminhos dele: `[{ "author": "github-actions[bot]", "paths": ["<pasta das goldens>/"] }]`. É o bot que regrava as goldens, e o mesmo bot em outro caminho é recusado |
 | `require_card` | o commit de quick precisa de `OXE-Card` (padrão: `true` quando há ALM) |
+| `allow_no_alm_quick` | permite commits de quick (`OXE-Quick`) sem `OXE-Card` mesmo com ALM configurado (nunca isenta commits comuns sem trailer) |
 | `base` | a base do `oxe-cc ship check-origin` sem argumento (padrão `origin/main`) |
 | `since` | o corte: um commit (SHA) ou uma data. É histórico, e não é cobrado, o que já está no commit de corte, o que tem data anterior à dele ou, com uma data, o que é anterior a ela |
 | `exempt.commits` | isenção pontual: `[{ "sha": "<40 hex>", "reason": "…", "by": "<papel>" }]`. Toda isenção usada aparece no relatório; uma entrada sem SHA completo, reason ou by é recusada e o check-origin sai com 1. O caminho normal continua sendo o trailer |

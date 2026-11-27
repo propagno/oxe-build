@@ -32,7 +32,7 @@ Levar o trabalho verificado até produção, um passo verde por vez: **PR → CI
 3. `git status --short`: mudança fora do escopo do plano para a entrega e vira pergunta ao usuário.
 
 ### Passo 1 — PR
-- Para cada tarefa de um plano (`PLAN.json`) a promover: `oxe-cc runtime promote T<n> --base main --open-pr`. O título leva a chave do ALM, e o PR roda as checagens de integração.
+- Para cada tarefa de um plano (`PLAN.json`) a promover: `oxe-cc runtime promote T<n> --base main --open-pr`. O título leva a chave do ALM, e o PR roda as checagens de integração. Quando há colisão de migrações sequenciais ou pinos de versão declarados em `sync.version_pins`, o promote dispara `oxe-cc sync` (também executável manualmente com `oxe-cc sync --apply`) para renumerar e sincronizar os pinos atomicamente antes do push.
 - Para entregar um **`/oxe-quick`** (sem `PLAN.json`): `oxe-cc quick promote --open-pr` (use `--dry-run` para revisar antes; base: `--base <branch>`, `delivery.base` ou o padrão do remoto; numa branch ≠ base). O PR do quick segue o Passo 2 (CI e merge em `oxe-cc ship status`) antes de fechar. Ele roda `ship check-origin`, faz push da branch atual e abre o PR já com `Fecha <KEY>` (quando houver card ALM) e o resumo de verificação no corpo.
 - Mostre a URL. A falha de promoção vem com o motivo: corrija e promova de novo; não force.
 
@@ -44,7 +44,7 @@ Levar o trabalho verificado até produção, um passo verde por vez: **PR → CI
 - PR fora de fase, de um card ou o repositório inteiro: `oxe-cc ship status --pr <n>` · `--card <KEY>` · `--repo` (com os rótulos do trem); `--comment --apply` põe o veredito no PR, onde o trem e a CI leem.
 - Antes do merge: `oxe-cc ship check-origin <#PR>`. Todo commit vem do `runtime execute` (`OXE-Task`) ou de um quick registrado (`OXE-Quick`); as isenções são só as de `origin.exempt`.
 - O merge é do usuário ou do trem de merge do repositório. O OXE detecta o merge (`gh pr view`) e registra.
-- Fase com CI exigido no close: `oxe-cc runtime ci --attach <run> --head <sha>`.
+- Fase com CI exigido no close: `oxe-cc runtime ci --attach <run> --head <sha>`. Para medir retrabalho pós-verify e taxa de CI verde de primeira offline a partir dos registros locais, rode `oxe-cc runtime scorecard --with-ci [--json]`.
 
 ### Passo 3 — Deploy
 - Depois do merge, e quando houver ambiente: `oxe-cc runtime deploy --attach <env> --version <v> --ref <tag|url> --check "<smoke>"`. Isso só registra e roda as checagens pós-deploy; o deploy em si é de quem é dono.

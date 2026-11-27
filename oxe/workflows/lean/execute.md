@@ -14,7 +14,8 @@ Levar a fase ativa do plano ao fechamento **numa sessão só**: implementar cada
 <context>
 - Fonte: `.oxe/PLAN.json` (tarefas, ondas, `files`, `verify.commands`) e os testes de aceite congelados que cada tarefa cita. Leia o código que a tarefa toca; nada de leitura ampla.
 - **Teste de aceite congelado não se edita.** Se um deles estiver errado (contradiz a SPEC ou outro teste), pare e relate: a saída é `oxe-cc plan amend-test <arquivo> --reason "<CR>"`, com o OK do usuário. Nunca enfraqueça, pule ou reescreva um teste para passar.
-- Fique dentro de `files` da tarefa. Precisa de um arquivo a mais: acrescente-o a `files` da tarefa no `PLAN.json` antes de alterar, e diga isso no resumo.
+- Fique dentro de `files` da tarefa. Precisa de um arquivo a mais (ex.: fix de CI ou cobertura): use `oxe-cc plan scope add T<n> <arquivo> --auto-cr --reason "<motivo>"` (atualiza `PLAN.json` + `IMPLEMENTATION-PACK.json` atomicamente e registra o CR auditável), em vez de editar os JSONs à mão, e diga isso no resumo.
+- Saídas `--json` (`runtime verify --json`, `plan lint --json`, `status --json`) são compactas por padrão (`< 4 KB`) para preservar contexto; o relatório completo do verify fica gravado em `.oxe/runs/<run_id>/verify-full.json` e `--full` devolve o payload completo quando necessário.
 - Testes além dos congelados: só o que eles não cobrem (borda interna, erro de infraestrutura). Não duplique em teste de unidade o que o teste de aceite já afirma.
 - Use `oxe-cc`, nunca `npx oxe-cc`. Sign-off e aprovação são do usuário: nunca rode `runtime signoff`, `spec approve` ou `decision confirm` em nome dele.
 - Exceções também são do usuário: nunca passe `--accept-drift`, `--defer-signoff`, `--accept-unpromoted`, `--no-rollback-check`, `--allow-dirty` ou `--force` por conta própria. Se o `phase close` pedir uma delas, pare e mostre o motivo.

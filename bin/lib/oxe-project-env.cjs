@@ -260,11 +260,41 @@ function checkProjectEnvironment(projectRoot, machine = {}) {
   } catch {
     scrubbedEnv = [];
   }
+
+  // OXB-222-09: warn (non-blocking) when host shell variables match configured stripEnvPrefixes.
+  const leakedEnv = [];
+  try {
+    const envSanitize = require('./oxe-env-sanitize.cjs');
+    const pol = envSanitize.resolveEnvSanitizeConfig(projectRoot);
+    if (pol && pol.enabled && Array.isArray(pol.prefixes) && pol.prefixes.length) {
+      const allowSet = new Set(pol.allow || []);
+      const allowLower = new Set((pol.allow || []).map((a) => String(a).toLowerCase()));
+      const envObj = machine.env || process.env;
+      for (const [key, value] of Object.entries(envObj || {})) {
+        if (value === undefined) continue;
+        if (allowSet.has(key) || (process.platform === 'win32' && allowLower.has(key.toLowerCase()))) continue;
+        const upper = key.toUpperCase();
+        if (pol.prefixes.some((p) => upper.startsWith(String(p).toUpperCase()))) {
+          leakedEnv.push(key);
+        }
+      }
+      leakedEnv.sort();
+      if (leakedEnv.length) {
+        warnings.push(
+          `variável(is) de ambiente coincidem com stripEnvPrefixes (${leakedEnv.slice(0, 6).join(', ')}${leakedEnv.length > 6 ? '…' : ''}) — o runtime sanitiza subprocessos, mas comandos manuais fora do runtime podem herdar esse contexto; limpe o shell ou revise stripEnvPrefixes`,
+        );
+      }
+    }
+  } catch {
+    // optional helper
+  }
+
   return {
     ok: problems.length === 0,
     problems,
     warnings,
     scrubbed_env: scrubbedEnv,
+    leaked_env: leakedEnv,
     toolchain: { node, npm: npm || null, platform: process.platform, arch: process.arch, free_mb: freeMb },
     wanted: { engines, nvmrc: nvmrc || null, packageManager: (pkg && pkg.packageManager) || null },
   };
