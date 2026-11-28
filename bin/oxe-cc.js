@@ -7382,7 +7382,7 @@ async function main() {
       status: ['oxe-cc alm status', 'provedor, transporte, itens ligados, pendências e fila do MCP', 'oxe-cc alm status'],
       doctor: ['oxe-cc alm doctor', 'só leitura: credenciais, projeto, cada etapa de alm.states existe no Jira e as colunas do quadro estão na ordem', 'oxe-cc alm doctor'],
       priority: ['oxe-cc alm priority <CHAVE> <nome> [--dry-run]', 'troca a prioridade de um card (validada contra as prioridades do Jira, conferida por GET; só o escritor)', 'oxe-cc alm priority OXE-292 High'],
-      intake: ['oxe-cc alm intake --type story|task|bug|epic --summary "…" [--epic OXE-n] [--version 1.5.2] [--labels a,b] [--from <arquivo.md|url>] [--ref <id>] [--priority <nome>] [--dry-run]', 'item novo fora do PRD/PLAN (estudo, pedido, bug de HML): nasce na primeira coluna com o esqueleto do tipo, vai para o registro e é conferido por GET (só o escritor)', 'oxe-cc alm intake --type bug --summary "A lateral pisca no Windows" --epic OXE-5 --version 1.5.2 --dry-run'],
+      intake: ['oxe-cc alm intake --type story|task|bug|epic --summary "…" [--epic OXE-n] [--version 1.5.2] [--labels a,b] [--from <arquivo.md|url>] [--ref <id>] [--priority <nome>] [--no-program-labels] [--dry-run]', 'item novo fora do PRD/PLAN (estudo, pedido, bug de HML): nasce na primeira coluna com o esqueleto do tipo, vai para o registro e é conferido por GET (só o escritor). Por padrão leva os rótulos do programa ativo (alm.labels e ref-<alm.program>-<ref>); --no-program-labels deixa só ref-<ref> e os de --labels, para um card que não é do programa', 'oxe-cc alm intake --type bug --summary "A lateral pisca no Windows" --epic OXE-5 --version 1.5.2 --dry-run'],
       push: ['oxe-cc alm push [--stories-only|--tasks-only] [--dry-run] [--rebuild-ledger] [--first-push]', 'histórias do PRD e tarefas do PLAN viram itens, sem duplicar; com stories_source "alm" só liga a cards existentes', 'oxe-cc alm push --tasks-only --dry-run'],
       sync: ['oxe-cc alm sync [--dry-run]', 'move os itens pelas etapas do ciclo (eventos do OXE), nunca para trás', 'oxe-cc alm sync --dry-run'],
       move: ['oxe-cc alm move <US-n|Tn|chave> <etapa> [--comment "…"] [--apply]', 'move um item à mão (etapas: intake grooming refinement ready in_progress review verified queued integrated staging accepted released)', 'oxe-cc alm move OXE-20 review --comment "PR #801"'],
@@ -7435,6 +7435,7 @@ async function main() {
       if (a === '--json') o.json = true;
       else if (a === '--dry-run') o.dryRun = true;
       else if (a === '--apply') o.apply = true;
+      else if (a === '--no-program-labels' && action === 'intake') o.noProgramLabels = true;
       else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
       else if (['--type', '--summary', '--epic', '--version', '--labels', '--from', '--ref', '--release-date', '--priority'].includes(a) && argv[i + 1]) o[a === '--release-date' ? 'releaseDate' : a.slice(2)] = String(argv[++i]);
       else if (!a.startsWith('-') && action === 'version' && !o.name && !fs.existsSync(a)) o.name = a;
