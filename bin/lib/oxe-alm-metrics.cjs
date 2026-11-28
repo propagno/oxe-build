@@ -62,6 +62,8 @@ function compute(issues, cfg, options = {}) {
     const tl = timeline(issue, now);
     for (const seg of tl) {
       const k = seg.status;
+      // the terminal column's open stay is not a wait: the clock would keep running after the release (oxespace 28/11)
+      if (seg.open && doneName && String(k).toLowerCase() === String(doneName).toLowerCase()) continue;
       if (!perColumn.has(k)) perColumn.set(k, []);
       perColumn.get(k).push(seg.to - seg.from);
     }

@@ -93,3 +93,17 @@ describe('alm metrics — todas as páginas e o changelog completo', () => {
     }
   });
 });
+
+describe('alm metrics — coluna terminal', () => {
+  it('o tempo em Lançado não conta a permanência aberta depois do lançamento', () => {
+    const now = Date.parse('2026-11-28T12:00:00.000Z');
+    const issues = [{ key: 'OXE-1', created: '2026-11-20T00:00:00.000Z', status: 'Lançado', changes: [{ at: '2026-11-21T00:00:00.000Z', from: 'Em desenvolvimento', to: 'Lançado' }] }];
+    const m = metrics.compute(issues, { states: { in_progress: 'Em desenvolvimento', released: 'Lançado' }, stages: ['in_progress', 'released'] }, { now });
+    const released = m.columns.find((c) => c.column === 'Lançado');
+    assert.equal(released.now, 1);
+    assert.equal(released.passed, 0);
+    assert.equal(released.median_days, null);
+    assert.equal(m.columns.find((c) => c.column === 'Em desenvolvimento').median_days, 1);
+    assert.deepEqual(m.throughput, [{ week: '2026-W47', done: 1 }]);
+  });
+});
