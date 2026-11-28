@@ -7475,7 +7475,7 @@ async function main() {
     try {
       const m = await oxeOperational.runtimeAlmMetrics(o.dir, null, o);
       if (o.json) { const { card_list, ...rest } = m; console.log(JSON.stringify({ oxeAlmMetricsSchema: 1, ...rest, cards_detail: card_list }, null, 2)); return; }
-      console.log(`  ${m.cards} card(s) · lead time mediana ${m.lead_time.median_days ?? '—'} d (p85 ${m.lead_time.p85_days ?? '—'}) · cycle time mediana ${m.cycle_time.median_days ?? '—'} d (p85 ${m.cycle_time.p85_days ?? '—'})`);
+      console.log(`  ${require('./lib/oxe-alm-metrics.cjs').cardsLabel(m)} · lead time mediana ${m.lead_time.median_days ?? '—'} d (p85 ${m.lead_time.p85_days ?? '—'}) · cycle time mediana ${m.cycle_time.median_days ?? '—'} d (p85 ${m.cycle_time.p85_days ?? '—'})`);
       if (m.bottleneck) console.log(`  gargalo: ${m.bottleneck.column} (mediana ${m.bottleneck.median_days} d por card)`);
       for (const col of m.columns) console.log(`    ${String(col.column).padEnd(28)} agora ${String(col.now).padStart(3)}${col.wip_limit ? ` / ${col.wip_limit}` : ''}${col.over_wip ? ` ${yellow}acima do WIP${reset}` : ''} · mediana ${col.median_days ?? '—'} d · p85 ${col.p85_days ?? '—'} d`);
       if (m.throughput.length) console.log(`  vazão: ${m.throughput.slice(-6).map((w) => `${w.week} ${w.done}`).join(' · ')}`);

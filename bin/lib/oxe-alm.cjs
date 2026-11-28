@@ -237,7 +237,8 @@ async function fetchHttp(method, url, headers, body) {
 }
 
 /** A read-only POST (Azure WIQL query): allowed in a dry run. Everything else that is not GET writes. */
-const isReadOnlyCall = (method, url) => method === 'GET' || (method === 'POST' && /\/wit\/wiql\?/.test(url));
+// POST reads: Azure WIQL and Jira approximate-count (alm metrics: "N de M cards")
+const isReadOnlyCall = (method, url) => method === 'GET' || (method === 'POST' && /\/wit\/wiql\?|\/rest\/api\/3\/search\/approximate-count$/.test(url));
 
 async function request(ctx, method, url, body, extraHeaders = {}) {
   // OXB-G13: a dry run (or a read-only session) never reaches a write endpoint, whatever the command does above

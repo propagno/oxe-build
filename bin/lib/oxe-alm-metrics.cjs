@@ -111,8 +111,14 @@ function changesFromJira(issue) {
   return out;
 }
 
+/** "434 card(s)", or "300 de 434 card(s) (amostra parcial)" when the fetch stopped before the end. */
+function cardsLabel(m) {
+  if (m.truncated && m.total != null && m.total > m.cards) return `${m.cards} de ${m.total} card(s) (amostra parcial: os números valem só para esses)`;
+  return `${m.cards} card(s)`;
+}
+
 function renderMarkdown(m, ctx = {}) {
-  const l = [`# Métricas do quadro${ctx.project ? ` — ${ctx.project}` : ''}`, '', `${m.cards} card(s)${ctx.jql ? ` · \`${ctx.jql}\`` : ''} · gerado em ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`, ''];
+  const l = [`# Métricas do quadro${ctx.project ? ` — ${ctx.project}` : ''}`, '', `${cardsLabel(m)}${ctx.jql ? ` · \`${ctx.jql}\`` : ''} · gerado em ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`, ''];
   l.push(`- **Lead time** (criado → ${ctx.doneName || 'lançado'}): mediana ${m.lead_time.median_days ?? '—'} d · p85 ${m.lead_time.p85_days ?? '—'} d (${m.lead_time.done} card(s))`);
   l.push(`- **Cycle time** (em desenvolvimento → ${ctx.doneName || 'lançado'}): mediana ${m.cycle_time.median_days ?? '—'} d · p85 ${m.cycle_time.p85_days ?? '—'} d (${m.cycle_time.done} card(s))`);
   if (m.bottleneck) l.push(`- **Gargalo:** ${m.bottleneck.column} (mediana de ${m.bottleneck.median_days} d por card)`);
@@ -140,4 +146,4 @@ function renameByStatusId(issues) {
   return issues;
 }
 
-module.exports = { renameByStatusId, compute, timeline, changesFromJira, renderMarkdown, isoWeek };
+module.exports = { renameByStatusId, compute, timeline, changesFromJira, renderMarkdown, cardsLabel, isoWeek };
