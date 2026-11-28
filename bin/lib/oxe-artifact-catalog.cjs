@@ -43,14 +43,17 @@ const GROUPS = [
   { key: 'project', label: 'Gestão de projeto — sessões / workstreams / milestones', order: 8 },
   { key: 'platform', label: 'Plataforma — capabilities / plugins / cloud / install', order: 9 },
   { key: 'layout', label: 'Layout instalado (árvore canônica copiada no install)', order: 10 },
+  { key: 'cache', label: 'Temporários & cache descartável (.cache/ — limpo por oxe-cc gc)', order: 11 },
 ];
 
 /** @type {Array<{path:string,kind:'file'|'dir',purpose:string,createdBy:string,group:string}>} */
 const ARTIFACT_CATALOG = [
   // ── core ────────────────────────────────────────────────────────────────
-  { path: 'STATE.md', kind: 'file', purpose: 'Estado curto: fase, sessão ativa, próximo passo, bloqueios', createdBy: 'install', group: 'core' },
+  { path: 'STATE.md', kind: 'file', purpose: 'Estado curto: fase, sessão ativa, próximo passo, bloqueios (projeção derivada)', createdBy: 'install', group: 'core' },
   { path: 'config.json', kind: 'file', purpose: 'Configuração do projeto (profile, verificação, permissões, azure)', createdBy: 'install', group: 'core' },
   { path: 'README.md', kind: 'file', purpose: 'Esta legenda — o que cada artefato é e quando aparece', createdBy: 'install', group: 'core' },
+  { path: 'state.json', kind: 'file', purpose: 'Ponteiro canônico de sessão ativa e estado resumido do projeto', createdBy: 'runtime', group: 'core' },
+  { path: 'oxe-version.json', kind: 'file', purpose: 'Versão instalada do OXE no workspace', createdBy: 'runtime', group: 'core' },
 
   // ── discovery ───────────────────────────────────────────────────────────
   { path: 'codebase/', kind: 'dir', purpose: 'Mapas do repositório (OVERVIEW, STACK, STRUCTURE, TESTING, INTEGRATIONS, CONVENTIONS, CONCERNS)', createdBy: 'scan', group: 'discovery' },
@@ -60,6 +63,11 @@ const ARTIFACT_CATALOG = [
   // ── spec ────────────────────────────────────────────────────────────────
   { path: 'SPEC.md', kind: 'file', purpose: 'Especificação da feature com critérios de aceite', createdBy: 'spec', group: 'spec' },
   { path: 'ROADMAP.md', kind: 'file', purpose: 'Roteiro de requisitos (R-ID v1/v2/fora)', createdBy: 'spec', group: 'spec' },
+  { path: 'PRD.md', kind: 'file', purpose: 'Histórias de usuário e métricas de sucesso do ciclo', createdBy: 'spec', group: 'spec' },
+  { path: 'GLOSSARY.md', kind: 'file', purpose: 'Glossário de termos e conceitos do domínio', createdBy: 'spec', group: 'spec' },
+  { path: 'SYSTEM-DESIGN.md', kind: 'file', purpose: 'Desenho arquitetural da solução e fronteiras de componentes', createdBy: 'spec', group: 'spec' },
+  { path: 'grill/', kind: 'dir', purpose: 'Entrevistas de descoberta estruturadas (oxe-cc grill)', createdBy: 'spec', group: 'spec' },
+  { path: 'rfc/', kind: 'dir', purpose: 'Propostas técnicas (RFCs) antes do planejamento de risco alto', createdBy: 'spec', group: 'spec' },
   { path: 'DISCUSS.md', kind: 'file', purpose: 'Perguntas e decisões de esclarecimento antes do plano', createdBy: 'spec', group: 'spec' },
   { path: 'NOTES.md', kind: 'file', purpose: 'Notas não resolvidas da discussão', createdBy: 'spec', group: 'spec' },
   { path: 'RESEARCH.md', kind: 'file', purpose: 'Índice de pesquisa exploratória', createdBy: 'spec', group: 'spec' },
@@ -70,21 +78,31 @@ const ARTIFACT_CATALOG = [
   { path: 'SECURITY.md', kind: 'file', purpose: 'Auditoria de segurança OWASP (P0/P1/P2)', createdBy: 'verify', group: 'spec' },
 
   // ── plan ────────────────────────────────────────────────────────────────
-  { path: 'PLAN.md', kind: 'file', purpose: 'Plano por ondas com verificação por tarefa', createdBy: 'plan', group: 'plan' },
+  { path: 'PLAN.json', kind: 'file', purpose: 'Plano canônico estruturado (tarefas, critérios, testes congelados)', createdBy: 'plan', group: 'plan' },
+  { path: 'PLAN.md', kind: 'file', purpose: 'Plano por ondas com verificação por tarefa (projeção legível)', createdBy: 'plan', group: 'plan' },
+  { path: 'PLAN-STATUS.md', kind: 'file', purpose: 'Progresso resumido do plano da fase atual', createdBy: 'plan', group: 'plan' },
+  { path: 'plan/', kind: 'dir', purpose: 'Artefatos auxiliares e papéis de planejamento por fase', createdBy: 'plan', group: 'plan' },
+  { path: 'role.json', kind: 'file', purpose: 'Entrada declarativa de papel para `oxe-cc plan build`', createdBy: 'plan', group: 'plan' },
   { path: 'plan-agents.json', kind: 'file', purpose: 'Blueprint multi-agente (schema 3) — Plan-Driven Dynamic Agents', createdBy: 'plan', group: 'plan' },
   { path: 'plan-agent-messages/', kind: 'dir', purpose: 'Protocolo de mensagens agente→agente', createdBy: 'plan', group: 'plan' },
   { path: 'IMPLEMENTATION-PACK.json', kind: 'file', purpose: 'Pack racional: paths exatos, símbolos, contratos, write-set', createdBy: 'plan', group: 'plan' },
   { path: 'REFERENCE-ANCHORS.md', kind: 'file', purpose: 'Âncoras de referência resolvidas para o plano', createdBy: 'plan', group: 'plan' },
   { path: 'FIXTURE-PACK.json', kind: 'file', purpose: 'Fixtures obrigatórias por tipo de tarefa', createdBy: 'plan', group: 'plan' },
   { path: 'QUICK.md', kind: 'file', purpose: 'Passos do modo rápido (sem cerimônia)', createdBy: 'plan', group: 'plan' },
+  { path: 'quick/', kind: 'dir', purpose: 'Registros auditados de tarefas rápidas (`oxe-cc quick`)', createdBy: 'plan', group: 'plan' },
   { path: 'quick-agents.json', kind: 'file', purpose: 'Agentes lean (PDDA) do modo quick', createdBy: 'plan', group: 'plan' },
   { path: 'PLAN-REVIEW.md', kind: 'file', purpose: 'Revisão de plano para aprovação (dashboard)', createdBy: 'plan', group: 'plan' },
+  { path: 'REFACTOR-PROPOSALS.md', kind: 'file', purpose: 'Propostas de refatoração incremental registradas no ciclo', createdBy: 'plan', group: 'plan' },
 
   // ── execute (runtime operacional) ─────────────────────────────────────────
   { path: 'EXECUTION-RUNTIME.md', kind: 'file', purpose: 'Runtime tático da onda: agentes ativos, handoffs, retries', createdBy: 'execute', group: 'execute' },
   { path: 'ACTIVE-RUN.json', kind: 'file', purpose: 'Cursor e estado do run atual', createdBy: 'runtime', group: 'execute' },
   { path: 'OXE-EVENTS.ndjson', kind: 'file', purpose: 'Trace append-only de eventos do run', createdBy: 'runtime', group: 'execute' },
   { path: 'runs/', kind: 'dir', purpose: 'Artefatos por run do runtime enterprise (manifest, evidence, risk)', createdBy: 'runtime', group: 'execute' },
+  { path: 'evidence/', kind: 'dir', purpose: 'Evidências executáveis de checks e verificações do runtime', createdBy: 'runtime', group: 'execute' },
+  { path: 'dossier/', kind: 'dir', purpose: 'Dossiês de handoff e resumo de fases fechadas', createdBy: 'runtime', group: 'execute' },
+  { path: 'program/', kind: 'dir', purpose: 'Estado do programa por fases (PROGRAM.json, regressão, interfaces, decisões)', createdBy: 'runtime', group: 'execute' },
+  { path: 'OPEN-DEFECTS.json', kind: 'file', purpose: 'Índice de defeitos abertos capturados no ciclo', createdBy: 'execute', group: 'execute' },
   { path: 'CHECKPOINTS.md', kind: 'file', purpose: 'Gates humanos de aprovação', createdBy: 'execute', group: 'execute' },
   { path: 'OBSERVATIONS.md', kind: 'file', purpose: 'Observações contextuais pendentes de incorporação', createdBy: 'execute', group: 'execute' },
   { path: 'DEBUG.md', kind: 'file', purpose: 'Diagnóstico técnico durante execução', createdBy: 'execute', group: 'execute' },
@@ -95,12 +113,17 @@ const ARTIFACT_CATALOG = [
   { path: 'SUMMARY.md', kind: 'file', purpose: 'Sumário de entrega', createdBy: 'verify', group: 'verify' },
   { path: 'VALIDATION-GAPS.md', kind: 'file', purpose: 'Gaps de cobertura pós-verify', createdBy: 'verify', group: 'verify' },
   { path: 'UI-REVIEW.md', kind: 'file', purpose: 'Auditoria de UI face ao UI-SPEC', createdBy: 'verify', group: 'verify' },
+  { path: 'release/', kind: 'dir', purpose: 'Manifestos e relatórios locais de release readiness (`doctor --release`)', createdBy: 'verify', group: 'verify' },
 
-  // ── autonomous (conduct / agent / swarm) ──────────────────────────────────
+  // ── autonomous (conduct / agent / swarm / deliver) ────────────────────────
+  { path: 'DELIVER.json', kind: 'file', purpose: 'Máquina de estados da entrega autônoma (`oxe-cc deliver`)', createdBy: 'deliver', group: 'autonomous' },
+  { path: 'DELIVERY.md', kind: 'file', purpose: 'Handoff humano da entrega pronta com comandos testados (`FINAL_SMOKE`)', createdBy: 'deliver', group: 'autonomous' },
+  { path: 'DELIVERY.json', kind: 'file', purpose: 'Resumo estruturado da entrega autônoma verificada', createdBy: 'deliver', group: 'autonomous' },
   { path: 'agent/', kind: 'dir', purpose: 'Artefatos de Agent Mode (AGENT-SESSION, RECONCILIATION, SKILLS-LOADED)', createdBy: 'conduct', group: 'autonomous' },
   { path: 'swarm/', kind: 'dir', purpose: 'Artefatos de Swarm Mode (SWARM-RUN, TASK-GRAPH, FILE-OWNERSHIP, BOARD, reviews)', createdBy: 'conduct', group: 'autonomous' },
 
   // ── memory & learning ─────────────────────────────────────────────────────
+  { path: 'LESSONS.md', kind: 'file', purpose: 'Lições prescritivas extraídas das retrospectivas do projeto', createdBy: 'verify', group: 'memory' },
   { path: 'memory/', kind: 'dir', purpose: 'Memory Kernel: REPO-MEMORY + índice + sidecars injetados', createdBy: 'memory', group: 'memory' },
   { path: 'learning/', kind: 'dir', purpose: 'Learning Kernel: candidates, promotion queue, learning events', createdBy: 'distill', group: 'memory' },
   { path: 'global/', kind: 'dir', purpose: 'Cross-session: LESSONS.md, MILESTONES.md, milestones/', createdBy: 'verify', group: 'memory' },
@@ -111,6 +134,7 @@ const ARTIFACT_CATALOG = [
   { path: 'workstreams/', kind: 'dir', purpose: 'Trilhas paralelas com artefatos independentes', createdBy: 'workstream', group: 'project' },
 
   // ── platform ──────────────────────────────────────────────────────────────
+  { path: 'alm/', kind: 'dir', purpose: 'Integração ALM (Jira / Azure DevOps / GitHub / GitLab Issues: links, fila e cards)', createdBy: 'alm', group: 'platform' },
   { path: 'CAPABILITIES.md', kind: 'file', purpose: 'Índice de capabilities nativas do projeto', createdBy: 'capabilities', group: 'platform' },
   { path: 'capabilities/', kind: 'dir', purpose: 'Manifestos de capabilities', createdBy: 'capabilities', group: 'platform' },
   { path: 'plugins/', kind: 'dir', purpose: 'Plugins opcionais do runtime', createdBy: 'plugins', group: 'platform' },
@@ -118,12 +142,23 @@ const ARTIFACT_CATALOG = [
   { path: 'dashboard/', kind: 'dir', purpose: 'Estado do dashboard web (opt-in)', createdBy: 'execute', group: 'platform' },
   { path: 'install/', kind: 'dir', purpose: 'Auditoria de instalação (runtime-semantics, manifests de IDE)', createdBy: 'install', group: 'platform' },
 
-  // ── layout (nested install copia a árvore canônica para `.oxe/`) ───────────
+  // ── layout (nested / core install copia a árvore canônica para `.oxe/`) ───
+  { path: 'core/', kind: 'dir', purpose: 'Layout enxuto consolidando assets estáticos (workflows, templates, personas, agents, schemas)', createdBy: 'install', group: 'layout' },
   { path: 'workflows/', kind: 'dir', purpose: 'Workflows canônicos OXE (fonte da verdade dos passos)', createdBy: 'install', group: 'layout' },
   { path: 'templates/', kind: 'dir', purpose: 'Templates de artefatos usados pelos workflows', createdBy: 'install', group: 'layout' },
   { path: 'personas/', kind: 'dir', purpose: 'Personas builtin dos agentes', createdBy: 'install', group: 'layout' },
   { path: 'agents/', kind: 'dir', purpose: 'Definições de agentes especializados', createdBy: 'install', group: 'layout' },
   { path: 'schemas/', kind: 'dir', purpose: 'JSON schemas (plan-agents, swarm-run)', createdBy: 'install', group: 'layout' },
+  { path: 'skills/', kind: 'dir', purpose: 'Skills planas OXE (`oxe-*.md`) para OxeChat/OxeCode e hosts universais', createdBy: 'install', group: 'layout' },
+
+  // ── cache (temporários descartáveis — limpos por oxe-cc gc) ──────────────
+  { path: '.cache/', kind: 'dir', purpose: 'Temporários descartáveis (precheck-ws, precheck-*, rollback-ws, tmp, verify cache)', createdBy: 'runtime', group: 'cache' },
+  { path: 'tmp/', kind: 'dir', purpose: 'Temporários legados de execução (migrados para `.cache/` e limpos por `oxe-cc gc`)', createdBy: 'runtime', group: 'cache' },
+  { path: 'precheck-ws/', kind: 'dir', purpose: 'Worktrees efêmeros legados de precheck (limpos automaticamente por `oxe-cc gc`)', createdBy: 'runtime', group: 'cache' },
+  { path: 'rollback-ws/', kind: 'dir', purpose: 'Worktree efêmero legado de rollback (limpo automaticamente por `oxe-cc gc`)', createdBy: 'runtime', group: 'cache' },
+  { path: 'precheck-cache.json', kind: 'file', purpose: 'Cache legado de precheck (migrado para `.cache/`)', createdBy: 'runtime', group: 'cache' },
+  { path: 'precheck-last.json', kind: 'file', purpose: 'Último progresso legado de precheck (migrado para `.cache/`)', createdBy: 'runtime', group: 'cache' },
+  { path: 'precheck-auto-last.json', kind: 'file', purpose: 'Último progresso legado de precheck auto (migrado para `.cache/`)', createdBy: 'runtime', group: 'cache' },
 ];
 
 /**
@@ -140,6 +175,8 @@ const SOURCE_LABELS = {
   verify: '/oxe-verify',
   runtime: 'oxe-cc runtime',
   conduct: '/oxe (autônomo)',
+  deliver: 'oxe-cc deliver',
+  alm: 'oxe-cc alm',
   session: '/oxe-session',
   workstream: '/oxe-workstream',
   milestone: '/oxe-milestone',
