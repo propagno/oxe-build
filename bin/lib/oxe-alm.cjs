@@ -256,7 +256,14 @@ async function request(ctx, method, url, body, extraHeaders = {}) {
         await ctx.sleep(wait);
         continue;
       }
-      if (r.status === 401) throw Object.assign(new Error('HTTP 401: credencial recusada (confira as variáveis de ambiente do ALM)'), { fatal: true });
+      if (r.status === 401) {
+        // oxespace 28/11: a token renewed in the user scope while this process still holds the old one — say which
+        const stale = staleCredentialNames(ctx.credEnv);
+        const why = stale.length
+          ? `o valor de ${stale.join(', ')} neste processo difere da variável de usuário (renovada depois que este terminal/processo abriu): reabra o terminal ou recarregue as variáveis de usuário e rode de novo`
+          : 'confira as variáveis de ambiente do ALM; se o processo já tem o valor atual, o token foi revogado ou expirou — renove-o';
+        throw Object.assign(new Error(`HTTP 401: credencial recusada (${why})`), { fatal: true, staleCredentials: stale });
+      }
       if (r.status === 403) throw Object.assign(new Error(`HTTP 403: sem permissão para ${method} ${url.replace(/\?.*$/, '')}`), { fatal: true });
       // OXB-C28-9: a 404 names the call (quick start: comment or transition?) — the bare body did not say which write
       if (r.status === 404) {

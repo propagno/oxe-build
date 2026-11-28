@@ -107,3 +107,15 @@ describe('alm metrics — coluna terminal', () => {
     assert.deepEqual(m.throughput, [{ week: '2026-W47', done: 1 }]);
   });
 });
+
+describe('alm — 401 com token renovado só na variável de usuário', () => {
+  it('diz que o processo carrega o token antigo; com o mesmo valor, aponta token revogado', async () => {
+    const alm = require(path.join(__dirname, '..', 'bin', 'lib', 'oxe-alm.cjs'));
+    const cfg = alm.almConfig({ alm: { provider: 'jira', jira: { site: 'https://example.atlassian.net', project: 'OXE' } } }, { defaultProgram: 'p' });
+    const http = async () => ({ status: 401, json: null, text: '' });
+    const stale = alm.jiraRest(cfg, { http, env, userEnv: (n) => (n === 'JIRA_API_TOKEN' ? 'novo' : env[n]) });
+    await assert.rejects(stale.request('GET', 'https://example.atlassian.net/rest/api/3/myself'), /JIRA_API_TOKEN neste processo difere da variável de usuário/);
+    const same = alm.jiraRest(cfg, { http, env, userEnv: (n) => env[n] });
+    await assert.rejects(same.request('GET', 'https://example.atlassian.net/rest/api/3/myself'), /revogado ou expirou/);
+  });
+});
