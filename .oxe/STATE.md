@@ -11,7 +11,7 @@
 
 ## Programa
 
-✓ F1 Hardening de Release/CI, Doctor CI-Parity & Fim do Flake de PID (closed) · ✓ F2 Fechamento dos Loops Automáticos da 1.22.2 (closed) · ✓ F3 Ecossistema Aberto — Servidor MCP Nativo & ALM GitHub/GitLab Issues (closed) · ✓ F4 Dashboard v2 Multi-Agente, Strangler Fig Fatia 3 & Corte `1.23.0` (closed) · ✓ F5 Primer do Agente & Intake Autônomo (oxe-cc primer + deliver init) (closed) · ✓ F6 Motor Determinístico oxe-deliver-engine, Anti-Cheat, Auto-Cura & MCP (closed) · ✓ F7 Runner Headless (deliver run), FINAL_SMOKE & DELIVERY.md (closed) · ▶ F8 Dashboard Live Deliver, /oxe-deliver & Prova E2E Greenfield + Brownfield (verifying)
+✓ F1 Hardening de Release/CI, Doctor CI-Parity & Fim do Flake de PID (closed) · ✓ F2 Fechamento dos Loops Automáticos da 1.22.2 (closed) · ✓ F3 Ecossistema Aberto — Servidor MCP Nativo & ALM GitHub/GitLab Issues (closed) · ✓ F4 Dashboard v2 Multi-Agente, Strangler Fig Fatia 3 & Corte `1.23.0` (closed) · ✓ F5 Primer do Agente & Intake Autônomo (oxe-cc primer + deliver init) (closed) · ✓ F6 Motor Determinístico oxe-deliver-engine, Anti-Cheat, Auto-Cura & MCP (closed) · ✓ F7 Runner Headless (deliver run), FINAL_SMOKE & DELIVERY.md (closed) · ✓ F8 Dashboard Live Deliver, /oxe-deliver & Prova E2E Greenfield + Brownfield (closed)
 
 ## Run
 
