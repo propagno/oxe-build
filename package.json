@@ -37,7 +37,11 @@
   ],
   "main": "lib/sdk/index.cjs",
   "exports": {
-    ".": "./lib/sdk/index.cjs",
+    ".": {
+      "types": "./lib/sdk/index.d.ts",
+      "import": "./lib/sdk/index.mjs",
+      "require": "./lib/sdk/index.cjs"
+    },
     "./package.json": "./package.json"
   },
   "types": "lib/sdk/index.d.ts",

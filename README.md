@@ -40,7 +40,8 @@ npx oxe-cc deliver advance --json
 npx oxe-cc deliver run --from briefing.md --approval auto --executor claude --max-budget-usd 10
 ```
 
-- **Proteções mecânicas:** testes congelados verificados por SHA-256 (anti-cheat), anti-stub, regressão cumulativa entre fases, auto-cura (`PHASE_HEAL`) com circuit breaker (`PAUSED_BLOCKED`), `FINAL_SMOKE` real e `DELIVERY.md` com comandos testados de como rodar — sem jamais executar `git push` ou `npm publish` sem seu OK explícito.
+- **Proteções mecânicas:** testes congelados verificados por SHA-256 (anti-cheat), anti-stub, regressão cumulativa entre fases, auto-cura (`PHASE_HEAL`) com circuit breaker (`PAUSED_BLOCKED`), smoke HTTP real em porta efêmera (`probeHttpServerSmoke`), ondas paralelas para `write_set` disjunto, auto-branch/commit local (`deliver/<slug>` + `OXE-Deliver:`) e `DELIVERY.md` com comandos testados — sem jamais executar `git push` ou `npm publish` sem seu OK explícito.
+- **SDK CJS & ESM nativo:** `const { createClient } = require('oxe-cc')` ou `import { createClient } from 'oxe-cc'` para integrar status, primer, onboard, ci-parity, multi-agente e `deliver` diretamente em scripts e CI (ver [lib/sdk/README.md](lib/sdk/README.md)).
 
 ---
 

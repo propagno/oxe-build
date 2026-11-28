@@ -4,9 +4,9 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
-## [1.23.0] — 2026-11-27
+## [1.23.0] — 2026-11-28
 
-Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-61`..`OB-76`, 8 fases `F1`–`F8`, 15 entregas `OXB-230-01`..`OXB-230-15`, ADR `D-8`) eliminando os atritos reais observados no corte de `v1.22.2`, fechando os loops automáticos da `1.22.2`, inaugurando o ecossistema aberto com servidor MCP nativo (`15` tools), ALM GitHub/GitLab Issues, Dashboard v2 multi-agente simplificado ao vivo, Strangler Fig Fatia 3 (`D-6`) e a experiência autônoma ponta a ponta **`oxe-cc primer` + `oxe-cc deliver`** (Chat-Driven e Terminal Headless) — com **zero novas dependências npm de produção**.
+Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-61`..`OB-76`, 11 fases `F1`–`F11`, 18 entregas `OXB-230-01`..`OXB-230-18`, ADR `D-8`) eliminando os atritos reais observados no corte de `v1.22.2` e no dogfooding da `v1.23.0`, fechando os loops automáticos da `1.22.2`, inaugurando o ecossistema aberto com servidor MCP nativo (`15` tools), ALM GitHub/GitLab Issues, Dashboard v2 multi-agente simplificado ao vivo, Strangler Fig Fatia 3 (`D-6`), a experiência autônoma ponta a ponta **`oxe-cc primer` + `oxe-cc deliver`** (Chat-Driven, Terminal Headless, smoke HTTP real, auto-branch/commit e ondas paralelas disjuntas) e a facade ergonômica **`createClient(projectRoot)` com ESM nativo** — com **zero novas dependências npm de produção**.
 
 ### Hardening CI/Release, Paridade Local & Fim do Flake de PID (`OB-62`..`OB-64`)
 
@@ -37,6 +37,12 @@ Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-61`..
 - **Motor determinístico `oxe-deliver-engine`, Anti-Cheat SHA-256, Auto-Cura & MCP (`OXB-230-13`):** `bin/lib/oxe-deliver-engine.cjs` + CLI `oxe-cc deliver <init|mode|answer|approve|next|advance|run|resume|status|cancel>` + tools MCP `oxe_deliver_status`, `oxe_deliver_next` e `oxe_deliver_advance` (total de 15 tools MCP) impõem verificação SHA-256 contra adulteração de testes congelados, checagem anti-stub, regressão cumulativa `F1..Fn` e loop `PHASE_HEAL` com escalonamento de tier e circuit breaker para `PAUSED_BLOCKED`.
 - **Runner headless (`deliver run`), `FINAL_SMOKE` real e `DELIVERY.md` (`OXB-230-14`):** `bin/lib/oxe-deliver-runner.cjs` executa todas as fases de forma autônoma respeitando `approval_mode` e `max_budget_usd`; `bin/lib/oxe-deliver-handoff.cjs` executa smoke real da solução entregue (`FINAL_SMOKE`) e gera `DELIVERY.md` + `DELIVERY.json` com comandos testados de como rodar agora (sem jamais executar `git push`/`npm publish` sozinho).
 - **Dashboard v2 Live Deliver, `/oxe-deliver` e prova E2E greenfield + brownfield (`OXB-230-15`):** Dashboard v2 simplificado em torno de ação imediata (`Agora`) com progresso real de `PROGRAM.json`/`DELIVER.json`, botões `single-ok`/`auto`/aprovação (`POST /api/deliver/mode`, `/api/deliver/approve`) e cartão `Entrega Pronta`; novo workflow canônico `oxe/workflows/deliver.md` sincronizado em todas as IDEs com `0 mismatches`.
+
+### Ergonomia do Dogfooding, Deliver Pro & SDK Facade + ESM Nativo (`F9`–`F11`, `A16`–`A18`)
+
+- **Correções de dogfooding e scaffold de workflows (`OXB-230-16`):** `bin/lib/oxe-prd.cjs` agora parseia tabelas compactas de 4 colunas (`| ID | História | Critérios | Fase |`) além do formato canônico de 7 colunas; `resolveEffectiveSession` e `prdPathFor` em `bin/lib/oxe-operational.cjs` resolvem o `PRD.md` da sessão ativa via `STATE.md` antes da raiz; `bin/lib/oxe-suite-impact.cjs` agrupa avisos `[G30]` (> 5 suítes) em 3 exemplos + 1 linha resumo; `oxe-cc doctor --ci-parity` (`checkScorecardEvidenceParity`) detecta drift `major.minor` em `release-evidence/scorecard-report.json` antes do push; novo subcomando `oxe-cc workflow new <slug>` (`scaffoldWorkflow`) cria e registra novos workflows canônicos com `<objective>`, `<success_criteria>`, `size-budget.json` e `workflow-runtime-contracts.json` em um comando.
+- **`oxe-cc deliver` Pro (`OXB-230-17`):** `probeHttpServerSmoke` em `bin/lib/oxe-deliver-handoff.cjs` sobe servidores web/API em porta efêmera `127.0.0.1`, valida HTTP `< 400` em `/health`/`/` e encerra a árvore de processos com segurança; `oxe-deliver-runner.cjs` adiciona `partitionDisjointTasks` (execução paralela via `Promise.all` com auto-lease por tarefa para `write_set` disjunto) e modo `autoGit` (`deliver/<slug>` + commits automáticos com trailer `OXE-Deliver: <id>/<fase>` por fase, sem nunca fazer push).
+- **SDK Facade `createClient` & ESM Nativo (`OXB-230-18`):** novo `lib/sdk/client.cjs` (`createClient(projectRoot, options)`), entrypoint ESM nativo `lib/sdk/index.mjs` e `exports["."]` condicional em `package.json` (`types`, `import`, `require`) suportando tanto `require('oxe-cc')` quanto `import { createClient } from 'oxe-cc'`, com declarações `lib/sdk/index.d.ts` regeneradas com `0 drift` (`npm run test:sdk-types`).
 
 ---
 

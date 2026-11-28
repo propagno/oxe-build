@@ -10,6 +10,26 @@ npm install oxe-cc
 
 ## Uso
 
+### Facade ergonômica (`createClient` — CJS ou ESM nativo, v1.23.0)
+
+```javascript
+// CommonJS
+const { createClient } = require('oxe-cc');
+
+// ou ESM nativo (Node 18+)
+// import { createClient } from 'oxe-cc';
+
+const oxe = createClient(process.cwd());
+
+const health = oxe.status();
+const primer = oxe.primer();
+const parity = oxe.ciParity();
+const agents = oxe.agents.list();
+const delivery = oxe.deliver.status();
+```
+
+### API funcional direta (compatibilidade completa)
+
 ```javascript
 const oxe = require('oxe-cc');
 
@@ -43,6 +63,7 @@ const { options, warnings: w } = oxe.install.resolveOptionsFromConfig(dir, {
 
 | Área | Funções |
 |------|---------|
+| **Facade** | `createClient(projectRoot, options?)` — cliente vinculado ao projeto (`.status()`, `.doctor()`, `.primer()`, `.onboard()`, `.ciParity()`, `.reevaluate()`, `.agents.*`, `.deliver.*`, `.dashboard.*`, `.operational.*`) com suporte a CJS (`require('oxe-cc')`) e ESM nativo (`import { createClient } from 'oxe-cc'`) |
 | **Meta** | `version`, `name`, `PACKAGE_ROOT`, `readPackageMeta`, `readMinNode` |
 | **health** | `loadOxeConfigMerged`, `validateConfigShape`, `buildHealthReport`, `suggestNextStep`, `oxePaths`, constantes de config |
 | **workflows** | `resolveWorkflowsDir`, `listWorkflowMdFiles`, `diffWorkflows`, `validateWorkflowShapes` (avisos `WORKFLOW_SHAPE`) |
