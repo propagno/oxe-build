@@ -86,27 +86,72 @@ function parsePlan(planMd) {
 }
 
 function parseSpec(specMd) {
-  const objective = (((specMd.match(/##\s*Objetivo\s*\n+([\s\S]*?)(?=\n##\s|\n#[^\#]|$)/im) || [null, ''])[1]) || '').trim().split('\n')[0].trim() || null;
+  const normalized = String(specMd || '').replace(/\r\n/g, '\n');
+  const objective = (((normalized.match(/(?:^|\n)##\s*Objetivo\s*\n+([\s\S]*?)(?=\n##\s|\n#[^#]|$)/i) || [null, ''])[1]) || '').trim().split('\n')[0].trim() || null;
   const criteria = [];
-  const m = specMd.match(/##\s*Critérios.*?aceite[\s\S]*?(\|[\s\S]*?)(?=\n##\s|\n#[^\#]|$)/im);
+  const seen = new Set();
+  const m = normalized.match(/(?:^|\n)##\s*Crit[eé]rios[^\n]*aceite[^\n]*\n+([\s\S]*?)(?=\n##\s|\n#[^#]|$)/i);
   if (m) {
-    for (const row of m[1].split('\n').filter((l) => l.startsWith('|'))) {
-      const cells = row.split('|').map((c) => c.trim()).filter(Boolean);
-      if (cells.length >= 2 && /^(?:A\d+(?:\.\d+)?|G\d+)$/i.test(cells[0])) criteria.push({ id: cells[0].toUpperCase(), criterion: cells[1] || '', howToVerify: cells[2] || '' });
+    const tables = parseMarkdownTables(m[1]);
+    if (tables.length) {
+      for (const row of tables[0].rows) {
+        const idRaw = row.ID || row.Id || row['Critério'] || '';
+        const idMatch = String(idRaw).match(/^(A\d+(?:\.\d+)?|G\d+)$/i);
+        if (!idMatch) continue;
+        const id = idMatch[1].toUpperCase();
+        if (seen.has(id)) continue;
+        seen.add(id);
+        criteria.push({
+          id,
+          criterion: row['Critério'] || row.Criterio || row.Criterion || row['Descrição'] || '',
+          risk: row.Risco || row.Risk || '',
+          howToVerify: row['Como verificar'] || row['Verificação'] || row.Verify || row.Verificacao || '',
+        });
+      }
+    }
+    if (!criteria.length) {
+      for (const row of m[1].split('\n').filter((l) => l.startsWith('|'))) {
+        const cells = row.split('|').map((c) => c.trim()).filter(Boolean);
+        if (cells.length >= 2 && /^(?:A\d+(?:\.\d+)?|G\d+)$/i.test(cells[0])) {
+          const id = cells[0].toUpperCase();
+          if (seen.has(id)) continue;
+          seen.add(id);
+          criteria.push({ id, criterion: cells[1] || '', risk: cells.length >= 4 ? cells[2] : '', howToVerify: cells[cells.length - 1] || '' });
+        }
+      }
+    }
+  }
+  if (!criteria.length) {
+    for (const line of normalized.split('\n')) {
+      const bm = line.match(/^\s*-\s+\*\*(A\d+(?:\.\d+)?)\b[^*]*\*\*\s*[:—-]?\s*(.+)$/);
+      if (!bm) continue;
+      const id = bm[1].toUpperCase();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      criteria.push({ id, criterion: bm[2].trim(), risk: '', howToVerify: '' });
     }
   }
   return { objective, criteria };
 }
 
+function sanitizeTemplateValue(raw) {
+  if (!raw) return null;
+  const cleaned = String(raw).replace(/`/g, '').trim();
+  if (!cleaned || cleaned === '—' || /\|\s*[a-z_]+\s*\|/i.test(cleaned)) return null;
+  return cleaned;
+}
+
 function parseRuntime(runtimeMd) {
   const agentTable = findTableByHeaders(runtimeMd, ['ID', 'Papel', 'Tarefas', 'Estado']);
   const checkpointTable = findTableByHeaders(runtimeMd, ['ID', 'Tipo', 'Escopo', 'Estado']);
+  const waveRaw = sanitizeTemplateValue(firstMatch(runtimeMd, /\*\*Onda:\*\*\s*([^\n]+)/i));
+  const waveNum = waveRaw && /^\d+$/.test(waveRaw) ? Number(waveRaw) : null;
   return {
-    currentWave: Number(firstMatch(runtimeMd, /\*\*Onda:\*\*\s*([^\n]+)/i)) || firstMatch(runtimeMd, /\*\*Onda:\*\*\s*([^\n]+)/i),
-    status: firstMatch(runtimeMd, /\*\*Estado:\*\*\s*([^\n]+)/i),
-    activeTasks: ((firstMatch(runtimeMd, /\*\*Tarefas ativas:\*\*\s*([^\n]+)/i) || '').split(',').map((x) => x.trim()).filter(Boolean)),
-    nextAction: firstMatch(runtimeMd, /\*\*Ação:\*\*\s*([^\n]+)/i),
-    nextReason: firstMatch(runtimeMd, /\*\*Motivo:\*\*\s*([^\n]+)/i),
+    currentWave: waveNum != null ? waveNum : waveRaw,
+    status: sanitizeTemplateValue(firstMatch(runtimeMd, /\*\*Estado:\*\*\s*([^\n]+)/i)),
+    activeTasks: ((sanitizeTemplateValue(firstMatch(runtimeMd, /\*\*Tarefas ativas:\*\*\s*([^\n]+)/i)) || '').split(',').map((x) => x.trim()).filter(Boolean)),
+    nextAction: sanitizeTemplateValue(firstMatch(runtimeMd, /\*\*Ação:\*\*\s*([^\n]+)/i)),
+    nextReason: sanitizeTemplateValue(firstMatch(runtimeMd, /\*\*Motivo:\*\*\s*([^\n]+)/i)),
     agents: (agentTable?.rows || []).map((row) => ({ id: row.ID || row.Id || '—', role: row.Papel || row.Role || '—', tasks: (row.Tarefas || row.Tasks || '').split(',').map((x) => x.trim()).filter(Boolean), status: row.Estado || row.Status || '—' })),
     checkpoints: (checkpointTable?.rows || []).map((row) => ({ id: row.ID || row.Id || '—', type: row.Tipo || row.Type || '—', scope: row.Escopo || row.Scope || '—', status: row.Estado || row.Status || '—', decision: row.Decisão || row.Decisao || row.Decision || '—' })),
     evidence: listSectionItems(runtimeMd, 'Evidências produzidas'),
@@ -140,16 +185,40 @@ function normalizeEvidenceStatus(raw) {
 }
 
 function parseVerify(md) {
-  const criteria = [];
+  const byId = new Map();
+  const rank = { mentioned: 1, passed: 2, failed: 3 };
+  const record = (id, status, summary) => {
+    const prev = byId.get(id);
+    if (!prev || (rank[status] || 0) >= (rank[prev.status] || 0)) {
+      byId.set(id, { id, status, summary: summary || (prev ? prev.summary : '') });
+    }
+  };
   for (const table of parseMarkdownTables(md)) {
     for (const row of table.rows) {
-      const idCandidate = row.ID || row.Id || row['Critério'] || row['Criterio'] || '';
-      const match = String(idCandidate).match(/A\d+/i);
-      if (!match) continue;
-      criteria.push({ id: match[0].toUpperCase(), status: normalizeEvidenceStatus(row.Status || row.Resultado || row.Result || row.Veredito || row['Passou?'] || ''), summary: row.Evidência || row.Evidencia || row.Resumo || row.Notas || '' });
+      const idCandidate = row.Aceite || row.ID || row.Id || row['Critério'] || row['Criterio'] || '';
+      const matches = String(idCandidate).match(/\bA\d+(?:\.\d+)?\b/gi) || [];
+      if (!matches.length) continue;
+      const st = normalizeEvidenceStatus(row.Status || row.Resultado || row.Result || row.Veredito || row['Passou?'] || '');
+      const sum = row.Evidência || row.Evidencia || row['Evidências'] || row.Check || row.Resumo || row.Notas || '';
+      for (const m of matches) record(m.toUpperCase(), st, sum);
     }
   }
-  return { criteria, mentionedCriteria: Array.from(new Set((md.match(/\bA\d+\b/g) || []).map((x) => x.toUpperCase()))), failed: /\b(verify_failed|falhou|falha|reprovad)\b/i.test(md), passed: /\b(verify_complete|aprovad|passou|sucesso)\b/i.test(md) };
+  const checksTotal = Number(firstMatch(md, /\*\*Checks:\*\*\s*(\d+)/i)) || null;
+  const checksPass = Number(firstMatch(md, /\*\*Pass:\*\*\s*(\d+)/i));
+  const checksFail = Number(firstMatch(md, /\*\*Fail:\*\*\s*(\d+)/i));
+  const coveragePct = Number(firstMatch(md, /\*\*Cobertura:\*\*\s*(\d+)%/i));
+  return {
+    criteria: Array.from(byId.values()),
+    mentionedCriteria: Array.from(new Set((md.match(/\bA\d+\b/g) || []).map((x) => x.toUpperCase()))),
+    failed: /\b(verify_failed|falhou|falha|reprovad)\b/i.test(md) || (Number.isFinite(checksFail) && checksFail > 0),
+    passed: /\b(verify_complete|aprovad|passou|sucesso)\b/i.test(md) || /\*\*All passed:\*\*\s*sim/i.test(md),
+    manifest: checksTotal != null ? {
+      total: checksTotal,
+      pass: Number.isFinite(checksPass) ? checksPass : 0,
+      fail: Number.isFinite(checksFail) ? checksFail : 0,
+      coveragePercent: Number.isFinite(coveragePct) ? coveragePct : null,
+    } : null,
+  };
 }
 
 function confidenceBand(confidence, threshold) {
@@ -216,7 +285,7 @@ function computeReadiness(ctx, threshold) {
   };
 }
 
-function buildCoverageMatrix(spec, plan, verify) {
+function buildCoverageMatrix(spec, plan, verify, program = null) {
   const taskMap = new Map();
   for (const task of plan.tasks) {
     for (const criterion of task.aceite || []) {
@@ -224,16 +293,43 @@ function buildCoverageMatrix(spec, plan, verify) {
       taskMap.get(criterion).push(task.id);
     }
   }
+  const phaseByCriterion = new Map();
+  if (program && Array.isArray(program.phases)) {
+    for (const ph of program.phases) {
+      for (const a of (ph.acceptance || [])) {
+        phaseByCriterion.set(String(a).toUpperCase(), ph);
+      }
+    }
+  }
   const verifyMap = new Map((verify.criteria || []).map((x) => [x.id, x]));
-  return spec.criteria.map((c) => ({
-    id: c.id,
-    criterion: c.criterion,
-    verifyHow: c.howToVerify,
-    tasks: taskMap.get(c.id) || [],
-    planCovered: taskMap.has(c.id),
-    verifyStatus: verifyMap.has(c.id) ? verifyMap.get(c.id).status : (verify.mentionedCriteria || []).includes(c.id) ? 'mentioned' : 'missing',
-    verifySummary: verifyMap.has(c.id) ? verifyMap.get(c.id).summary : '',
-  }));
+  return spec.criteria.map((c) => {
+    const ph = phaseByCriterion.get(c.id) || null;
+    const tasks = taskMap.get(c.id) || [];
+    const closedPhase = ph && String(ph.status || '').toLowerCase() === 'closed';
+    const rawVerify = verifyMap.has(c.id)
+      ? verifyMap.get(c.id).status
+      : (verify.mentionedCriteria || []).includes(c.id)
+        ? 'mentioned'
+        : closedPhase
+          ? 'passed'
+          : 'missing';
+    return {
+      id: c.id,
+      criterion: c.criterion,
+      risk: c.risk || '',
+      verifyHow: c.howToVerify,
+      phase: ph ? ph.id : null,
+      phaseStatus: ph ? ph.status : null,
+      tasks,
+      planCovered: tasks.length > 0 || Boolean(ph),
+      verifyStatus: rawVerify,
+      verifySummary: verifyMap.has(c.id)
+        ? verifyMap.get(c.id).summary
+        : closedPhase
+          ? `Fase ${ph.id} fechada e validada`
+          : '',
+    };
+  });
 }
 
 function computeCalibration(phase, confidence, verify, threshold) {
@@ -454,6 +550,167 @@ function collectLiveTelemetry(projectRoot, activeSession) {
   };
 }
 
+function resolveFirstExisting(candidates) {
+  for (const cand of candidates) {
+    if (cand && fs.existsSync(cand)) return cand;
+  }
+  return candidates.find(Boolean) || null;
+}
+
+function readProgramState(projectRoot, activeSession) {
+  const candidates = [];
+  if (activeSession) {
+    candidates.push(path.join(projectRoot, '.oxe', activeSession, 'program', 'PROGRAM.json'));
+    candidates.push(path.join(projectRoot, '.oxe', activeSession, 'PROGRAM.json'));
+  }
+  candidates.push(path.join(projectRoot, '.oxe', 'program', 'PROGRAM.json'));
+  const filePath = candidates.find((c) => fs.existsSync(c));
+  if (!filePath) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    const phases = Array.isArray(raw && raw.phases) ? raw.phases : [];
+    const totalCount = phases.length;
+    const closedCount = phases.filter((ph) => String(ph.status || '').toLowerCase() === 'closed').length;
+    const activeCount = phases.filter((ph) => String(ph.status || '').toLowerCase() === 'active').length;
+    const pendingCount = Math.max(0, totalCount - closedCount - activeCount);
+    return {
+      path: filePath,
+      active_phase: raw.active_phase || null,
+      phases,
+      totalCount,
+      closedCount,
+      activeCount,
+      pendingCount,
+      allClosed: totalCount > 0 && closedCount === totalCount,
+      pct: totalCount > 0 ? Math.round((closedCount / totalCount) * 100) : 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function buildHumanGuidance(ctx) {
+  const collisions = ctx.agent_collisions || [];
+  const pendingGates = (ctx.enterprise && ctx.enterprise.gateQueue && ctx.enterprise.gateQueue.pending) || [];
+  const driftCount = (ctx.reevaluate && ctx.reevaluate.summary && ctx.reevaluate.summary.contract_drift) || 0;
+  const syncCount = (ctx.reevaluate && ctx.reevaluate.summary && ctx.reevaluate.summary.mechanical_sync) || 0;
+  const program = ctx.program || null;
+  const wt = ctx.worktree_hygiene || {};
+  const wtDirty = typeof wt.dirty === 'number' ? wt.dirty : Array.isArray(wt.dirty) ? wt.dirty.length : 0;
+  const verifyManifest = (ctx.verify && ctx.verify.parsed && ctx.verify.parsed.manifest) || null;
+  const criteriaTotal = (ctx.coverage || []).length;
+  const criteriaPassed = (ctx.coverage || []).filter((c) => c.verifyStatus === 'passed').length;
+
+  const checklist = [];
+  if (program && program.totalCount > 0) {
+    checklist.push({
+      status: program.allClosed ? 'done' : 'active',
+      text: `${program.closedCount}/${program.totalCount} fases do programa concluídas (${program.pct}%)`,
+    });
+  } else if (ctx.plan && ctx.plan.totalTasks > 0) {
+    checklist.push({ status: 'active', text: `${ctx.plan.totalTasks} tarefa(s) planejadas em ${(ctx.plan.waves || []).length} onda(s)` });
+  }
+  if (criteriaTotal > 0) {
+    checklist.push({
+      status: criteriaPassed === criteriaTotal ? 'done' : 'active',
+      text: `${criteriaPassed}/${criteriaTotal} critérios de aceite (A*) validados`,
+    });
+  }
+  if (verifyManifest && verifyManifest.total > 0) {
+    checklist.push({
+      status: verifyManifest.fail === 0 ? 'done' : 'blocked',
+      text: `${verifyManifest.pass}/${verifyManifest.total} checks de verificação aprovados${verifyManifest.coveragePercent != null ? ` (${verifyManifest.coveragePercent}% evidência)` : ''}`,
+    });
+  }
+  checklist.push({
+    status: collisions.length ? 'blocked' : 'done',
+    text: collisions.length ? `${collisions.length} colisão(ões) de arquivos entre agentes` : 'Sem colisões entre agentes ativos',
+  });
+  if (wtDirty > 0 || wt.needs_gc) {
+    checklist.push({
+      status: 'warning',
+      text: `${wt.total || 0} worktree(s) no repositório (${wtDirty} com alterações locais) — opcional revisar limpeza`,
+    });
+  }
+
+  let tone = 'active';
+  let badgeLabel = 'Em andamento';
+  let headline = 'Acompanhe o próximo passo da trilha';
+  let explanation = (ctx.nextStep && ctx.nextStep.reason) || 'Verifique o progresso nas fases e avance pelo CLI.';
+  let command = (ctx.nextStep && ctx.nextStep.cursorCmd) || 'oxe-cc status';
+  let ctaLabel = 'Ver Fases & Tarefas';
+  let ctaTab = 'plan';
+
+  if (collisions.length > 0) {
+    tone = 'blocked';
+    badgeLabel = 'Colisão detectada';
+    headline = `Atenção: ${collisions.length} arquivo(s) editado(s) por dois agentes ao mesmo tempo`;
+    explanation = 'Coordene os agentes antes de continuar para evitar sobrescrita de trabalho entre worktrees.';
+    command = 'oxe-cc agents collisions';
+    ctaLabel = 'Abrir Agentes & Colisões';
+    ctaTab = 'agents';
+  } else if (pendingGates.length > 0) {
+    tone = 'warning';
+    badgeLabel = 'Ação humana pendente';
+    headline = `Há ${pendingGates.length} gate(s) aguardando sua aprovação`;
+    explanation = 'O runtime pausou uma ação sensível. Aprove, dispense ou rejeite na aba de Execução.';
+    command = 'oxe-cc runtime gates';
+    ctaLabel = 'Resolver Gates Agora';
+    ctaTab = 'execution';
+  } else if (driftCount > 0) {
+    tone = 'warning';
+    badgeLabel = 'Drift na base';
+    headline = `${driftCount} tarefa(s) pendente(s) sofreram drift contra a branch base`;
+    explanation = 'Novos commits entraram na base e tocam arquivos planejados. Reavalie o impacto antes de executar ou promover.';
+    command = 'oxe-cc reevaluate';
+    ctaLabel = 'Ver Drift na Base';
+    ctaTab = 'reevaluate';
+  } else if (program && program.allClosed && (ctx.phase === 'verify_complete' || (ctx.verify && ctx.verify.parsed && ctx.verify.parsed.passed))) {
+    tone = 'done';
+    badgeLabel = 'Entrega concluída';
+    headline = `Todas as ${program.totalCount} fases foram fechadas e verificadas`;
+    explanation = 'Nenhuma pendência de implementação nesta sessão. Confira o resumo das fases ou rode os gates de envio/release quando estiver pronto.';
+    command = 'oxe-cc ship status';
+    ctaLabel = 'Revisar Fases Entregues';
+    ctaTab = 'plan';
+  } else if (program && program.active_phase) {
+    const activePh = program.phases.find((ph) => ph.id === program.active_phase);
+    tone = 'active';
+    badgeLabel = `Fase ${program.active_phase} ativa`;
+    headline = activePh ? `Em execução: ${activePh.id} — ${activePh.title}` : `Executando fase ${program.active_phase}`;
+    explanation = 'Implemente as tarefas pendentes da fase atual e rode a verificação antes de fechar a fase.';
+    command = 'oxe-cc runtime verify';
+    ctaLabel = 'Abrir Fases & Tarefas';
+    ctaTab = 'plan';
+  } else if (ctx.phase === 'plan_ready' && ctx.planReviewStatus !== 'approved' && !ctx.isLean) {
+    tone = 'active';
+    badgeLabel = 'Aguardando aprovação';
+    headline = 'Revise e aprove o plano antes de executar';
+    explanation = 'Confira as tarefas e critérios de aceite abaixo e clique em Aprovar plano para liberar a execução.';
+    command = 'oxe-cc plan lint';
+    ctaLabel = 'Revisar Plano';
+    ctaTab = 'plan';
+  } else if (syncCount > 0) {
+    tone = 'warning';
+    badgeLabel = 'Sync recomendado';
+    headline = `${syncCount} tarefa(s) precisa(m) de sincronização mecânica com a base`;
+    explanation = 'Não há quebra de contrato, mas vale sincronizar recursos sequenciais antes do promote.';
+    command = 'oxe-cc sync --dry-run';
+    ctaLabel = 'Ver Drift na Base';
+    ctaTab = 'reevaluate';
+  } else if (!ctx.readiness.go && (ctx.readiness.blockers || []).length > 0) {
+    tone = 'blocked';
+    badgeLabel = 'Bloqueado';
+    headline = 'Existem bloqueios impedindo o avanço';
+    explanation = `Resolva os bloqueios apontados (${ctx.readiness.blockers.slice(0, 3).join(', ')}) antes de executar ou publicar.`;
+    command = 'oxe-cc doctor --project';
+    ctaLabel = 'Ver Diagnóstico';
+    ctaTab = 'execution';
+  }
+
+  return { tone, badgeLabel, headline, explanation, command, ctaLabel, ctaTab, checklist };
+}
+
 function loadDashboardContext(projectRoot, opts = {}) {
   const globalPaths = health.oxePaths(projectRoot);
   const stateText = readTextIfExists(globalPaths.state) || '';
@@ -461,11 +718,19 @@ function loadDashboardContext(projectRoot, opts = {}) {
   const p = reviewPaths(projectRoot, activeSession || null);
   const rootScoped = reviewPaths(projectRoot, null);
   const report = health.buildHealthReport(projectRoot);
-  const specText = readScopedText(p.spec, rootScoped.spec);
+  const cfgMerged = health.loadOxeConfigMerged(projectRoot).config || {};
+  const isLean = cfgMerged.profile === 'lean' || cfgMerged.plan_ceremony === 'lean';
+  const resolvedSpecPath = resolveFirstExisting([
+    activeSession ? path.join(projectRoot, '.oxe', activeSession, 'SPEC.md') : null,
+    p.spec,
+    rootScoped.spec,
+  ]);
+  const specText = resolvedSpecPath ? readTextIfExists(resolvedSpecPath) || '' : '';
   const planText = readScopedText(p.plan, rootScoped.plan);
   const verifyText = readScopedText(p.verify, rootScoped.verify);
   const runtimeText = readScopedText(p.runtime, rootScoped.runtime);
   const checkpointsText = readScopedText(p.checkpoints, rootScoped.checkpoints);
+  const program = readProgramState(projectRoot, activeSession || null);
   const spec = parseSpec(specText);
   const plan = parsePlan(planText);
   const runtime = parseRuntime(runtimeText);
@@ -484,17 +749,24 @@ function loadDashboardContext(projectRoot, opts = {}) {
   const sessions = parseSessionsIndex(sessionsRaw);
   const sessionPath = activeSession ? path.join(projectRoot, '.oxe', activeSession, 'SESSION.md') : null;
   const sessionRaw = sessionPath ? readTextIfExists(sessionPath) || '' : '';
+  const phaseCriteriaSet = new Set();
+  if (program && Array.isArray(program.phases)) {
+    for (const ph of program.phases) for (const a of (ph.acceptance || [])) phaseCriteriaSet.add(String(a).toUpperCase());
+  }
   const ctx = {
     projectRoot: path.resolve(projectRoot),
+    projectName: path.basename(path.resolve(projectRoot)),
     workspaceMode: report.workspaceMode || 'oxe_project',
+    isLean,
+    program,
     releaseReadiness: report.releaseReadiness || null,
     activeSession: activeSession || null,
     phase: report.phase || health.parseStatePhase(stateText),
     healthStatus: report.healthStatus,
     nextStep: report.next,
     planReviewStatus: report.planReviewStatus || 'draft',
-    state: { path: globalPaths.state, raw: stateText, parsed: { phase: health.parseStatePhase(stateText), activeSession, runtimeStatus: firstMatch(stateText, /\*\*runtime_status:\*\*\s*([^\n]+)/i) } },
-    spec: { path: p.spec, raw: specText, objective: spec.objective, criteria: spec.criteria, uncoveredCriteria: spec.criteria.filter((c) => !plan.tasks.some((t) => (t.aceite || []).includes(c.id))) },
+    state: { path: globalPaths.state, raw: stateText, parsed: { phase: health.parseStatePhase(stateText), activeSession, runtimeStatus: sanitizeTemplateValue(firstMatch(stateText, /\*\*runtime_status:\*\*\s*([^\n]+)/i)) } },
+    spec: { path: resolvedSpecPath || p.spec, raw: specText, objective: spec.objective, criteria: spec.criteria, uncoveredCriteria: spec.criteria.filter((c) => !plan.tasks.some((t) => (t.aceite || []).includes(c.id)) && !phaseCriteriaSet.has(c.id)) },
     plan: { path: p.plan, raw: planText, tasks: plan.tasks, waves: plan.waves, totalTasks: plan.totalTasks, selfEvaluation: report.planSelfEvaluation },
     executionRationality: report.executionRationality || null,
     runtime: { path: p.runtime, raw: runtimeText, summary: summarizeText(runtimeText, 800), parsed: runtime },
@@ -571,10 +843,14 @@ function loadDashboardContext(projectRoot, opts = {}) {
     };
   }
   ctx.readiness = computeReadiness(ctx, report.planConfidenceThreshold || 90);
-  ctx.coverage = buildCoverageMatrix(ctx.spec, ctx.plan, verify);
+  ctx.coverage = buildCoverageMatrix(ctx.spec, ctx.plan, verify, program);
   ctx.calibration = computeCalibration(ctx.phase, ctx.plan.selfEvaluation.confidence, verify, ctx.readiness.threshold);
+  const runtimeEffectiveStatus = ctx.runtime.parsed.status || (ctx.activeRun && ctx.activeRun.status) || null;
+  const verifyDetail = verify.manifest
+    ? `${verify.manifest.pass}/${verify.manifest.total} checks aprovados`
+    : ctx.calibration.status;
   ctx.visual = {
-    flow: { nodes: [{ label: 'STATE', status: 'done' }, { label: 'SPEC', status: ctx.spec.raw ? 'done' : 'pending' }, { label: 'PLAN', status: ctx.plan.raw ? 'done' : 'pending' }, { label: 'REVIEW', status: ctx.planReviewStatus === 'approved' ? 'done' : /(rejected|needs_revision)/i.test(ctx.planReviewStatus) ? 'blocked' : 'active' }, { label: 'EXECUTE', status: ctx.runtime.parsed.status === 'running' ? 'active' : ctx.runtime.raw ? 'done' : 'pending' }, { label: 'CHECKPOINTS', status: ctx.readiness.checkpointPending ? 'active' : ctx.checkpoints.parsed.length ? 'done' : 'pending' }, { label: 'VERIFY', status: ctx.verify.raw ? 'done' : 'pending' }, { label: 'LESSONS', status: 'pending' }] },
+    flow: { nodes: [{ label: 'STATE', status: 'done' }, { label: 'SPEC', status: ctx.spec.raw ? 'done' : 'pending' }, { label: 'PLAN', status: ctx.plan.raw ? 'done' : 'pending' }, { label: 'REVIEW', status: (ctx.planReviewStatus === 'approved' || (isLean && program && program.allClosed)) ? 'done' : /(rejected|needs_revision)/i.test(ctx.planReviewStatus) ? 'blocked' : 'active' }, { label: 'EXECUTE', status: runtimeEffectiveStatus === 'running' ? 'active' : (ctx.runtime.raw || ctx.activeRun) ? 'done' : 'pending' }, { label: 'CHECKPOINTS', status: ctx.readiness.checkpointPending ? 'active' : ctx.checkpoints.parsed.length ? 'done' : 'pending' }, { label: 'VERIFY', status: ctx.verify.raw ? 'done' : 'pending' }, { label: 'LESSONS', status: 'pending' }] },
     artifactGraph: [
       { id: 'state', label: 'STATE', path: ctx.state.path, detail: ctx.phase || 'índice global', status: 'done' },
       { id: 'spec', label: 'SPEC', path: ctx.spec.path, detail: ctx.spec.objective || 'contrato', status: ctx.spec.raw ? 'done' : 'pending' },
@@ -584,7 +860,7 @@ function loadDashboardContext(projectRoot, opts = {}) {
         label: 'IMPLEMENTATION PACK',
         path: ctx.executionRationality && ctx.executionRationality.implementationPack ? ctx.executionRationality.implementationPack.path : '—',
         detail: ctx.executionRationality && ctx.executionRationality.implementationPack ? `${ctx.executionRationality.implementationPack.taskCount || 0} contratos` : 'sem contrato',
-        status: ctx.executionRationality && ctx.executionRationality.implementationPackReady ? 'done' : 'blocked',
+        status: ctx.executionRationality && ctx.executionRationality.implementationPackReady ? 'done' : (isLean && program && program.allClosed) ? 'done' : 'blocked',
       },
       {
         id: 'reference-anchors',
@@ -600,12 +876,12 @@ function loadDashboardContext(projectRoot, opts = {}) {
         detail: ctx.executionRationality && ctx.executionRationality.fixturePack ? `${ctx.executionRationality.fixturePack.fixtureCount || 0} fixtures` : 'sem fixtures',
         status: ctx.executionRationality && ctx.executionRationality.fixturePackReady ? 'done' : 'blocked',
       },
-      { id: 'review', label: 'PLAN REVIEW', path: ctx.review.markdownPath, detail: ctx.planReviewStatus, status: ctx.planReviewStatus === 'approved' ? 'done' : 'active' },
-      { id: 'runtime', label: 'RUNTIME', path: ctx.runtime.path, detail: ctx.runtime.parsed.status || 'sem status', status: ctx.runtime.raw ? 'active' : 'pending' },
-      { id: 'active-run', label: 'ACTIVE RUN', path: operational.operationalPaths(projectRoot, activeSession || null).activeRun, detail: ctx.activeRun && ctx.activeRun.run_id ? `${ctx.activeRun.run_id} · ${ctx.activeRun.status}` : 'sem run ativo', status: ctx.activeRun ? 'active' : 'pending' },
+      { id: 'review', label: 'PLAN REVIEW', path: ctx.review.markdownPath, detail: isLean && ctx.planReviewStatus === 'draft' ? 'lean (testes congelados)' : ctx.planReviewStatus, status: (ctx.planReviewStatus === 'approved' || isLean) ? 'done' : 'active' },
+      { id: 'runtime', label: 'RUNTIME', path: ctx.runtime.path, detail: runtimeEffectiveStatus || 'sem status', status: runtimeEffectiveStatus === 'completed' ? 'done' : (ctx.runtime.raw || ctx.activeRun) ? 'active' : 'pending' },
+      { id: 'active-run', label: 'ACTIVE RUN', path: operational.operationalPaths(projectRoot, activeSession || null).activeRun, detail: ctx.activeRun && ctx.activeRun.run_id ? `${ctx.activeRun.run_id} · ${ctx.activeRun.status}` : 'sem run ativo', status: ctx.activeRun && ctx.activeRun.status === 'completed' ? 'done' : ctx.activeRun ? 'active' : 'pending' },
       { id: 'events', label: 'TRACE', path: operational.operationalPaths(projectRoot, activeSession || null).events, detail: `${ctx.tracing.summary.total} evento(s)`, status: ctx.tracing.summary.total ? 'done' : 'pending' },
       { id: 'checkpoints', label: 'CHECKPOINTS', path: ctx.checkpoints.path, detail: `${ctx.checkpoints.parsed.length} gates`, status: ctx.readiness.checkpointPending ? 'active' : 'pending' },
-      { id: 'verify', label: 'VERIFY', path: ctx.verify.path, detail: ctx.calibration.status, status: ctx.verify.raw ? 'done' : 'pending' },
+      { id: 'verify', label: 'VERIFY', path: ctx.verify.path, detail: verifyDetail, status: ctx.verify.raw ? 'done' : 'pending' },
     ],
   };
   if (ctx.azure) {
@@ -635,63 +911,82 @@ function loadDashboardContext(projectRoot, opts = {}) {
   ctx.reevaluate = live.reevaluate;
   ctx.scorecard_routing = live.scorecard_routing;
   ctx.onboard_summary = live.onboard_summary;
+  ctx.guidance = buildHumanGuidance(ctx);
   ctx.dashboard = { readOnly: false, version: 'v2' };
   return ctx;
 }
 
 function dashboardHtml() {
-  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>OXE Control Room v2</title><style>
+  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>OXE Control Room</title><style>
   :root{
-    --bg:#0b0f19;--bg2:#0e1424;--sidebar:#0f172a;--panel:#131c2e;--card:#172238;--card2:#1c2944;
+    --bg:#090d16;--bg2:#0d1322;--sidebar:#0d1526;--panel:#121b2e;--card:#162238;--card2:#1c2b47;
     --ink:#f8fafc;--ink2:#cbd5e1;--muted:#94a3b8;
-    --line:#243350;--line-strong:#3b5280;
-    --brand:#1d4ed8;--brand-hi:#2563eb;--brand-light:#60a5fa;--brand-soft:rgba(37,99,235,.16);--brand-glow:rgba(37,99,235,.32);
-    --ok:#34d399;--okbg:rgba(16,185,129,.16);
-    --warn:#fbbf24;--warnbg:rgba(245,158,11,.16);
+    --line:#22314d;--line-strong:#35507e;
+    --brand:#1d4ed8;--brand-hi:#2563eb;--brand-light:#60a5fa;--brand-soft:rgba(37,99,235,.16);--brand-glow:rgba(37,99,235,.28);
+    --ok:#34d399;--okbg:rgba(16,185,129,.15);
+    --warn:#fbbf24;--warnbg:rgba(245,158,11,.15);
     --bad:#fb7185;--badbg:rgba(244,63,94,.16);
-    --info:#38bdf8;--infobg:rgba(56,189,248,.16);
-    --shadow:0 18px 40px rgba(0,0,0,.38);--radius:14px
+    --shadow:0 14px 34px rgba(0,0,0,.35);--radius:14px
   }
   *{box-sizing:border-box}
-  body{margin:0;background:radial-gradient(circle at top right,rgba(37,99,235,.18),transparent 42%),linear-gradient(180deg,var(--bg),var(--bg2));font-family:"Segoe UI",system-ui,-apple-system,sans-serif;color:var(--ink);min-height:100vh}
-  .shell{display:grid;grid-template-columns:256px minmax(0,1fr);min-height:100vh}
-  .nav{background:var(--sidebar);border-right:1px solid var(--line);padding:20px 14px;display:flex;flex-direction:column;gap:18px;position:sticky;top:0;height:100vh;overflow-y:auto}
-  .brand-box{padding:14px;border-radius:var(--radius);background:linear-gradient(135deg,rgba(29,78,216,.34),rgba(15,23,42,.9));border:1px solid var(--brand-hi);box-shadow:0 0 24px var(--brand-glow)}
-  .brand-title{font-size:18px;font-weight:900;letter-spacing:.02em;color:#fff;display:flex;align-items:center;justify-content:space-between}
-  .brand-sub{font-size:12px;color:var(--ink2);margin-top:4px}
-  .nav-group{display:grid;gap:6px}
-  .nav-label{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);padding:0 10px;margin-bottom:2px;font-weight:700}
-  .nav-btn{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:10px 12px;border-radius:10px;border:1px solid transparent;background:transparent;color:var(--ink2);font-size:13px;font-weight:700;cursor:pointer;text-align:left;transition:all .15s ease}
+  body{margin:0;background:radial-gradient(circle at top right,rgba(37,99,235,.16),transparent 42%),linear-gradient(180deg,var(--bg),var(--bg2));font-family:"Segoe UI",system-ui,-apple-system,sans-serif;color:var(--ink);min-height:100vh}
+  .shell{display:grid;grid-template-columns:248px minmax(0,1fr);min-height:100vh}
+  .nav{background:var(--sidebar);border-right:1px solid var(--line);padding:18px 14px;display:flex;flex-direction:column;gap:16px;position:sticky;top:0;height:100vh;overflow-y:auto}
+  .brand-box{padding:14px;border-radius:var(--radius);background:linear-gradient(135deg,rgba(29,78,216,.36),rgba(13,21,38,.95));border:1px solid var(--brand-hi);box-shadow:0 0 22px var(--brand-glow)}
+  .brand-title{font-size:17px;font-weight:900;letter-spacing:.01em;color:#fff;display:flex;align-items:center;justify-content:space-between}
+  .brand-sub{font-size:12px;color:var(--ink2);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .nav-group{display:grid;gap:5px}
+  .nav-label{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);padding:0 10px;margin:2px 0;font-weight:700}
+  .nav-btn{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:9px 11px;border-radius:10px;border:1px solid transparent;background:transparent;color:var(--ink2);font-size:13px;font-weight:600;cursor:pointer;text-align:left;transition:all .15s ease}
   .nav-btn:hover{background:rgba(37,99,235,.12);border-color:var(--line-strong);color:#fff}
-  .nav-btn.active{background:linear-gradient(90deg,var(--brand),var(--brand-hi));border-color:var(--brand-light);color:#fff;box-shadow:0 6px 18px var(--brand-glow)}
-  .nav-pill{font-size:11px;padding:2px 8px;border-radius:999px;background:rgba(255,255,255,.12);color:#fff;font-weight:800}
-  .main{padding:22px 26px;max-width:1620px;width:100%;margin:0 auto}
-  .topbar{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:18px;padding:16px 20px;border-radius:var(--radius);background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow)}
-  .topbar h1{margin:0;font-size:24px;font-weight:900;color:#fff}
-  .topbar-meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-  .stats{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-bottom:18px}
+  .nav-btn.active{background:linear-gradient(90deg,var(--brand),var(--brand-hi));border-color:var(--brand-light);color:#fff;font-weight:700;box-shadow:0 6px 16px var(--brand-glow)}
+  .nav-pill{font-size:11px;padding:2px 8px;border-radius:999px;background:rgba(255,255,255,.11);color:#fff;font-weight:700}
+  .nav-pill.alert{background:var(--badbg);color:var(--bad)}
+  .nav-pill.warn{background:var(--warnbg);color:var(--warn)}
+  .main{padding:24px 28px;max-width:1360px;width:100%;margin:0 auto}
+  .topbar{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:20px}
+  .topbar h1{margin:0;font-size:24px;font-weight:900;color:#fff;letter-spacing:-.01em}
+  .topbar-sub{font-size:13px;color:var(--muted);margin-top:4px}
+  .topbar-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .hero{border-radius:16px;padding:22px 24px;margin-bottom:18px;border:1px solid var(--line-strong);box-shadow:var(--shadow);display:grid;gap:14px}
+  .hero.done{background:linear-gradient(135deg,rgba(16,185,129,.15),rgba(29,78,216,.24));border-color:rgba(52,211,153,.45)}
+  .hero.active{background:linear-gradient(135deg,rgba(37,99,235,.26),rgba(18,27,46,.96));border-color:rgba(96,165,250,.5)}
+  .hero.warning{background:linear-gradient(135deg,rgba(245,158,11,.17),rgba(18,27,46,.96));border-color:rgba(251,191,36,.45)}
+  .hero.blocked{background:linear-gradient(135deg,rgba(244,63,94,.20),rgba(18,27,46,.96));border-color:rgba(251,113,133,.5)}
+  .hero-top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+  .hero-title{font-size:22px;font-weight:900;color:#fff;margin:6px 0 0;line-height:1.25}
+  .hero-desc{font-size:14px;color:var(--ink2);line-height:1.5;max-width:780px}
+  .cmd-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:rgba(9,13,22,.65);border:1px solid var(--line-strong);border-radius:11px;padding:10px 14px}
+  .cmd-bar code{background:transparent;padding:0;font-size:13px;color:#93c5fd;font-weight:700;flex:1;min-width:180px}
+  .signals{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:18px}
+  .signal{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:15px 16px;cursor:pointer;text-align:left;transition:all .15s ease;display:grid;gap:6px}
+  .signal:hover{border-color:var(--brand-light);transform:translateY(-1px);background:var(--card)}
+  .signal-val{font-size:18px;font-weight:800;color:#fff;display:flex;align-items:center;justify-content:space-between;gap:8px}
   .layout{display:grid;grid-template-columns:1.35fr 1fr;gap:16px}
-  .grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
-  .grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+  .grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  .grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
   .stack,.list{display:grid;gap:14px;align-content:start}
-  .rail{display:grid;grid-template-columns:repeat(8,minmax(92px,1fr));gap:10px}
-  .panel,.metric,.item,.entry,.node{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius)}
-  .panel{padding:18px;box-shadow:var(--shadow)}
-  .metric{padding:14px;background:linear-gradient(180deg,var(--card),var(--panel))}
-  .item,.entry,.node{padding:13px;background:var(--card)}
-  .node{text-align:center}
+  .panel,.item,.entry{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius)}
+  .panel{padding:18px 20px;box-shadow:var(--shadow)}
+  .item,.entry{padding:13px 15px;background:var(--card)}
   .view{display:none}.view.active{display:block}
   .label{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700}
-  .value{font-size:22px;font-weight:900;margin-top:6px;color:#fff}
-  .muted{color:var(--muted)}.small{font-size:13px;color:var(--ink2)}
+  .muted{color:var(--muted)}.small{font-size:13px;color:var(--ink2);line-height:1.45}
   .head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:12px}
-  .head h2{margin:0;font-size:17px;color:#fff}.head h3,h3{margin:12px 0 8px;font-size:14px;color:var(--brand-light)}
-  .badge{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;padding:4px 10px;font-size:11px;text-transform:uppercase;font-weight:800;letter-spacing:.04em}
+  .head h2{margin:0;font-size:16px;color:#fff;font-weight:800}
+  h3{margin:14px 0 8px;font-size:13px;color:var(--brand-light);text-transform:uppercase;letter-spacing:.06em}
+  .badge{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;padding:4px 10px;font-size:11px;text-transform:uppercase;font-weight:800;letter-spacing:.04em;white-space:nowrap}
   .done{background:var(--okbg);color:var(--ok);border:1px solid rgba(52,211,153,.35)}
   .active{background:var(--brand-soft);color:var(--brand-light);border:1px solid rgba(96,165,250,.4)}
   .warning{background:var(--warnbg);color:var(--warn);border:1px solid rgba(251,191,36,.35)}
   .blocked{background:var(--badbg);color:var(--bad);border:1px solid rgba(251,113,133,.38)}
   .pending{background:rgba(148,163,184,.14);color:var(--ink2);border:1px solid var(--line)}
+  .progress-wrap{background:#0b1120;border:1px solid var(--line);border-radius:999px;height:10px;overflow:hidden;margin:10px 0 14px}
+  .progress-bar{height:100%;background:linear-gradient(90deg,var(--brand-hi),var(--ok));border-radius:999px;transition:width .3s ease}
+  .phase-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 14px;border-radius:12px;background:var(--card);border:1px solid var(--line)}
+  .check-row{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border-radius:10px;background:var(--card);border:1px solid var(--line);font-size:13px;color:var(--ink2)}
+  .dot{width:9px;height:9px;border-radius:999px;margin-top:5px;flex-shrink:0}
+  .dot.done{background:var(--ok)}.dot.active{background:var(--brand-light)}.dot.warning{background:var(--warn)}.dot.blocked{background:var(--bad)}
   .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
   button{border:1px solid transparent;border-radius:10px;padding:8px 13px;font-weight:700;font-size:12px;cursor:pointer;transition:all .14s ease}
   .primary{background:var(--brand-hi);color:#fff;border-color:var(--brand-light)}.primary:hover{background:var(--brand)}
@@ -702,13 +997,15 @@ function dashboardHtml() {
   input,select,textarea{width:100%;background:#0c1322;color:var(--ink);border:1px solid var(--line-strong);border-radius:10px;padding:10px;font:inherit;font-size:13px}
   input:focus,select:focus,textarea:focus{outline:none;border-color:var(--brand-light);box-shadow:0 0 0 3px var(--brand-glow)}
   .form{display:grid;gap:10px;margin-top:10px}
-  .raw{white-space:pre-wrap;font-family:Consolas,"Cascadia Code",monospace;font-size:12px;background:#0a0f1c;color:var(--ink2);border:1px solid var(--line);border-radius:10px;padding:12px;max-height:240px;overflow:auto}
-  .chip{display:inline-flex;border-radius:999px;padding:3px 9px;background:var(--brand-soft);color:var(--brand-light);border:1px solid rgba(96,165,250,.3);font-size:11px;font-weight:700;margin:4px 6px 0 0}
-  .go-card{background:linear-gradient(135deg,rgba(16,185,129,.16),rgba(29,78,216,.22));border:1px solid rgba(52,211,153,.45);border-radius:var(--radius);padding:18px}
-  .nogo-card{background:linear-gradient(135deg,rgba(244,63,94,.16),rgba(23,34,56,.95));border:1px solid rgba(251,113,133,.45);border-radius:var(--radius);padding:18px}
+  .raw{white-space:pre-wrap;font-family:Consolas,"Cascadia Code",monospace;font-size:12px;background:#0a0f1c;color:var(--ink2);border:1px solid var(--line);border-radius:10px;padding:12px;max-height:260px;overflow:auto;margin-top:10px}
+  .chip{display:inline-flex;border-radius:999px;padding:3px 9px;background:var(--brand-soft);color:var(--brand-light);border:1px solid rgba(96,165,250,.3);font-size:11px;font-weight:700;margin:3px 5px 0 0}
   code{background:#0c1322;color:#93c5fd;padding:2px 6px;border-radius:6px;font-family:Consolas,monospace;font-size:12px}
-  @media (max-width:1280px){.stats{grid-template-columns:repeat(3,minmax(0,1fr))}.layout{grid-template-columns:1fr}.rail{grid-template-columns:repeat(4,minmax(90px,1fr))}}
-  @media (max-width:920px){.shell{grid-template-columns:1fr}.nav{position:static;height:auto}.stats,.grid2,.grid3,.rail{grid-template-columns:1fr}}
+  details{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+  details summary{cursor:pointer;font-weight:700;font-size:13px;color:var(--brand-light);list-style:none;display:flex;justify-content:space-between;align-items:center}
+  details summary::after{content:"▸";color:var(--muted)}
+  details[open] summary::after{content:"▾"}
+  @media (max-width:1180px){.signals{grid-template-columns:repeat(2,minmax(0,1fr))}.layout{grid-template-columns:1fr}}
+  @media (max-width:860px){.shell{grid-template-columns:1fr}.nav{position:static;height:auto}.signals,.grid2,.grid3{grid-template-columns:1fr}}
   </style></head><body>
   <div class="shell">
     <aside class="nav">
@@ -717,19 +1014,22 @@ function dashboardHtml() {
         <div class="brand-sub" id="nav-project">Carregando…</div>
       </div>
       <div class="nav-group">
-        <div class="nav-label">Menu Completo</div>
-        <button class="nav-btn active" data-tab="overview" onclick="setTab('overview')"><span>Visão Geral & Go/No-Go</span><span class="nav-pill" id="pill-go">—</span></button>
-        <button class="nav-btn" data-tab="plan" onclick="setTab('plan')"><span>Plano, Ondas & Cobertura</span><span class="nav-pill" id="pill-plan">0</span></button>
-        <button class="nav-btn" data-tab="agents" onclick="setTab('agents')"><span>Agentes, Colisões & Inbox</span><span class="nav-pill" id="pill-agents">0</span></button>
+        <div class="nav-label">Acompanhar</div>
+        <button class="nav-btn active" data-tab="overview" onclick="setTab('overview')"><span>Agora (Resumo)</span><span class="nav-pill" id="pill-go">—</span></button>
+        <button class="nav-btn" data-tab="plan" onclick="setTab('plan')"><span>Fases & Tarefas</span><span class="nav-pill" id="pill-plan">0</span></button>
+        <button class="nav-btn" data-tab="agents" onclick="setTab('agents')"><span>Agentes & Colisões</span><span class="nav-pill" id="pill-agents">0</span></button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-label">Diagnóstico</div>
         <button class="nav-btn" data-tab="reevaluate" onclick="setTab('reevaluate')"><span>Reavaliação & Drift</span><span class="nav-pill" id="pill-drift">0</span></button>
         <button class="nav-btn" data-tab="scorecard" onclick="setTab('scorecard')"><span>Scorecard & ROI</span><span class="nav-pill" id="pill-score">—</span></button>
-        <button class="nav-btn" data-tab="worktrees" onclick="setTab('worktrees')"><span>Worktrees & Ecossistema</span><span class="nav-pill" id="pill-wt">0</span></button>
-        <button class="nav-btn" data-tab="execution" onclick="setTab('execution')"><span>Execução, Gates & Verify</span><span class="nav-pill" id="pill-gates">0</span></button>
-        <button class="nav-btn" data-tab="sessions" onclick="setTab('sessions')"><span>Sessões & Contexto</span><span class="nav-pill" id="pill-sess">0</span></button>
+        <button class="nav-btn" data-tab="worktrees" onclick="setTab('worktrees')"><span>Worktrees & Ambiente</span><span class="nav-pill" id="pill-wt">0</span></button>
+        <button class="nav-btn" data-tab="execution" onclick="setTab('execution')"><span>Execução & Verify</span><span class="nav-pill" id="pill-gates">0</span></button>
+        <button class="nav-btn" data-tab="sessions" onclick="setTab('sessions')"><span>Sessões & Técnico</span><span class="nav-pill" id="pill-sess">0</span></button>
       </div>
       <div class="item" style="margin-top:auto">
         <div class="label">Sessão Ativa</div>
-        <div class="small" id="nav-session" style="margin-top:4px;font-weight:700;color:#fff">—</div>
+        <div class="small" id="nav-session" style="margin-top:4px;font-weight:700;color:#fff;word-break:break-word">—</div>
         <div class="actions" style="margin-top:10px">
           <button class="primary" onclick="refresh()">Atualizar</button>
           <button class="secondary" id="auto-btn" onclick="toggleAuto()">Auto: ON</button>
@@ -739,12 +1039,11 @@ function dashboardHtml() {
     <main class="main">
       <div class="topbar">
         <div>
-          <h1 id="top-title">OXE Decision Control Room</h1>
-          <div class="small" id="top-next" style="margin-top:4px">Sincronizando telemetria ao vivo via <code>/api/state</code>…</div>
+          <h1 id="top-title">Resumo da Sessão</h1>
+          <div class="topbar-sub" id="top-sub">Sincronizando dados locais…</div>
         </div>
         <div class="topbar-meta">
-          <span class="chip" id="chip-phase">fase: —</span>
-          <span class="chip" id="chip-conf">confiança: —</span>
+          <span class="chip" id="chip-phase">status: —</span>
           <span class="chip" id="chip-alm">ALM: —</span>
           <span class="chip" id="chip-ci">CI: —</span>
         </div>
@@ -755,26 +1054,50 @@ function dashboardHtml() {
   <script>
   const app=document.getElementById('app');let ctx=null;let tab='overview';let session=null;let autoOn=true;let timer=null;
   const esc=(s)=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-  const cls=(s)=>{const v=String(s||'').toLowerCase();if(/(healthy|approved|done|go|clean|well-calibrated|passed|ready|completed|no_impact|ok)/.test(v))return'done';if(/(running|in_review|active|mentioned|acceptable|controlled|replaying|planned)/.test(v))return'active';if(/(rejected|needs_revision|blocked|failed|no-go|overconfident|do_not_execute|aborted|waiting_approval|contract_drift|replan_recommended|broken)/.test(v))return'blocked';if(/(risk|warning|underconfident|needs_refinement|paused|mechanical_sync|stale)/.test(v))return'warning';return'pending';};
-  const badge=(s,l)=>'<span class="badge '+cls(s)+'">'+esc(l||s||'pending')+'</span>';
-  const list=(items,empty)=>items&&items.length?'<div class="list">'+items.join('')+'</div>':'<div class="entry small">'+esc(empty)+'</div>';
-  const kv=(k,v)=>'<div class="item"><div class="label">'+esc(k)+'</div><div class="small" style="margin-top:6px;font-weight:700;color:#fff">'+esc(v)+'</div></div>';
+  const plain=(s)=>String(s||'').replace(/\\*\\*/g,'').replace(/\`/g,'');
+  const cls=(s)=>{const v=String(s||'').toLowerCase();if(/(healthy|approved|done|closed|go|clean|well-calibrated|passed|ready|completed|no_impact|ok)/.test(v))return'done';if(/(running|in_review|active|mentioned|acceptable|controlled|replaying|planned)/.test(v))return'active';if(/(rejected|needs_revision|blocked|failed|no-go|overconfident|do_not_execute|aborted|waiting_approval|contract_drift|replan_recommended|broken)/.test(v))return'blocked';if(/(risk|warning|underconfident|needs_refinement|paused|mechanical_sync|stale)/.test(v))return'warning';return'pending';};
+  const badge=(s,l)=>'<span class="badge '+cls(s)+'">'+esc(l||s||'pendente')+'</span>';
+  const list=(items,empty)=>items&&items.length?'<div class="list">'+items.join('')+'</div>':'<div class="entry small muted">'+esc(empty)+'</div>';
+  const kv=(k,v)=>'<div class="item"><div class="label">'+esc(k)+'</div><div class="small" style="margin-top:6px;font-weight:800;color:#fff;font-size:15px">'+esc(v)+'</div></div>';
+  const phaseLabel=(p)=>{const m={verify_complete:'Verificado ✓',plan_ready:'Plano pronto',executing:'Em execução',verify_failed:'Falha no verify',spec_ready:'Spec pronta'};return m[String(p||'').toLowerCase()]||(p||'—');};
+  const tabMeta={
+    overview:{title:'Agora — Resumo da Sessão',sub:'O que está pronto, o que precisa da sua atenção e qual o próximo comando recomendado.'},
+    plan:{title:'Fases, Tarefas & Critérios',sub:'Progresso real do programa (F1–F4), tarefas da fase atual e cobertura dos critérios de aceite A*.'},
+    agents:{title:'Agentes & Colisões ao Vivo',sub:'Use esta aba quando houver vários agentes em paralelo para evitar edição simultânea dos mesmos arquivos.'},
+    reevaluate:{title:'Reavaliação & Drift contra a Base',sub:'Verifica se commits novos na branch base afetam tarefas pendentes do plano atual.'},
+    scorecard:{title:'Scorecard & Roteamento de Modelos',sub:'Distribuição de tarefas por tier (fast / balanced / powerful) e resumo de evidências.'},
+    worktrees:{title:'Worktrees & Ambiente Local',sub:'Higiene das worktrees git do projeto e configuração detectada de stack, CI, ALM e MCP.'},
+    execution:{title:'Execução, Gates & Verify',sub:'Status do run atual, aprovações pendentes, checks executados e trilha de eventos.'},
+    sessions:{title:'Sessões & Detalhes Técnicos',sub:'Alterne entre sessões do projeto ou inspecione os artefatos internos de .oxe/ sob demanda.'},
+  };
   const runtimeDisabled=()=>ctx&&ctx.dashboard&&ctx.dashboard.readOnly;
   async function api(url,opts={}){const res=await fetch(url,{headers:{'Content-Type':'application/json'},...opts});if(!res.ok)throw new Error(await res.text());return res.json();}
   async function refresh(){ctx=await api('/api/state'+(session?'?session='+encodeURIComponent(session):''));render();}
+  function copyCmd(cmd,btn){if(!cmd)return;if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(cmd).then(()=>{const old=btn.textContent;btn.textContent='Copiado ✓';setTimeout(()=>{btn.textContent=old;},1400);}).catch(()=>{prompt('Copie o comando:',cmd);});}else{prompt('Copie o comando:',cmd);}}
+  function numCount(v){return typeof v==='number'?v:Array.isArray(v)?v.length:0;}
   function updateNav(){
     document.querySelectorAll('.nav-btn').forEach((b)=>b.classList.toggle('active',b.dataset.tab===tab));
-    document.getElementById('nav-project').textContent=ctx.projectRoot||'—';
-    document.getElementById('nav-session').textContent=ctx.activeSession||'raiz (.oxe/)';
-    document.getElementById('top-next').innerHTML='Próximo: <strong>'+esc(ctx.nextStep&&ctx.nextStep.step||'—')+'</strong> · '+esc(ctx.nextStep&&ctx.nextStep.reason||'—');
-    document.getElementById('chip-phase').textContent='fase: '+(ctx.phase||'—');
-    document.getElementById('chip-conf').textContent='confiança: '+(ctx.readiness&&ctx.readiness.confidence!=null?ctx.readiness.confidence+'%':'—');
+    const meta=tabMeta[tab]||tabMeta.overview;
+    const sessShort=(ctx.activeSession||'raiz').replace(/^sessions\\//,'');
+    document.getElementById('nav-project').textContent=(ctx.projectName||'Projeto')+' · '+sessShort;
+    document.getElementById('nav-session').textContent=sessShort;
+    document.getElementById('top-title').textContent=meta.title;
+    document.getElementById('top-sub').textContent=meta.sub;
+    document.getElementById('chip-phase').textContent=phaseLabel(ctx.phase);
     document.getElementById('chip-alm').textContent='ALM: '+((ctx.onboard_summary&&ctx.onboard_summary.alm_provider)||'none');
-    document.getElementById('chip-ci').textContent='CI: '+((ctx.onboard_summary&&ctx.onboard_summary.ci_providers&&ctx.onboard_summary.ci_providers.join(','))||'local');
-    document.getElementById('pill-go').textContent=ctx.readiness&&ctx.readiness.go?'GO':'HOLD';
-    document.getElementById('pill-plan').textContent=String((ctx.plan&&ctx.plan.totalTasks)||0);
-    document.getElementById('pill-agents').textContent=String((ctx.active_agents||[]).length);
-    document.getElementById('pill-drift').textContent=String((ctx.reevaluate&&ctx.reevaluate.summary&&ctx.reevaluate.summary.contract_drift)||0);
+    document.getElementById('chip-ci').textContent='CI: '+((ctx.onboard_summary&&ctx.onboard_summary.ci_providers&&ctx.onboard_summary.ci_providers.join(', '))||'local');
+    const g=ctx.guidance||{tone:'active',badgeLabel:'—'};
+    document.getElementById('pill-go').textContent=g.tone==='done'?'OK':g.tone==='blocked'?'!':'•';
+    const prog=ctx.program;
+    document.getElementById('pill-plan').textContent=prog&&prog.totalCount?prog.closedCount+'/'+prog.totalCount:String((ctx.plan&&ctx.plan.totalTasks)||0);
+    const agPill=document.getElementById('pill-agents');
+    const colCount=(ctx.agent_collisions||[]).length;
+    agPill.textContent=colCount?colCount+'!':String((ctx.active_agents||[]).length);
+    agPill.className='nav-pill'+(colCount?' alert':'');
+    const drCount=(ctx.reevaluate&&ctx.reevaluate.summary&&ctx.reevaluate.summary.contract_drift)||0;
+    const drPill=document.getElementById('pill-drift');
+    drPill.textContent=String(drCount);
+    drPill.className='nav-pill'+(drCount?' warn':'');
     document.getElementById('pill-score').textContent=ctx.scorecard_routing&&ctx.scorecard_routing.auto_route?'AUTO':'STD';
     document.getElementById('pill-wt').textContent=String((ctx.worktree_hygiene&&ctx.worktree_hygiene.total)||0);
     document.getElementById('pill-gates').textContent=String((ctx.enterprise&&ctx.enterprise.gateQueue&&ctx.enterprise.gateQueue.pending&&ctx.enterprise.gateQueue.pending.length)||0);
@@ -782,97 +1105,134 @@ function dashboardHtml() {
   }
   function render(){
     updateNav();
+    const g=ctx.guidance||{tone:'active',badgeLabel:'Status',headline:'Sessão carregada',explanation:'',command:'oxe-cc status',ctaLabel:'Ver Fases',ctaTab:'plan',checklist:[]};
+    const prog=ctx.program||null;
     const agentsLive=ctx.active_agents||[];
     const collisions=ctx.agent_collisions||[];
     const messages=ctx.agent_messages||[];
-    const wt=ctx.worktree_hygiene||{total:0,clean:[],dirty:[],orphans:[],warnings:[]};
+    const wt=ctx.worktree_hygiene||{total:0,secondary:0,dirty:0,clean_merged:0,prunable:0,nested_agent:0,protected_junction_targets:0,warnings:[]};
+    const wtDirty=numCount(wt.dirty);
+    const wtOrphans=numCount(wt.prunable)+numCount(wt.clean_merged)+numCount(wt.orphans);
     const reev=ctx.reevaluate||{overall_status:'unavailable',summary:{no_impact:0,mechanical_sync:0,contract_drift:0},tasks:[]};
     const scr=ctx.scorecard_routing||{auto_route:false,tiers:{fast:0,balanced:0,powerful:0},scorecard:null};
     const ob=ctx.onboard_summary||{stacks:[],ci_providers:[],alm_provider:'none',env_ok:true};
-    const flow=(ctx.visual.flow.nodes||[]).map((n)=>'<div class="node"><div class="label">Etapa</div><div style="font-weight:800;font-size:14px;margin-top:6px;color:#fff">'+esc(n.label)+'</div><div style="margin-top:8px">'+badge(n.status)+'</div></div>');
-    const graph=(ctx.visual.artifactGraph||[]).map((n)=>'<div class="item"><div class="head"><strong>'+esc(n.label)+'</strong>'+badge(n.status)+'</div><div class="small">'+esc(n.detail||'—')+'</div><div class="small muted" style="margin-top:6px">'+esc(n.path||'—')+'</div></div>');
-    const waves=(ctx.plan.waves||[]).map((w)=>'<div class="panel"><div class="head"><div><h2>Onda '+esc(w.wave)+'</h2><div class="small muted">'+esc(w.taskIds.length)+' tarefa(s)</div></div>'+badge(String(ctx.runtime.parsed.currentWave)===String(w.wave)?'running':'planned')+'</div>'+w.tasks.map((t)=>'<div class="entry" style="margin-top:10px"><div style="font-weight:800;color:#fff">'+esc(t.id)+' — '+esc(t.title)+'</div><div class="small muted" style="margin-top:4px">Depende de: '+esc(t.dependsOn.length?t.dependsOn.join(', '):'—')+' · Verify: <code>'+esc(t.verifyCommand||'—')+'</code></div><div style="margin-top:6px">'+(t.aceite||[]).map((x)=>'<span class="chip">'+esc(x)+'</span>').join('')+(t.decisions||[]).map((x)=>'<span class="chip">'+esc(x)+'</span>').join('')+'</div></div>').join('')+'</div>');
-    const coverage=(ctx.coverage||[]).map((c)=>'<div class="item"><div class="head"><strong>'+esc(c.id)+'</strong>'+badge(c.verifyStatus,c.verifyStatus)+'</div><div class="small">'+esc(c.criterion)+'</div><div class="small muted" style="margin-top:6px">Plano: '+esc(c.tasks.length?c.tasks.join(', '):'sem cobertura')+' · Verify: '+esc(c.verifySummary||c.verifyHow||'pendente')+'</div></div>');
+    const gateQueue=(ctx.enterprise&&ctx.enterprise.gateQueue)||{pending:[],stalePending:[],resolvedRecent:[]};
+    const pendingGateCount=(gateQueue.pending||[]).length;
+    const blockerCount=(ctx.readiness&&ctx.readiness.blockers?ctx.readiness.blockers.length:0)+pendingGateCount;
+    const driftCount=(reev.summary&&reev.summary.contract_drift)||0;
+    const syncCount=(reev.summary&&reev.summary.mechanical_sync)||0;
+    const driftLabel=driftCount?driftCount+' drift(s)':syncCount?syncCount+' sync':reev.overall_status==='clean'?'Alinhado':'Sem pendências';
+    const driftTone=driftCount?'blocked':syncCount?'warning':'done';
+    const wtTone=wtDirty>0||wt.needs_gc?'warning':'done';
+    const verifyManifest=(ctx.verify&&ctx.verify.parsed&&ctx.verify.parsed.manifest)||null;
+
+    const phaseRows=prog&&prog.phases&&prog.phases.length?prog.phases.map((ph)=>{
+      const st=String(ph.status||'pending').toLowerCase();
+      const stText=st==='closed'?'Concluída':st==='active'?'Ativa':'Pendente';
+      return '<div class="phase-row"><div><div style="font-weight:800;color:#fff">'+esc(ph.id)+' — '+esc(plain(ph.title))+'</div><div class="small muted" style="margin-top:3px">'+esc(plain(ph.scope||''))+'</div><div style="margin-top:6px">'+(ph.acceptance||[]).map((a)=>'<span class="chip">'+esc(a)+'</span>').join('')+'</div></div>'+badge(st,stText)+'</div>';
+    }):[];
+
+    const checklistHtml=(g.checklist||[]).map((c)=>'<div class="check-row"><span class="dot '+esc(c.status)+'"></span><span>'+esc(c.text)+'</span></div>');
+    const waves=(ctx.plan.waves||[]).map((w)=>'<div class="item"><div class="head"><div><strong>Onda '+esc(w.wave)+'</strong><div class="small muted">'+esc(w.taskIds.length)+' tarefa(s)</div></div>'+badge(String(ctx.runtime.parsed.currentWave)===String(w.wave)?'running':'done',String(ctx.runtime.parsed.currentWave)===String(w.wave)?'em execução':'registrada')+'</div>'+w.tasks.map((t)=>'<div class="entry" style="margin-top:8px"><div style="font-weight:700;color:#fff">'+esc(t.id)+' — '+esc(plain(t.title))+'</div><div class="small muted" style="margin-top:4px">Verify: <code>'+esc(t.verifyCommand||'—')+'</code></div><div style="margin-top:6px">'+(t.aceite||[]).map((x)=>'<span class="chip">'+esc(x)+'</span>').join('')+'</div></div>').join('')+'</div>');
+    const coverage=(ctx.coverage||[]).map((c)=>{
+      const stText=c.verifyStatus==='passed'?'Validado':c.verifyStatus==='failed'?'Falhou':c.verifyStatus==='mentioned'?'Citado':'Pendente';
+      return '<div class="item"><div class="head"><div><strong>'+esc(c.id)+'</strong>'+(c.phase?' <span class="chip">'+esc(c.phase)+'</span>':'')+'</div>'+badge(c.verifyStatus,stText)+'</div><div class="small">'+esc(plain(c.criterion))+'</div><div class="small muted" style="margin-top:6px">'+(c.verifySummary?esc(plain(c.verifySummary)):'Verificação: '+esc(plain(c.verifyHow||'pendente')))+'</div></div>';
+    });
     const comments=(ctx.review.comments||[]).map((c)=>'<div class="item"><div class="small muted">'+esc(c.target)+' · '+esc(c.type)+' · '+esc(c.status)+' · '+esc(c.author)+'</div><div style="margin-top:6px">'+esc(c.text)+'</div>'+(c.status!=='resolved'?'<div class="actions"><button class="secondary" onclick="resolveComment(\\''+esc(c.id)+'\\')">Resolver</button></div>':'')+'</div>');
-    const blockers=(ctx.readiness.blockers||[]).map((x)=>'<div class="entry small">'+esc(x)+'</div>');
-    const warnings=(ctx.readiness.warnings||[]).concat((ctx.diagnostics.enterpriseWarnings||[])).slice(0,12).map((x)=>'<div class="entry small">'+esc(x)+'</div>');
-    const activeAgentsCards=agentsLive.map((a)=>'<div class="item"><div class="head"><div><strong>'+esc(a.agent_id)+'</strong><div class="small muted">'+esc(a.provider||'—')+' · '+esc(a.role||'executor')+' · branch: '+esc(a.branch||'—')+'</div></div>'+badge('active',a.task||'ativo')+'</div><div class="small">Worktree: <code>'+esc(a.worktree||'—')+'</code></div><div style="margin-top:6px">'+((a.write_set||[]).length?(a.write_set||[]).map((f)=>'<span class="chip">'+esc(f)+'</span>').join(''):'<span class="small muted">write_set vazio</span>')+'</div><div class="small muted" style="margin-top:6px">Visto: '+esc(a.last_seen||'—')+' · Expira: '+esc(a.expires_at||'—')+'</div></div>');
-    const collisionCards=collisions.map((c)=>'<div class="item" style="border-color:rgba(251,113,133,.5)"><div class="head"><strong>'+esc(c.file)+'</strong>'+badge('blocked','colisão')+'</div><div class="small">Agentes: <strong>'+esc((c.agents||[]).join(' × '))+'</strong> ('+esc((c.providers||[]).join(' / '))+')</div><div class="small muted" style="margin-top:4px">Tarefas: '+esc((c.tasks||[]).filter(Boolean).join(', ')||'—')+'</div></div>');
-    const inboxCards=messages.slice().reverse().map((m)=>'<div class="entry"><div class="head"><strong>'+esc(m.from)+' → '+esc(m.to)+'</strong>'+badge('active',m.topic||'general')+'</div><div class="small">'+esc(m.body)+'</div><div class="small muted" style="margin-top:4px">'+esc(m.at||'')+'</div></div>');
-    const reevTasks=(reev.tasks||[]).map((t)=>'<div class="item"><div class="head"><strong>'+esc(t.id)+' — '+esc(t.title||'')+'</strong>'+badge(t.classification,t.classification)+'</div><div class="small">Ação: <code>'+esc(t.recommended_action||'—')+'</code></div>'+((t.overlapping_files&&t.overlapping_files.length)?'<div style="margin-top:6px">'+t.overlapping_files.map((f)=>'<span class="chip">'+esc(f)+'</span>').join('')+'</div>':'')+'</div>');
-    const gateQueue=(ctx.enterprise&&ctx.enterprise.gateQueue)||{pending:[],stalePending:[],resolvedRecent:[],gateSlaHours:24};
-    const pendingGates=(gateQueue.pending||[]).map((g)=>'<div class="entry"><div class="head"><strong>'+esc(g.gate_id)+'</strong>'+badge(g.status||'pending')+'</div><div class="small muted">scope='+esc(g.scope||'—')+' · task='+esc(g.work_item_id||'—')+'</div><div class="actions"><button class="primary" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeGateResolve(\\''+esc(g.gate_id)+'\\',\\'approve\\')">Aprovar</button><button class="warnbtn" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeGateResolve(\\''+esc(g.gate_id)+'\\',\\'waive\\')">Dispensar</button><button class="danger" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeGateResolve(\\''+esc(g.gate_id)+'\\',\\'reject\\')">Rejeitar</button></div></div>');
-    const checkpoints=(ctx.checkpoints.parsed||[]).map((c)=>'<div class="item"><div class="head"><strong>'+esc(c.id)+'</strong>'+badge(c.status)+'</div><div class="small muted">'+esc(c.type)+' · '+esc(c.phase||'—')+' · '+esc(c.scope||'—')+'</div><div class="small" style="margin-top:6px">'+esc(c.notes||'—')+'</div></div>');
-    const trace=((ctx.tracing&&ctx.tracing.events)||[]).slice(-10).reverse().map((e)=>'<div class="entry"><div class="head"><strong>'+esc(e.type)+'</strong>'+badge('active',e.timestamp?e.timestamp.slice(11,19):'—')+'</div><div class="small muted">run='+esc(e.run_id||'—')+' · task='+esc(e.work_item_id||e.task_id||'—')+'</div></div>');
-    const sessions=(ctx.sessions.items||[]).map((s)=>'<div class="item"><div class="head"><div><strong>'+esc(s.id)+' · '+esc(s.name)+'</strong><div class="small muted">'+esc(s.createdAt)+' · '+esc(s.lastActivity)+'</div></div>'+badge(s.status)+'</div><div class="small">'+esc(s.summary||'—')+'</div><div class="actions"><button class="secondary" onclick="openSession(\\''+esc(s.path)+'\\')">Abrir sessão</button></div></div>');
-    const repo=Object.entries(ctx.repositoryContext||{}).map(([k,v])=>'<div class="item"><strong>'+esc(k.toUpperCase())+'</strong><div class="small" style="margin-top:6px">'+esc(v.summary||'Sem resumo.')+'</div></div>');
+    const reviewBody='<div class="grid2"><div><div class="actions"><button class="primary" onclick="changeReview(\\'approved\\')">Aprovar plano</button><button class="warnbtn" onclick="changeReview(\\'needs_revision\\')">Pedir revisão</button><button class="secondary" onclick="changeReview(\\'in_review\\')">Em revisão</button><button class="danger" onclick="changeReview(\\'rejected\\')">Rejeitar</button></div><div class="form"><input id="comment-target" placeholder="Alvo (ex.: F2, T1)"/><select id="comment-type"><option value="note">Nota</option><option value="risk">Risco</option><option value="question">Dúvida</option><option value="approval">Aprovação</option></select><textarea id="comment-text" rows="3" placeholder="Escreva um comentário para o time…"></textarea><button class="primary" onclick="addComment()">Adicionar comentário</button></div></div><div><h3>Comentários</h3>'+list(comments,'Sem comentários registrados.')+'</div></div>';
+    const reviewNeedsFocus=!ctx.isLean&&ctx.phase==='plan_ready'&&ctx.planReviewStatus!=='approved';
+
+    const activeAgentsCards=agentsLive.map((a)=>'<div class="item"><div class="head"><div><strong>'+esc(a.agent_id)+'</strong><div class="small muted">'+esc(a.provider||'—')+' · '+esc(a.role||'executor')+' · branch: '+esc(a.branch||'—')+'</div></div>'+badge('active',a.task||'ativo')+'</div><div class="small">Worktree: <code>'+esc(a.worktree||'—')+'</code></div><div style="margin-top:6px">'+((a.write_set||[]).length?(a.write_set||[]).map((f)=>'<span class="chip">'+esc(f)+'</span>').join(''):'<span class="small muted">write_set vazio</span>')+'</div></div>');
+    const collisionCards=collisions.map((c)=>'<div class="item" style="border-color:rgba(251,113,133,.55)"><div class="head"><strong>'+esc(c.file)+'</strong>'+badge('blocked','colisão')+'</div><div class="small">Agentes: <strong>'+esc((c.agents||[]).join(' × '))+'</strong></div><div class="small muted" style="margin-top:4px">Tarefas: '+esc((c.tasks||[]).filter(Boolean).join(', ')||'—')+'</div></div>');
+    const inboxCards=messages.slice().reverse().map((m)=>'<div class="entry"><div class="head"><strong>'+esc(m.from)+' → '+esc(m.to)+'</strong>'+badge('active',m.topic||'geral')+'</div><div class="small">'+esc(m.body)+'</div><div class="small muted" style="margin-top:4px">'+esc(m.at||'')+'</div></div>');
+    const reevTasks=(reev.tasks||[]).map((t)=>'<div class="item"><div class="head"><strong>'+esc(t.id)+' — '+esc(plain(t.title||''))+'</strong>'+badge(t.classification,t.classification)+'</div><div class="small">Ação sugerida: <code>'+esc(t.recommended_action||'—')+'</code></div>'+((t.overlapping_files&&t.overlapping_files.length)?'<div style="margin-top:6px">'+t.overlapping_files.map((f)=>'<span class="chip">'+esc(f)+'</span>').join('')+'</div>':'')+'</div>');
+    const pendingGates=(gateQueue.pending||[]).map((gItem)=>'<div class="entry"><div class="head"><strong>'+esc(gItem.gate_id)+'</strong>'+badge(gItem.status||'pending')+'</div><div class="small muted">Escopo: '+esc(gItem.scope||'—')+' · Tarefa: '+esc(gItem.work_item_id||'—')+'</div><div class="actions"><button class="primary" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeGateResolve(\\''+esc(gItem.gate_id)+'\\',\\'approve\\')">Aprovar</button><button class="warnbtn" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeGateResolve(\\''+esc(gItem.gate_id)+'\\',\\'waive\\')">Dispensar</button><button class="danger" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeGateResolve(\\''+esc(gItem.gate_id)+'\\',\\'reject\\')">Rejeitar</button></div></div>');
+    const checkpoints=(ctx.checkpoints.parsed||[]).map((c)=>'<div class="item"><div class="head"><strong>'+esc(c.id)+'</strong>'+badge(c.status)+'</div><div class="small muted">'+esc(c.type)+' · '+esc(c.phase||'—')+' · '+esc(c.scope||'—')+'</div><div class="small" style="margin-top:4px">'+esc(c.notes||'—')+'</div></div>');
+    const trace=((ctx.tracing&&ctx.tracing.events)||[]).slice(-10).reverse().map((e)=>'<div class="entry"><div class="head"><strong>'+esc(e.type)+'</strong>'+badge('active',e.timestamp?e.timestamp.slice(11,19):'—')+'</div><div class="small muted">run='+esc(e.run_id||'—')+(e.work_item_id||e.task_id?' · task='+esc(e.work_item_id||e.task_id):'')+'</div></div>');
+    const sessions=(ctx.sessions.items||[]).map((s)=>'<div class="item"><div class="head"><div><strong>'+esc(s.id)+' · '+esc(s.name)+'</strong><div class="small muted">'+esc(s.lastActivity)+'</div></div>'+badge(s.status)+'</div><div class="small">'+esc(plain(s.summary||'—'))+'</div><div class="actions"><button class="secondary" onclick="openSession(\\''+esc(s.path)+'\\')">Abrir esta sessão</button></div></div>');
+    const graph=(ctx.visual.artifactGraph||[]).map((n)=>'<div class="item"><div class="head"><strong>'+esc(n.label)+'</strong>'+badge(n.status)+'</div><div class="small">'+esc(plain(n.detail||'—'))+'</div></div>');
+    const repo=Object.entries(ctx.repositoryContext||{}).map(([k,v])=>'<div class="item"><strong>'+esc(k.toUpperCase())+'</strong><div class="small" style="margin-top:6px">'+esc(plain(v.summary||'Sem resumo.'))+'</div></div>');
     const activeRun=ctx.activeRun||{};
 
-    app.innerHTML='<div class="stats">'
-      +'<div class="metric"><div class="label">Saúde</div><div class="value">'+badge(ctx.healthStatus)+'</div></div>'
-      +'<div class="metric"><div class="label">Go / No-Go</div><div class="value">'+badge(ctx.readiness.decision,ctx.readiness.decision)+'</div></div>'
-      +'<div class="metric"><div class="label">Agentes Ativos</div><div class="value">'+esc(agentsLive.length)+'</div></div>'
-      +'<div class="metric"><div class="label">Colisões Write-Set</div><div class="value">'+badge(collisions.length?'blocked':'done',String(collisions.length))+'</div></div>'
-      +'<div class="metric"><div class="label">Reavaliação Base</div><div class="value">'+badge(reev.overall_status||'pending',reev.overall_status||'n/a')+'</div></div>'
-      +'<div class="metric"><div class="label">Worktrees</div><div class="value">'+esc(wt.total||0)+'</div></div>'
+    app.innerHTML=''
+    +'<div class="view'+(tab==='overview'?' active':'')+'">'
+      +'<div class="hero '+esc(g.tone)+'">'
+        +'<div class="hero-top"><div><div class="label">O que fazer agora</div><div class="hero-title">'+esc(g.headline)+'</div></div>'+badge(g.tone,g.badgeLabel)+'</div>'
+        +'<div class="hero-desc">'+esc(g.explanation)+'</div>'
+        +'<div class="cmd-bar"><code>'+esc(g.command)+'</code><button class="secondary" onclick="copyCmd(\\''+esc(g.command)+'\\',this)">Copiar comando</button><button class="primary" onclick="setTab(\\''+esc(g.ctaTab)+'\\')">'+esc(g.ctaLabel)+'</button></div>'
+      +'</div>'
+      +'<div class="signals">'
+        +'<button class="signal" onclick="setTab(\\'execution\\')"><div class="label">Bloqueios & Gates</div><div class="signal-val"><span>'+esc(blockerCount===0?'Nenhum':blockerCount+' pendente(s)')+'</span>'+badge(blockerCount?'blocked':'done',blockerCount?'atenção':'OK')+'</div><div class="small muted">'+(verifyManifest?esc(verifyManifest.pass+'/'+verifyManifest.total+' checks verdes'):'Clique para abrir Execução')+'</div></button>'
+        +'<button class="signal" onclick="setTab(\\'agents\\')"><div class="label">Agentes & Colisões</div><div class="signal-val"><span>'+esc(agentsLive.length+' ativo(s)')+'</span>'+badge(collisions.length?'blocked':'done',collisions.length?collisions.length+' colisão':'0 colisões')+'</div><div class="small muted">'+(messages.length?esc(messages.length+' mensagem(ns) no inbox'):'Nenhum conflito de arquivo')+'</div></button>'
+        +'<button class="signal" onclick="setTab(\\'reevaluate\\')"><div class="label">Drift na Base</div><div class="signal-val"><span>'+esc(driftLabel)+'</span>'+badge(driftTone,driftTone==='done'?'OK':'revisar')+'</div><div class="small muted">Base: '+esc(reev.base||'—')+'</div></button>'
+        +'<button class="signal" onclick="setTab(\\'worktrees\\')"><div class="label">Worktrees</div><div class="signal-val"><span>'+esc(wt.total||0)+' total</span>'+badge(wtTone,wtDirty?wtDirty+' suja(s)':'limpas')+'</div><div class="small muted">'+(wtDirty?'Clique para ver higiene':'Nenhuma pendência')+'</div></button>'
+      +'</div>'
+      +'<div class="layout">'
+        +'<div class="panel"><div class="head"><div><h2>Progresso da Entrega</h2><div class="small muted">'+esc(plain(ctx.spec&&ctx.spec.objective||'Objetivo não encontrado na SPEC.'))+'</div></div>'+(prog&&prog.totalCount?badge(prog.allClosed?'done':'active',prog.pct+'%'):'')+'</div>'
+          +(prog&&prog.totalCount?'<div class="progress-wrap"><div class="progress-bar" style="width:'+esc(prog.pct)+'%"></div></div><div class="list">'+phaseRows.join('')+'</div>':list(waves,'Nenhum plano carregado nesta sessão.'))
+        +'</div>'
+        +'<div class="panel"><div class="head"><div><h2>Checklist da Sessão</h2><div class="small muted">Leitura rápida de saúde e prontidão</div></div></div><div class="list">'+checklistHtml.join('')+'</div></div>'
+      +'</div>'
     +'</div>'
-    +'<div class="view'+(tab==='overview'?' active':'')+'"><div class="layout"><div class="stack">'
-      +'<div class="panel"><div class="head"><div><h2>Decision Control</h2><div class="small muted">Podemos executar / promover agora?</div></div>'+badge(ctx.planReviewStatus,'review:'+ctx.planReviewStatus)+'</div><div class="'+(ctx.readiness.go?'go-card':'nogo-card')+'"><div class="label">Veredito Operacional</div><div style="font-size:34px;font-weight:900;margin-top:6px">'+(ctx.readiness.go?'GO — PRONTO':'HOLD — ATENÇÃO')+'</div><div class="small" style="margin-top:8px">'+esc(ctx.nextStep&&ctx.nextStep.reason||'—')+'</div></div></div>'
-      +'<div class="panel"><div class="head"><div><h2>Decision Rail</h2><div class="small muted">Fluxo completo STATE → SPEC → PLAN → REVIEW → EXECUTE → CHECKPOINTS → VERIFY → LESSONS</div></div></div><div class="rail">'+flow.join('')+'</div></div>'
-      +'<div class="panel"><div class="head"><div><h2>Bloqueios & Avisos</h2><div class="small muted">Sinais ativos antes do execute / ship</div></div></div><div class="grid2"><div><h3>Bloqueios</h3>'+list(blockers,'Nenhum bloqueio formal.')+'</div><div><h3>Avisos</h3>'+list(warnings,'Nenhum aviso relevante.')+'</div></div></div>'
-      +'<div class="panel"><div class="head"><div><h2>Review & Aprovação do Plano</h2><div class="small muted">Persistido em STATE.md, PLAN-REVIEW.md e comentários</div></div></div><div class="grid2"><div><div class="actions"><button class="primary" onclick="changeReview(\\'approved\\')">Aprovar</button><button class="warnbtn" onclick="changeReview(\\'needs_revision\\')">Pedir revisão</button><button class="secondary" onclick="changeReview(\\'in_review\\')">Em revisão</button><button class="danger" onclick="changeReview(\\'rejected\\')">Rejeitar</button></div><div class="form"><input id="comment-target" placeholder="target ex.: wave:1, T2"/><select id="comment-type"><option value="note">note</option><option value="risk">risk</option><option value="question">question</option><option value="approval">approval</option></select><textarea id="comment-text" rows="4" placeholder="Comentário de revisão"></textarea><button class="primary" onclick="addComment()">Adicionar comentário</button></div></div><div><h3>Comentários</h3>'+list(comments,'Sem comentários.')+'</div></div></div>'
-    +'</div><div class="stack">'
-      +'<div class="panel"><div class="head"><div><h2>Mapa de Artefatos</h2><div class="small muted">Fonte da verdade em .oxe/</div></div></div><div class="grid2">'+graph.join('')+'</div></div>'
-      +'<div class="panel"><div class="head"><div><h2>Calibração do Plano</h2><div class="small muted">Confiança prevista vs. resultado</div></div>'+badge(ctx.calibration.status)+'</div><div class="small">'+esc(ctx.calibration.summary)+'</div></div>'
-    +'</div></div></div>'
-    +'<div class="view'+(tab==='plan'?' active':'')+'"><div class="layout"><div class="stack">'
-      +'<div class="panel"><div class="head"><div><h2>Ondas & Tarefas do Plano</h2><div class="small muted">Dependências, verificação e vínculos</div></div>'+badge(ctx.planReviewStatus)+'</div>'+list(waves,'PLAN.md ausente ou sem tarefas.')+'</div>'
-      +'<div class="panel"><div class="head"><div><h2>Matriz de Cobertura SPEC → PLAN → VERIFY</h2></div></div><div class="grid2">'+coverage.join('')+'</div></div>'
-    +'</div><div class="stack">'
-      +'<div class="panel"><div class="head"><div><h2>Autoavaliação & Prontidão Racional</h2></div></div><div class="grid3">'+kv('Melhor plano',(ctx.plan.selfEvaluation&&ctx.plan.selfEvaluation.bestPlan)||'—')+kv('Confiança',ctx.readiness.confidence!=null?ctx.readiness.confidence+'%':'—')+kv('Pack Racional',ctx.executionRationality&&ctx.executionRationality.executionRationalityReady?'ready':'pendente')+'</div></div>'
-      +'<div class="panel"><div class="head"><div><h2>Lacunas da SPEC</h2></div></div>'+list((ctx.spec.uncoveredCriteria||[]).map((c)=>'<div class="entry small">'+esc(c.id)+' · '+esc(c.criterion)+'</div>'),'100% dos critérios cobertos no plano.')+'</div>'
-    +'</div></div></div>'
+
+    +'<div class="view'+(tab==='plan'?' active':'')+'"><div class="stack">'
+      +(prog&&prog.totalCount?'<div class="panel"><div class="head"><div><h2>Fases do Programa</h2><div class="small muted">'+esc(prog.closedCount)+' de '+esc(prog.totalCount)+' fases concluídas</div></div>'+badge(prog.allClosed?'done':'active',prog.pct+'%')+'</div><div class="list">'+phaseRows.join('')+'</div></div>':'')
+      +'<div class="layout">'
+        +'<div class="panel"><div class="head"><div><h2>Critérios de Aceite (SPEC → Verify)</h2><div class="small muted">'+esc((ctx.coverage||[]).length)+' critério(s) rastreados</div></div></div><div class="list">'+(coverage.length?coverage.join(''):'<div class="entry small muted">Nenhum critério A* encontrado na SPEC.</div>')+'</div></div>'
+        +'<div class="stack">'
+          +'<div class="panel"><div class="head"><div><h2>Tarefas da Fase Atual (PLAN.md)</h2><div class="small muted">'+esc(ctx.plan.totalTasks)+' tarefa(s) registradas</div></div></div>'+list(waves,'PLAN.md ausente ou sem tarefas.')+'</div>'
+          +(reviewNeedsFocus?'<div class="panel"><div class="head"><div><h2>Revisão & Aprovação do Plano</h2></div>'+badge(ctx.planReviewStatus)+'</div>'+reviewBody+'</div>':'<details><summary>Revisão manual e comentários do plano ('+esc((ctx.review.comments||[]).length)+')</summary><div style="margin-top:12px">'+reviewBody+'</div></details>')
+        +'</div>'
+      +'</div>'
+    +'</div></div>'
+
     +'<div class="view'+(tab==='agents'?' active':'')+'"><div class="layout"><div class="stack">'
-      +'<div class="panel"><div class="head"><div><h2>Agentes Ativos Multi-Worktree</h2><div class="small muted">Ledger compartilhado em &lt;git-common-dir&gt;/oxe/active-agents.json</div></div>'+badge(agentsLive.length?'active':'pending',agentsLive.length+' ativo(s)')+'</div>'+list(activeAgentsCards,'Nenhum lease de agente ativo agora.')+'</div>'
-      +'<div class="panel"><div class="head"><div><h2>Detector de Colisões de Write-Set</h2><div class="small muted">Sobreposições reais entre worktrees simultâneos</div></div>'+badge(collisions.length?'blocked':'done',collisions.length?collisions.length+' colisão(ões)':'limpo')+'</div>'+list(collisionCards,'Zero colisões de write_set detectadas.')+'</div>'
+      +'<div class="panel"><div class="head"><div><h2>Agentes Ativos Agora</h2><div class="small muted">Leases registrados automaticamente em execuções paralelas</div></div>'+badge(agentsLive.length?'active':'pending',agentsLive.length+' ativo(s)')+'</div>'+list(activeAgentsCards,'Nenhum agente em execução paralela neste momento.')+'</div>'
+      +'<div class="panel"><div class="head"><div><h2>Colisões de Arquivos (Write-Set)</h2><div class="small muted">Alerta imediato se dois agentes editarem o mesmo arquivo</div></div>'+badge(collisions.length?'blocked':'done',collisions.length?collisions.length+' colisão':'sem colisões')+'</div>'+list(collisionCards,'Zero colisões detectadas.')+'</div>'
     +'</div><div class="stack">'
-      +'<div class="panel"><div class="head"><div><h2>Inbox Inter-Worktree</h2><div class="small muted">Mensagens de coordenação entre agentes (oxe-cc agents send/inbox)</div></div>'+badge('active',messages.length+' msg(s)')+'</div>'+list(inboxCards,'Nenhuma mensagem registrada no inbox.')+'</div>'
+      +'<div class="panel"><div class="head"><div><h2>Inbox entre Worktrees</h2><div class="small muted">Mensagens trocadas via oxe-cc agents send / inbox</div></div>'+badge('active',messages.length+' msg(s)')+'</div>'+list(inboxCards,'Nenhuma mensagem registrada no inbox.')+'</div>'
     +'</div></div></div>'
-    +'<div class="view'+(tab==='reevaluate'?' active':'')+'"><div class="panel"><div class="head"><div><h2>Reavaliação Contínua Contra Base</h2><div class="small muted">Base: '+esc(reev.base||'—')+' · Commits upstream: '+esc(reev.upstream_commits_count||0)+'</div></div>'+badge(reev.overall_status||'pending',reev.overall_status||'unavailable')+'</div><div class="grid3" style="margin-bottom:14px">'+kv('Sem Impacto (no_impact)',String((reev.summary&&reev.summary.no_impact)||0))+kv('Sync Mecânico (mechanical_sync)',String((reev.summary&&reev.summary.mechanical_sync)||0))+kv('Drift de Contrato (contract_drift)',String((reev.summary&&reev.summary.contract_drift)||0))+'</div>'+list(reevTasks,'Nenhuma tarefa pendente com drift contra a base.')+'</div></div>'
+
+    +'<div class="view'+(tab==='reevaluate'?' active':'')+'"><div class="panel"><div class="head"><div><h2>Reavaliação contra a Branch Base</h2><div class="small muted">Base: '+esc(reev.base||'—')+' · Commits upstream: '+esc(reev.upstream_commits_count||0)+'</div></div>'+badge(driftTone,driftLabel)+'</div><div class="grid3" style="margin-bottom:14px">'+kv('Sem impacto',String((reev.summary&&reev.summary.no_impact)||0))+kv('Sync mecânico',String(syncCount))+kv('Drift de contrato',String(driftCount))+'</div>'+list(reevTasks,'Nenhuma tarefa pendente sofreu drift contra a branch base.')+'</div></div>'
+
     +'<div class="view'+(tab==='scorecard'?' active':'')+'"><div class="layout"><div class="stack">'
-      +'<div class="panel"><div class="head"><div><h2>Scorecard & Roteamento Empírico (ROI)</h2><div class="small muted">models.auto_route + distribuição por tier + telemetria local</div></div>'+badge(scr.auto_route?'done':'active',scr.auto_route?'auto_route ON':'auto_route OFF')+'</div><div class="grid3">'+kv('Tier Fast',String((scr.tiers&&scr.tiers.fast)||0))+kv('Tier Balanced',String((scr.tiers&&scr.tiers.balanced)||0))+kv('Tier Powerful',String((scr.tiers&&scr.tiers.powerful)||0))+'</div><div class="raw" style="margin-top:12px">'+esc(JSON.stringify(scr.scorecard||{note:'Sem telemetria de scorecard acumulada ainda.'},null,2))+'</div></div>'
+      +'<div class="panel"><div class="head"><div><h2>Distribuição de Modelos & Roteamento</h2><div class="small muted">Tier atribuído às tarefas do plano atual</div></div>'+badge(scr.auto_route?'done':'active',scr.auto_route?'auto_route ON':'auto_route OFF')+'</div><div class="grid3">'+kv('Fast',String((scr.tiers&&scr.tiers.fast)||0))+kv('Balanced',String((scr.tiers&&scr.tiers.balanced)||0))+kv('Powerful',String((scr.tiers&&scr.tiers.powerful)||0))+'</div><details style="margin-top:14px"><summary>Ver JSON técnico do scorecard</summary><div class="raw">'+esc(JSON.stringify(scr.scorecard||{note:'Sem telemetria de scorecard acumulada ainda.'},null,2))+'</div></details></div>'
     +'</div><div class="stack">'
-      +'<div class="panel"><div class="head"><div><h2>Enterprise Verify & Governança</h2></div></div><div class="grid2">'+kv('Checks',(ctx.enterprise&&ctx.enterprise.verificationSummary&&ctx.enterprise.verificationSummary.total)||0)+kv('Coverage',(ctx.enterprise&&ctx.enterprise.evidenceCoverage&&String(ctx.enterprise.evidenceCoverage.coverage_percent)+'%')||'—')+kv('Riscos Residuais',(ctx.enterprise&&ctx.enterprise.residualRiskSummary&&ctx.enterprise.residualRiskSummary.total)||0)+kv('Promoção',(ctx.enterprise&&ctx.enterprise.promotionSummary&&ctx.enterprise.promotionSummary.status)||'—')+'</div></div>'
+      +'<div class="panel"><div class="head"><div><h2>Qualidade & Evidências</h2><div class="small muted">Resumo da última verificação</div></div></div><div class="grid2">'+kv('Checks executados',String((verifyManifest&&verifyManifest.total)||(ctx.enterprise&&ctx.enterprise.verificationSummary&&ctx.enterprise.verificationSummary.total)||0))+kv('Cobertura de evidência',verifyManifest&&verifyManifest.coveragePercent!=null?verifyManifest.coveragePercent+'%':(ctx.enterprise&&ctx.enterprise.evidenceCoverage&&ctx.enterprise.evidenceCoverage.coverage_percent!=null?ctx.enterprise.evidenceCoverage.coverage_percent+'%':'—'))+kv('Riscos residuais',String((ctx.enterprise&&ctx.enterprise.residualRiskSummary&&ctx.enterprise.residualRiskSummary.total)||0))+kv('Promoção',(ctx.enterprise&&ctx.enterprise.promotionSummary&&ctx.enterprise.promotionSummary.status)||'—')+'</div></div>'
     +'</div></div></div>'
+
     +'<div class="view'+(tab==='worktrees'?' active':'')+'"><div class="layout"><div class="stack">'
-      +'<div class="panel"><div class="head"><div><h2>Higiene de Worktrees</h2><div class="small muted">oxe-cc gc-worktrees · proteção automática de junctions ativas</div></div>'+badge(wt.ok?'done':'warning',wt.ok?'saudável':'atenção')+'</div><div class="grid3">'+kv('Total',String(wt.total||0))+kv('Sujas',String((wt.dirty||[]).length))+kv('Órfãs / Pendentes',String((wt.orphans||[]).length))+'</div>'+list((wt.warnings||[]).map((w)=>'<div class="entry small">'+esc(w)+'</div>'),'Sem pendências de higiene de worktrees.')+'</div>'
-      +'<div class="panel"><div class="head"><div><h2>Ecossistema: Onboarding, CI, ALM & MCP</h2><div class="small muted">Core 100% agnóstico (D-5) · servidor nativo oxe-cc mcp</div></div></div><div class="grid2">'+kv('Stacks',(ob.stacks||[]).join(', ')||'—')+kv('CI Providers',(ob.ci_providers||[]).join(', ')||'local-only')+kv('ALM Provider',ob.alm_provider||'none')+kv('MCP Server','oxe-cc mcp (JSON-RPC 2.0 stdio)')+'</div></div>'
+      +'<div class="panel"><div class="head"><div><h2>Higiene de Worktrees</h2><div class="small muted">Para inspecionar ou limpar: <code>oxe-cc gc-worktrees --dry-run</code></div></div>'+badge(wtTone,wtDirty?wtDirty+' com alterações':'saudável')+'</div><div class="grid3">'+kv('Total',String(wt.total||0))+kv('Com alterações (sujas)',String(wtDirty))+kv('Limpáveis / órfãs',String(wtOrphans))+'</div>'+(wt.nested_agent?'<div class="small muted" style="margin-top:10px">Nota: '+esc(wt.nested_agent)+' worktree(s) aninhada(s) de agente detectada(s) (ex.: <code>.claude/worktrees</code>).</div>':'')+'</div>'
+      +'<div class="panel"><div class="head"><div><h2>Ambiente Detectado (Onboard & MCP)</h2><div class="small muted">Configuração local-first sem acoplamento a provedor único</div></div></div><div class="grid2">'+kv('Stacks',(ob.stacks||[]).join(', ')||'—')+kv('CI',(ob.ci_providers||[]).join(', ')||'local')+kv('ALM',ob.alm_provider||'none')+kv('MCP nativo','oxe-cc mcp')+'</div></div>'
     +'</div><div class="stack">'
-      +'<div class="panel"><div class="head"><div><h2>Repository Context</h2></div></div><div class="grid2">'+repo.join('')+'</div></div>'
+      +'<div class="panel"><div class="head"><div><h2>Resumo do Repositório</h2><div class="small muted">Base de conhecimento em .oxe/codebase/</div></div></div><div class="list">'+(repo.length?repo.join(''):'<div class="entry small muted">Nenhum mapa de codebase encontrado.</div>')+'</div></div>'
     +'</div></div></div>'
+
     +'<div class="view'+(tab==='execution'?' active':'')+'"><div class="layout"><div class="stack">'
-      +'<div class="panel"><div class="head"><div><h2>Run Control</h2><div class="small muted">Controle operacional do runtime</div></div>'+badge(activeRun.status||'pending')+'</div><div class="grid3">'+kv('Run ID',activeRun.run_id||'—')+kv('Status',activeRun.status||'pending')+kv('Onda Atual',ctx.runtime.parsed.currentWave||'—')+'</div><div class="actions"><button class="primary" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeAction(\\'start\\')">Start</button><button class="warnbtn" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeAction(\\'pause\\')">Pause</button><button class="secondary" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeAction(\\'resume\\')">Resume</button><button class="danger" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeAction(\\'replay\\')">Replay</button></div></div>'
-      +'<div class="panel"><div class="head"><div><h2>Gates Pendentes & Checkpoints</h2></div></div>'+list(pendingGates,'Sem gates pendentes.')+'<h3>Checkpoints</h3>'+list(checkpoints,'Sem checkpoints registrados.')+'</div>'
+      +'<div class="panel"><div class="head"><div><h2>Execução & Run Atual</h2><div class="small muted">Controle direto do runtime quando uma execução está em curso</div></div>'+badge(activeRun.status||'pending')+'</div><div class="grid3">'+kv('Run ID',activeRun.run_id||'—')+kv('Status',activeRun.status||'sem run')+kv('Checks Verify',verifyManifest?verifyManifest.pass+'/'+verifyManifest.total+' OK':'—')+'</div><div class="actions"><button class="primary" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeAction(\\'start\\')">Start</button><button class="warnbtn" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeAction(\\'pause\\')">Pause</button><button class="secondary" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeAction(\\'resume\\')">Resume</button><button class="danger" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeAction(\\'replay\\')">Replay</button></div></div>'
+      +'<div class="panel"><div class="head"><div><h2>Gates Pendentes & Checkpoints</h2></div></div>'+list(pendingGates,'Nenhum gate aguardando aprovação.')+'<h3>Checkpoints</h3>'+list(checkpoints,'Nenhum checkpoint registrado.')+'</div>'
     +'</div><div class="stack">'
-      +'<div class="panel"><div class="head"><div><h2>Trace Operacional</h2><div class="small muted">Últimos eventos em OXE-EVENTS.ndjson</div></div></div>'+list(trace,'Sem eventos registrados.')+'</div>'
-      +'<div class="panel"><div class="head"><div><h2>Verify & Evidências</h2></div></div><div class="raw">'+esc(ctx.verify.summary||'VERIFY.md ausente.')+'</div></div>'
+      +'<div class="panel"><div class="head"><div><h2>Últimos Eventos</h2><div class="small muted">Trilha recente em OXE-EVENTS.ndjson</div></div></div>'+list(trace,'Nenhum evento registrado.')+'</div>'
+      +'<details><summary>Ver relatório bruto VERIFY.md</summary><div class="raw">'+esc(ctx.verify.summary||'VERIFY.md ausente.')+'</div></details>'
     +'</div></div></div>'
-    +'<div class="view'+(tab==='sessions'?' active':'')+'"><div class="layout"><div class="stack">'
-      +'<div class="panel"><div class="head"><div><h2>Sessão Ativa</h2></div></div><div class="grid2">'+kv('ID',(ctx.sessions.current&&ctx.sessions.current.id)||'—')+kv('Nome',(ctx.sessions.current&&ctx.sessions.current.name)||ctx.activeSession||'—')+kv('Status',(ctx.sessions.current&&ctx.sessions.current.status)||'—')+kv('Última Atividade',(ctx.sessions.current&&ctx.sessions.current.lastActivity)||'—')+'</div></div>'
-      +'<div class="panel"><div class="head"><div><h2>Semântica Multi-Runtime & Context Packs</h2></div></div><div class="grid2">'+kv('Semântica',ctx.context&&ctx.context.semantics&&ctx.context.semantics.ok?'alinhada':'drift')+kv('Workflow Primário',(ctx.context&&ctx.context.quality&&ctx.context.quality.primaryWorkflow)||'dashboard')+'</div></div>'
-    +'</div><div class="stack">'
-      +'<div class="panel"><div class="head"><div><h2>Sessões Registradas</h2></div></div>'+list(sessions,'SESSIONS.md ausente ou vazio.')+'</div>'
-    +'</div></div></div>';
+
+    +'<div class="view'+(tab==='sessions'?' active':'')+'"><div class="stack">'
+      +'<div class="layout">'
+        +'<div class="panel"><div class="head"><div><h2>Sessão Atual</h2></div></div><div class="grid2">'+kv('ID',(ctx.sessions.current&&ctx.sessions.current.id)||'—')+kv('Nome',(ctx.sessions.current&&ctx.sessions.current.name)||ctx.activeSession||'—')+kv('Status',(ctx.sessions.current&&ctx.sessions.current.status)||'—')+kv('Perfil',ctx.isLean?'lean':'standard')+'</div></div>'
+        +'<div class="panel"><div class="head"><div><h2>Trocar de Sessão</h2><div class="small muted">Selecione outra entrega registrada no projeto</div></div></div>'+list(sessions,'Nenhuma sessão registrada em SESSIONS.md.')+'</div>'
+      +'</div>'
+      +'<details><summary>Mapa técnico de artefatos (.oxe/) — '+esc(graph.length)+' itens</summary><div class="grid3" style="margin-top:12px">'+graph.join('')+'</div></details>'
+    +'</div></div>';
   }
   function setTab(next){tab=next;if(ctx)render();}
   function toggleAuto(){autoOn=!autoOn;document.getElementById('auto-btn').textContent='Auto: '+(autoOn?'ON':'OFF');if(timer){clearInterval(timer);timer=null;}if(autoOn)timer=setInterval(()=>{refresh().catch(()=>{});},10000);}
-  async function openSession(p){session=p||null;await refresh();tab='sessions';render();}
+  async function openSession(p){session=p||null;tab='overview';await refresh();}
   async function changeReview(status){const note=prompt('Justificativa curta para o novo estado do plano:',status==='approved'?'Plano aprovado para execução.':'');if(note==null)return;await api('/api/review/status',{method:'POST',body:JSON.stringify({status,note,author:'user',activeSession:session})});await refresh();}
   async function addComment(){const target=document.getElementById('comment-target').value||'plan';const type=document.getElementById('comment-type').value||'note';const text=document.getElementById('comment-text').value.trim();if(!text)return alert('Escreva um comentário.');await api('/api/review/comment',{method:'POST',body:JSON.stringify({target,type,text,author:'user',activeSession:session})});document.getElementById('comment-text').value='';await refresh();}
   async function resolveComment(id){await api('/api/review/comment-status',{method:'POST',body:JSON.stringify({commentId:id,status:'resolved',activeSession:session})});await refresh();}
   async function runtimeAction(action){if(runtimeDisabled())return;const reason=prompt('Motivo da transição:',action==='start'?'iniciar execução':'');if(reason==null)return;await api('/api/runtime/action',{method:'POST',body:JSON.stringify({action,reason,activeSession:session})});await refresh();}
   async function runtimeGateResolve(gateId,decision){if(runtimeDisabled())return;const needsReason=decision==='reject'||decision==='waive';const reason=needsReason?prompt('Justificativa obrigatória para '+decision+':',''):'';if(needsReason&&(!reason||!reason.trim()))return alert('Justificativa obrigatória.');await api('/api/runtime/gates/resolve',{method:'POST',body:JSON.stringify({gateId,decision,actor:'dashboard',reason:reason&&reason.trim()?reason.trim():undefined,activeSession:session})});await refresh();}
-  window.setTab=setTab;window.toggleAuto=toggleAuto;window.refresh=refresh;window.openSession=openSession;window.changeReview=changeReview;window.addComment=addComment;window.resolveComment=resolveComment;window.runtimeAction=runtimeAction;window.runtimeGateResolve=runtimeGateResolve;
+  window.setTab=setTab;window.toggleAuto=toggleAuto;window.refresh=refresh;window.openSession=openSession;window.copyCmd=copyCmd;window.changeReview=changeReview;window.addComment=addComment;window.resolveComment=resolveComment;window.runtimeAction=runtimeAction;window.runtimeGateResolve=runtimeGateResolve;
   refresh().then(()=>{if(autoOn)timer=setInterval(()=>{refresh().catch(()=>{});},10000);}).catch((err)=>{app.innerHTML='<div class="panel"><h2>Erro</h2><div class="small">'+esc(err.message)+'</div></div>';});
   </script></body></html>`;
 }
