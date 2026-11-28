@@ -2074,6 +2074,7 @@ function runInstall(opts) {
           copyOpts
         );
       }
+      oxeAgentInstall.installOxeSkills(cCmd, agentPaths.oxeSkillsDir, copyOpts, idePathRewrite);
     } else {
       console.warn(`${yellow}aviso:${reset} pasta ausente ${cCmd} — ignorando comandos CLI`);
     }
@@ -2132,6 +2133,7 @@ function runInstall(opts) {
         logO,
         logW
       );
+      oxeAgentInstall.installOxeSkills(cCmdAgents, agentPaths.oxeSkillsDir, copyOpts, idePathRewrite, logO, logW);
     }
   }
 
