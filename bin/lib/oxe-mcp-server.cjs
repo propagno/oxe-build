@@ -163,6 +163,18 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'oxe_primer',
+    description: 'Returns the compact (<80 lines) OXE agent onboarding primer detecting greenfield/brownfield, approval modes (single-ok vs auto), and autonomous deliver protocol.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        dir: { type: 'string', description: 'Project root directory.' },
+        session: { type: 'string', description: 'Optional active session.' },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 async function executeTool(name, args = {}, ctx = {}) {
@@ -238,6 +250,11 @@ async function executeTool(name, args = {}, ctx = {}) {
   }
   if (name === 'oxe_scorecard') {
     return require('./oxe-operational.cjs').runtimeScorecard(targetDir, session, {});
+  }
+  if (name === 'oxe_primer') {
+    const primerMod = require('./oxe-primer.cjs');
+    const primer = primerMod.buildPrimer(targetDir, { activeSession: session });
+    return { ...primer, markdown: primerMod.formatPrimerMarkdown(primer) };
   }
   return null;
 }
@@ -419,10 +436,23 @@ function startStdioServer(options = {}) {
   });
 }
 
+function createMcpServer(options = {}) {
+  const ctx = {
+    projectRoot: path.resolve(options.projectRoot || process.cwd()),
+    activeSession: options.activeSession || null,
+  };
+  return {
+    ctx,
+    handleRequest: (msg) => handleJsonRpcMessage(msg, ctx),
+    startStdio: (stdioOpts = {}) => startStdioServer({ ...options, ...stdioOpts }),
+  };
+}
+
 module.exports = {
   PROTOCOL_VERSION,
   TOOLS,
   executeTool,
   handleJsonRpcMessage,
   startStdioServer,
+  createMcpServer,
 };

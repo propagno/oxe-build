@@ -768,6 +768,32 @@ function createOpsCommandRegistry(deps = {}) {
         });
       },
     },
+    {
+      name: 'primer',
+      handler(argv) {
+        if (argv.includes('--help') || argv.includes('-h')) {
+          console.log(`\n  oxe-cc primer [--dir <pasta>] [--session <sessão>] [--json]
+  Guia compacto (< 80 linhas) para qualquer agente compreender imediatamente o uso do OXE,
+  detectando greenfield/brownfield, entrega ativa e o protocolo único de \`oxe-cc deliver\`.\n`);
+          return;
+        }
+        const o = { dir: process.cwd(), session: null, json: false };
+        for (let i = 0; i < argv.length; i += 1) {
+          const a = argv[i];
+          if (a === '--json') o.json = true;
+          else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+          else if (a === '--session' && argv[i + 1]) o.session = String(argv[++i]);
+          else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+        }
+        const primerMod = require('../oxe-primer.cjs');
+        const primer = primerMod.buildPrimer(o.dir, { activeSession: o.session });
+        if (o.json) {
+          console.log(JSON.stringify(primer, null, 2));
+        } else {
+          process.stdout.write(primerMod.formatPrimerMarkdown(primer));
+        }
+      },
+    },
   ]);
 }
 

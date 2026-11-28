@@ -13327,6 +13327,16 @@ function runtimeMcpServer(projectRoot, options = {}) {
   };
 }
 
+function runtimePrimer(projectRoot, options = {}) {
+  const primerMod = require('./oxe-primer.cjs');
+  const primer = primerMod.buildPrimer(projectRoot, options);
+  return { ...primer, markdown: primerMod.formatPrimerMarkdown(primer) };
+}
+
+function runtimeDeliverInit(projectRoot, options = {}) {
+  return require('./oxe-deliver-intake.cjs').initDelivery(projectRoot, options);
+}
+
 module.exports = {
   relatedTestsCommand,
   relatedRedsOfTask,
@@ -13544,5 +13554,7 @@ module.exports = {
   runtimeReevaluate,
   runtimeCiParity,
   runtimeMcpServer,
+  runtimePrimer,
+  runtimeDeliverInit,
   resolveEffectiveSession,
 };
