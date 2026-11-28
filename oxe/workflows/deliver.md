@@ -51,3 +51,9 @@ Ao atingir `status === "DELIVERED"`, apresentar ao usuário o resumo de `DELIVER
 1. O que foi construído e critérios `A1..An` validados.
 2. Comandos testados no `FINAL_SMOKE` de **como rodar e testar agora**.
 3. Branch local pronta (reforçando que nenhum `git push` foi feito automaticamente).
+
+<success_criteria>
+- `oxe-cc primer` executado e modo de aprovação (`single-ok` ou `auto`) definido com o usuário.
+- `DELIVER.json`, `SPEC.md` e `ROADMAP.md` criados e todas as fases `F1..Fn` fechadas com testes congelados intactos (SHA-256 verificado).
+- `FINAL_SMOKE` executado com saída real (exit 0) e `DELIVERY.md` + `DELIVERY.json` gerados sem side effects remotos automáticos.
+</success_criteria>
