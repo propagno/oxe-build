@@ -13337,6 +13337,18 @@ function runtimeDeliverInit(projectRoot, options = {}) {
   return require('./oxe-deliver-intake.cjs').initDelivery(projectRoot, options);
 }
 
+function runtimeDeliverStatus(projectRoot, options = {}) {
+  return require('./oxe-deliver-engine.cjs').getDeliveryStatus(projectRoot, options);
+}
+
+function runtimeDeliverNext(projectRoot, options = {}) {
+  return require('./oxe-deliver-engine.cjs').getNextDeliveryStep(projectRoot, options);
+}
+
+function runtimeDeliverAdvance(projectRoot, options = {}) {
+  return require('./oxe-deliver-engine.cjs').advanceDelivery(projectRoot, options);
+}
+
 module.exports = {
   relatedTestsCommand,
   relatedRedsOfTask,
@@ -13556,5 +13568,8 @@ module.exports = {
   runtimeMcpServer,
   runtimePrimer,
   runtimeDeliverInit,
+  runtimeDeliverStatus,
+  runtimeDeliverNext,
+  runtimeDeliverAdvance,
   resolveEffectiveSession,
 };

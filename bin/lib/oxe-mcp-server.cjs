@@ -175,6 +175,45 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'oxe_deliver_status',
+    description: 'Returns the current autonomous delivery state machine (DELIVER.json), progress, approval mode, and budget.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        dir: { type: 'string', description: 'Project root directory.' },
+        session: { type: 'string', description: 'Optional delivery session.' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'oxe_deliver_next',
+    description: 'Returns the single next atomic step contract (state, allowed_files, frozen_tests, verify_cmd, advance_cmd) for Chat-Driven autonomous delivery.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        dir: { type: 'string', description: 'Project root directory.' },
+        session: { type: 'string', description: 'Optional delivery session.' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'oxe_deliver_advance',
+    description: 'Mechanically verifies the active delivery gate (frozen test hashes, anti-stub, verification/regression, smoke) and advances DELIVER.json.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        dir: { type: 'string', description: 'Project root directory.' },
+        session: { type: 'string', description: 'Optional delivery session.' },
+        frozen_tests: { type: 'array', items: { type: 'string' }, description: 'Acceptance test files to freeze in PHASE_FREEZE_TESTS.' },
+        verify_command: { type: 'string', description: 'Optional explicit verification command.' },
+        smoke_command: { type: 'string', description: 'Optional explicit smoke command for FINAL_SMOKE.' },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 async function executeTool(name, args = {}, ctx = {}) {
@@ -255,6 +294,20 @@ async function executeTool(name, args = {}, ctx = {}) {
     const primerMod = require('./oxe-primer.cjs');
     const primer = primerMod.buildPrimer(targetDir, { activeSession: session });
     return { ...primer, markdown: primerMod.formatPrimerMarkdown(primer) };
+  }
+  if (name === 'oxe_deliver_status') {
+    return require('./oxe-deliver-engine.cjs').getDeliveryStatus(targetDir, { session });
+  }
+  if (name === 'oxe_deliver_next') {
+    return require('./oxe-deliver-engine.cjs').getNextDeliveryStep(targetDir, { session });
+  }
+  if (name === 'oxe_deliver_advance') {
+    return require('./oxe-deliver-engine.cjs').advanceDelivery(targetDir, {
+      session,
+      frozenTests: Array.isArray(args.frozen_tests) ? args.frozen_tests : undefined,
+      verifyCommand: args.verify_command || undefined,
+      smokeCommand: args.smoke_command || undefined,
+    });
   }
   return null;
 }

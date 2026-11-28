@@ -794,6 +794,139 @@ function createOpsCommandRegistry(deps = {}) {
         }
       },
     },
+    {
+      name: 'deliver',
+      async handler(argv) {
+        const sub = argv[0] && !argv[0].startsWith('-') ? argv[0] : 'status';
+        const rest = argv[0] && !argv[0].startsWith('-') ? argv.slice(1) : argv;
+        if (argv.includes('--help') || argv.includes('-h')) {
+          console.log(`\n  oxe-cc deliver <init|mode|answer|approve|next|advance|run|resume|status|cancel> [opções]
+  Orquestrador autônomo ponta-a-ponta (Briefing → SPEC/Fases → Testes Congelados → Execução → FINAL_SMOKE → DELIVERY.md).
+    init --from <briefing.md> | --text "..." [--approval single-ok|auto] [--max-budget-usd <N>] [--dir <pasta>] [--json]
+    mode <single-ok|auto> [--dir <pasta>] [--json]
+    answer --answers-json '{"Q1":"..."}' [--dir <pasta>] [--json]
+    approve [--by <autor>] [--dir <pasta>] [--json]
+    next [--dir <pasta>] [--json]
+    advance [--frozen-tests a.test.cjs,b.test.cjs] [--verify "<cmd>"] [--smoke "<cmd>"] [--dir <pasta>] [--json]
+    run [--from <briefing.md>] [--approval single-ok|auto] [--executor claude|codex] [--max-budget-usd <N>] [--dir <pasta>] [--json]
+    resume [--note "..."] [--add-budget-usd <N>] [--dir <pasta>] [--json]
+    status [--dir <pasta>] [--json]
+    cancel [--reason "..."] [--dir <pasta>] [--json]\n`);
+          return;
+        }
+        const o = {
+          dir: process.cwd(),
+          session: null,
+          json: false,
+          from: null,
+          text: null,
+          approval: null,
+          maxBudgetUsd: null,
+          maxAttempts: null,
+          frozenTests: null,
+          verifyCommand: null,
+          smokeCommand: null,
+          answersJson: null,
+          by: null,
+          note: null,
+          reason: null,
+          executor: null,
+          addBudgetUsd: null,
+          positional: [],
+        };
+        for (let i = 0; i < rest.length; i += 1) {
+          const a = rest[i];
+          if (a === '--json') o.json = true;
+          else if (a === '--dir' && rest[i + 1]) o.dir = path.resolve(rest[++i]);
+          else if (a === '--session' && rest[i + 1]) o.session = String(rest[++i]);
+          else if (a === '--from' && rest[i + 1]) o.from = String(rest[++i]);
+          else if (a === '--text' && rest[i + 1]) o.text = String(rest[++i]);
+          else if (a === '--approval' && rest[i + 1]) o.approval = String(rest[++i]);
+          else if (a === '--max-budget-usd' && rest[i + 1]) o.maxBudgetUsd = Number(rest[++i]);
+          else if (a === '--max-attempts' && rest[i + 1]) o.maxAttempts = Number(rest[++i]);
+          else if (a === '--frozen-tests' && rest[i + 1]) o.frozenTests = String(rest[++i]).split(',').map((x) => x.trim()).filter(Boolean);
+          else if (a === '--verify' && rest[i + 1]) o.verifyCommand = String(rest[++i]);
+          else if (a === '--smoke' && rest[i + 1]) o.smokeCommand = String(rest[++i]);
+          else if (a === '--answers-json' && rest[i + 1]) o.answersJson = String(rest[++i]);
+          else if (a === '--by' && rest[i + 1]) o.by = String(rest[++i]);
+          else if (a === '--note' && rest[i + 1]) o.note = String(rest[++i]);
+          else if (a === '--reason' && rest[i + 1]) o.reason = String(rest[++i]);
+          else if (a === '--executor' && rest[i + 1]) o.executor = String(rest[++i]);
+          else if (a === '--add-budget-usd' && rest[i + 1]) o.addBudgetUsd = Number(rest[++i]);
+          else if (!a.startsWith('-')) o.positional.push(a);
+          else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+        }
+        try {
+          const intake = require('../oxe-deliver-intake.cjs');
+          const engine = require('../oxe-deliver-engine.cjs');
+          let out = null;
+          if (sub === 'init') {
+            out = intake.initDelivery(o.dir, {
+              from: o.from,
+              briefingText: o.text,
+              approval: o.approval,
+              session: o.session,
+              maxBudgetUsd: o.maxBudgetUsd,
+              maxAttempts: o.maxAttempts,
+            });
+          } else if (sub === 'mode') {
+            const targetMode = o.approval || o.positional[0];
+            out = engine.setApprovalMode(o.dir, targetMode, { session: o.session });
+          } else if (sub === 'answer') {
+            const answers = o.answersJson ? JSON.parse(o.answersJson) : {};
+            out = engine.answerClarification(o.dir, answers, { session: o.session });
+          } else if (sub === 'approve') {
+            out = engine.approveDelivery(o.dir, { session: o.session, by: o.by });
+          } else if (sub === 'next') {
+            out = engine.getNextDeliveryStep(o.dir, { session: o.session });
+          } else if (sub === 'advance') {
+            out = engine.advanceDelivery(o.dir, {
+              session: o.session,
+              frozenTests: o.frozenTests,
+              verifyCommand: o.verifyCommand,
+              smokeCommand: o.smokeCommand,
+            });
+          } else if (sub === 'resume') {
+            out = engine.resumeDelivery(o.dir, { session: o.session, note: o.note, addBudgetUsd: o.addBudgetUsd });
+          } else if (sub === 'cancel') {
+            out = engine.cancelDelivery(o.dir, { session: o.session, reason: o.reason });
+          } else if (sub === 'run') {
+            const runnerPath = path.join(__dirname, '..', 'oxe-deliver-runner.cjs');
+            if (!fs.existsSync(runnerPath)) throw new Error('Runner headless (oxe-deliver-runner.cjs) indisponível.');
+            out = await require(runnerPath).runAutonomousDelivery(o.dir, {
+              from: o.from,
+              briefingText: o.text,
+              approval: o.approval,
+              executor: o.executor,
+              maxBudgetUsd: o.maxBudgetUsd,
+              maxAttempts: o.maxAttempts,
+              session: o.session,
+            });
+          } else {
+            out = engine.getDeliveryStatus(o.dir, { session: o.session });
+          }
+          if (o.json) {
+            console.log(JSON.stringify(out, null, 2));
+          } else if (sub === 'init') {
+            console.log(`  ${green}✓${reset} deliver init: ${out.deliver_id} · status=${out.state.status} · modo=${out.state.approval_mode}`);
+            if (out.approval_prompt) console.log(`  ${yellow}?${reset} ${out.approval_prompt}`);
+          } else if (sub === 'next') {
+            console.log(`  deliver next [${out.state}]${out.phase ? ` (${out.phase.id} ${out.phase.index}/${out.phase.total})` : ''}`);
+            console.log(`  Instrução: ${out.instruction}`);
+            if (out.advance_cmd) console.log(`  Avançar:   ${out.advance_cmd}`);
+          } else if (sub === 'status') {
+            if (!out.exists) console.log('  Nenhuma entrega ativa. Inicie com `oxe-cc deliver init --from <briefing.md>`.');
+            else console.log(`  deliver ${out.deliver_id} · status=${out.state.status} · fases=${out.progress.closed}/${out.progress.total} (${out.progress.pct}%) · modo=${out.state.approval_mode}`);
+          } else {
+            console.log(`  ${out && out.ok === false ? `${red}✗${reset}` : `${green}✓${reset}`} deliver ${sub}: ${out && out.error ? out.error : (out && out.state ? out.state.status : 'ok')}`);
+          }
+          if (out && out.ok === false) process.exitCode = 1;
+        } catch (err) {
+          console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
+          process.exitCode = 1;
+        }
+      },
+    },
   ]);
 }
 
