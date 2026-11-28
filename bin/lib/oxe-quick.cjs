@@ -429,6 +429,42 @@ function activeOnWorktree(root, spawn = spawnSync) {
   return null;
 }
 
+const PR_TITLE_MAX = 80;
+
+/**
+ * Cuts at a word boundary, never inside a bracket pair: an open `(`/`[`/`{` without its closer is dropped with what
+ * follows it, then trailing punctuation goes and `…` marks the cut. Text that fits is returned as is.
+ */
+function shortenTitle(text, max = PR_TITLE_MAX) {
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  if (s.length <= max) return s;
+  let cut = s.slice(0, max - 1);
+  const sp = cut.lastIndexOf(' ');
+  if (sp > max / 2) cut = cut.slice(0, sp);
+  const pairs = { ')': '(', ']': '[', '}': '{' };
+  const stack = [];
+  for (let i = 0; i < cut.length; i += 1) {
+    const ch = cut[i];
+    if (ch === '(' || ch === '[' || ch === '{') stack.push(i);
+    else if (pairs[ch] && stack.length && cut[stack[stack.length - 1]] === pairs[ch]) stack.pop();
+  }
+  if (stack.length) cut = cut.slice(0, stack[0]);
+  cut = cut.replace(/[\s,;:.\-–—]+$/, '');
+  return `${cut}…`;
+}
+
+/**
+ * PR title: `--title` wins; then the quick's first commit subject when it already names the key (the repo's own
+ * convention, e.g. `fix(e2e): … (OXE-494)`); else `<KEY>: <objective>`. Always <= 80 chars, cut cleanly.
+ */
+function prTitleOf(rec, commits, explicit) {
+  if (explicit && String(explicit).trim()) return String(explicit).trim();
+  // commitsOf is `git log` order (newest first): the quick's first commit is the last one
+  const first = (commits || []).map((c) => String((c && c.subject) || '').trim()).filter(Boolean).pop();
+  if (first && rec.key && first.includes(rec.key)) return shortenTitle(first);
+  return shortenTitle(`${rec.key || 'quick'}: ${rec.objective}`);
+}
+
 /**
  * OXB-C20 #7: `oxe-cc quick promote [--id <Q-...>] [--open-pr] [--base main] [--draft] [--dry-run] [--force]`:
  * checks commit origin, pushes the current branch and opens a PR with `Fecha <KEY>` + quick verification summary.
@@ -484,7 +520,7 @@ function promote(root, input = {}) {
   } catch (err) {
     origin = { ok: true, skipped: true, reason: err.message };
   }
-  const title = rec.key ? `${rec.key}: ${rec.objective.slice(0, 72)}` : `quick: ${rec.objective.slice(0, 72)}`;
+  const title = prTitleOf(rec, commits, input.title);
   const bodyLines = [
     ...(rec.key ? [`Fecha ${rec.key}`, ''] : []),
     '## Objetivo',
@@ -547,4 +583,4 @@ function promote(root, input = {}) {
   };
 }
 
-module.exports = { start, done, commit, cancel, promote, current, activeOnWorktree, baseBranchOf, currentBranchOf, list, read, exists, mirrorDirOf, trailers, commitsOf, quickMd, cardComment, newId, ID_RE };
+module.exports = { start, done, commit, cancel, promote, shortenTitle, prTitleOf, current, activeOnWorktree, baseBranchOf, currentBranchOf, list, read, exists, mirrorDirOf, trailers, commitsOf, quickMd, cardComment, newId, ID_RE };

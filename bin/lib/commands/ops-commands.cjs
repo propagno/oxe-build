@@ -458,7 +458,7 @@ function createOpsCommandRegistry(deps = {}) {
   oxe-cc quick commit -m "<mensagem>" [<arquivos…>|--all] [--plain|--json]                                                o commit do quick, feito pelo CLI com os trailers
   oxe-cc quick cancel --reason "…" [--evidence <url|caminho>] [--no-alm] [--apply|--dry-run] [--plain|--json]             abandona o quick aberto (nunca "feito"); o card é comentado, não avança
   oxe-cc quick done [--verify "<comando>"] [--no-commit] [--no-alm] [--apply|--dry-run] [--plain|--json]                  fecha: commits com OXE-Quick, verificação rodada pelo CLI
-  oxe-cc quick promote [--id <Q-...>] [--open-pr] [--base <branch>] [--draft] [--dry-run] [--force] [--plain|--json]      roda check-origin, faz push da branch e abre PR com Fecha <KEY>
+  oxe-cc quick promote [--id <Q-...>] [--open-pr] [--base <branch>] [--title "<título>"] [--draft] [--dry-run] [--force] [--plain|--json]      roda check-origin, faz push da branch e abre PR com Fecha <KEY>
 
   Modos de escrita:
     --dry-run       simula sem gravar nem localmente (.oxe/quick/ e QUICK.md ficam intactos; commits sem origem falham no hook commit-msg).
@@ -491,7 +491,7 @@ function createOpsCommandRegistry(deps = {}) {
           else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
           else if (a === '--alm-dir' && argv[i + 1]) o.almDir = path.resolve(argv[++i]);
           else if (a === '--from-card' && argv[i + 1]) o.fromCard = String(argv[++i]);
-          else if (['--by', '--verify', '--id', '--key', '--objective', '--reason', '--evidence', '--base'].includes(a) && argv[i + 1] != null) o[a.slice(2)] = String(argv[++i]);
+          else if (['--by', '--verify', '--id', '--key', '--objective', '--reason', '--evidence', '--base', '--title'].includes(a) && argv[i + 1] != null) o[a.slice(2)] = String(argv[++i]);
           else if (!a.startsWith('-')) positional.push(a);
           else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
         }

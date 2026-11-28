@@ -2886,6 +2886,7 @@ async function runtimeQuick(projectRoot, activeSession, options = {}) {
       draft: Boolean(options.draft),
       dryRun: Boolean(options.dryRun),
       force: Boolean(options.force),
+      title: options.title || null,
       spawn: options.spawn,
     });
     // work_item_id = the quick id: ship status / detectMergedPrs follow its CI and merge like a promoted task's
