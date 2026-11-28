@@ -1,14 +1,14 @@
-# PLAN — F11
+# PLAN — F12
 
 > Gerado por `oxe-cc plan build` a partir de role.json. A fonte é o PLAN.json; este arquivo é a leitura humana.
 
 ## Onda 1
 
-### T1 — OXB-230-18: SDK Facade createClient (lib/sdk/client.cjs), ESM nativo (lib/sdk/index.mjs), exports/tipos (0 drift) e docs finais 1.23.0
+### T1 — OXB-230-19: Atualizar oxe-artifact-catalog.cjs com 100% dos artefatos modernos e gate de 0 extras
 
-- **Arquivos prováveis:** `lib/sdk/client.cjs`, `lib/sdk/index.cjs`, `lib/sdk/index.mjs`, `lib/sdk/index.types.ts`, `lib/sdk/index.d.ts`, `package.json`, `eslint.config.cjs`, `lib/sdk/README.md`, `CHANGELOG.md`, `README.md`, `AGENTS.md`, `docs/adr/D-8-ecossistema-aberto-mcp-alm-vcs-dashboard-v2-e-paridade-ci.md`
+- **Arquivos prováveis:** `bin/lib/oxe-artifact-catalog.cjs`
 - **Depende de:** —
 - **Onda:** 1
 - **Verificar:**
-  - Comando: `node --test tests/acceptance/oxe-1230-a18-sdk-client-esm.test.cjs && npm run test:sdk-types`
-- **Aceite vinculado:** A18
+  - Comando: `node --test tests/acceptance/oxe-1230-a19-catalog-zero-extras.test.cjs tests/oxe-map.test.cjs`
+- **Aceite vinculado:** A19
