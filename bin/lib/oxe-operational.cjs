@@ -13349,6 +13349,10 @@ function runtimeDeliverAdvance(projectRoot, options = {}) {
   return require('./oxe-deliver-engine.cjs').advanceDelivery(projectRoot, options);
 }
 
+function runtimeDeliverRun(projectRoot, options = {}) {
+  return require('./oxe-deliver-runner.cjs').runAutonomousDelivery(projectRoot, options);
+}
+
 module.exports = {
   relatedTestsCommand,
   relatedRedsOfTask,
@@ -13571,5 +13575,6 @@ module.exports = {
   runtimeDeliverStatus,
   runtimeDeliverNext,
   runtimeDeliverAdvance,
+  runtimeDeliverRun,
   resolveEffectiveSession,
 };
