@@ -3,7 +3,7 @@
 
 ## Fase atual
 
-`executing`
+`verify_complete`
 
 ## Sessão ativa (opcional — `/oxe-session`)
 
@@ -11,11 +11,11 @@
 
 ## Programa
 
-✓ F1 Hardening de Release/CI, Doctor CI-Parity & Fim do Flake de PID (closed) · ✓ F2 Fechamento dos Loops Automáticos da 1.22.2 (closed) · ✓ F3 Ecossistema Aberto — Servidor MCP Nativo & ALM GitHub/GitLab Issues (closed) · ✓ F4 Dashboard v2 Multi-Agente, Strangler Fig Fatia 3 & Corte `1.23.0` (closed) · ✓ F5 Primer do Agente & Intake Autônomo (oxe-cc primer + deliver init) (closed) · ✓ F6 Motor Determinístico oxe-deliver-engine, Anti-Cheat, Auto-Cura & MCP (closed) · ▶ F7 Runner Headless (deliver run), FINAL_SMOKE & DELIVERY.md (executing) · · F8 Dashboard Live Deliver, /oxe-deliver & Prova E2E Greenfield + Brownfield (pending)
+✓ F1 Hardening de Release/CI, Doctor CI-Parity & Fim do Flake de PID (closed) · ✓ F2 Fechamento dos Loops Automáticos da 1.22.2 (closed) · ✓ F3 Ecossistema Aberto — Servidor MCP Nativo & ALM GitHub/GitLab Issues (closed) · ✓ F4 Dashboard v2 Multi-Agente, Strangler Fig Fatia 3 & Corte `1.23.0` (closed) · ✓ F5 Primer do Agente & Intake Autônomo (oxe-cc primer + deliver init) (closed) · ✓ F6 Motor Determinístico oxe-deliver-engine, Anti-Cheat, Auto-Cura & MCP (closed) · ✓ F7 Runner Headless (deliver run), FINAL_SMOKE & DELIVERY.md (closed) · ▶ F8 Dashboard Live Deliver, /oxe-deliver & Prova E2E Greenfield + Brownfield (verifying)
 
 ## Run
 
-- **run:** `oxe-run-mwzr4w2y-8l8d8n` · **status:** running · checks 46/46 verdes
+- **run:** `oxe-run-mwzrf5i0-izzkrn` · **status:** completed · checks 49/49 verdes
 
 ## Próximo passo sugerido
 
@@ -32,20 +32,20 @@
 
 ### Fase atual
 
-- **Status da run:** running
-- **Run ID:** oxe-run-mwzr4w2y-8l8d8n
+- **Status da run:** completed
+- **Run ID:** oxe-run-mwzrf5i0-izzkrn
 - **Modo:** completo
 
 ### Runtime operacional
 
-- **runtime_status:** running
-- **active_run_ref:** oxe-run-mwzr4w2y-8l8d8n
+- **runtime_status:** completed
+- **active_run_ref:** oxe-run-mwzrf5i0-izzkrn
 
 ### Progresso
 
-- **Concluídos (0):** —
+- **Concluídos (1):** T1
 - **Falhos (0):** —
 - **Bloqueados (0):** —
 
-- **lifecycleStatus:** executing
+- **lifecycleStatus:** closed
 <!-- oxe:runtime:end -->
