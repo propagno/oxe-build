@@ -87,7 +87,7 @@ O framework não substitui a IDE, o modelo ou o processo da equipe. Ele oferece 
 
 ## Evidência operacional do projeto
 
-O OXE procura demonstrar suas próprias promessas no pipeline do repositório. O snapshot abaixo vem da validação local da **1.21.0**, registrada em **3 de novembro de 2026**. Não representa métricas de adoção externa nem de produtividade humana.
+O OXE procura demonstrar suas próprias promessas no pipeline do repositório. O snapshot abaixo vem da validação local da **1.21.0** (versão que não chegou ao npm; a publicada seguinte foi a 1.21.1), registrada em **3 de novembro de 2026**, e ainda não foi refeito para a 1.22 nem para a 1.23. Não representa métricas de adoção externa nem de produtividade humana.
 
 | Indicador verificável | Resultado |
 |---|---:|
@@ -674,7 +674,31 @@ npm run quality:report
 
 O consumidor empacotado instala o tarball em um projeto temporário limpo e valida CLI, SDK, runtime e TypeScript. O teste da extensão ativa os 13 participantes em um VS Code Extension Host real. O ratchet de cobertura impede regressão dos pisos globais e dos módulos críticos.
 
-O pipeline de release usa GitHub Actions fixadas por SHA, valida correspondência entre tag e versão e produz o VSIX antes de criar a GitHub Release. A publicação no npm é uma promoção manual e separada, executada pelo mantenedor depois da aprovação da release.
+O pipeline de release (`.github/workflows/release.yml`) roda no push de uma tag `v*.*.*`. Ele usa GitHub Actions fixadas por SHA, valida a correspondência entre a tag e a versão, produz o VSIX e cria a GitHub Release. Depois, o job `publish-npm` publica no npm com provenance, e só roda com a aprovação do ambiente `npm-release`. Tag e GitHub Release não garantem que a versão está no npm: a 1.21.0 e a 1.21.2 têm as duas coisas e nunca foram publicadas. O que vale é a tabela [Versões publicadas](#versões-publicadas).
+
+### Versões publicadas
+
+Conferido em 28/11/2026 com `npm view oxe-cc versions`, `git tag` e `gh release list`. Só as versões com ✓ na coluna npm podem ser instaladas (`npx oxe-cc@<versão>`). O CHANGELOG marca com **Distribuição** cada versão que não chegou ao npm.
+
+| Versão | npm | Tag | GitHub Release | Observação |
+|---|:---:|:---:|:---:|---|
+| 1.23.0 | — | — | — | em preparação na branch `release/1.23.0` |
+| 1.22.2 | ✓ `latest` | ✓ | ✓ | atual |
+| 1.22.1 | — | — | — | interna, entrou na 1.22.2 |
+| 1.22.0 | ✓ | ✓ | ✓ | |
+| 1.21.2 | — | ✓ | ✓ | não publicada no npm |
+| 1.21.1 | ✓ | ✓ | ✓ | |
+| 1.21.0 | — | ✓ | ✓ | não publicada no npm (consolida 1.19 e 1.20, que também não saíram) |
+| 1.17.0 – 1.18.0 | — | — | — | internas |
+| 1.16.0 | ✓ | ✓ | ✓ | |
+| 1.15.0 | — | — | — | interna |
+| 1.14.0 | ✓ | — | — | |
+| 1.13.0 | — | — | — | interna |
+| 1.10.0 – 1.12.0 | ✓ | — | — | |
+| 1.9.1 | ✓ | — | — | a 1.9.0 não saiu |
+| 1.8.0 · 1.8.3 | ✓ | ✓ | — | 1.8.1 e 1.8.2 só como tag |
+| 1.0.0 – 1.7.0 | ✓ (exceto 1.1.0 e 1.2.0) | 1.3.0 e 1.7.0 | — | |
+| 0.3.0 – 0.9.3 | ✓ (exceto 0.4.x, 0.6.1, 0.6.3 e 0.8.0) | — | — | |
 
 ---
 

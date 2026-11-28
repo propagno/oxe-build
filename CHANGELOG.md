@@ -113,6 +113,8 @@ Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-37`..
 
 ## [1.22.1] — 2026-11-26
 
+> **Distribuição:** não publicada no npm nem marcada com tag — versão interna, consolidada na seguinte publicada.
+
 Construída ponta a ponta com o próprio `oxe-build v1.22.0` em perfil `lean` como bench controlado (`OB-21`..`OB-36`, 3 fases `F1`–`F3`, 12 entregas + 1 hotfix P0 descoberto no dogfooding).
 
 ### Distribuição, higiene Windows & correções (`OB-25`..`OB-27`, `Q-20261126-0408`)
@@ -863,6 +865,8 @@ O bench rodou a trilha principal à mão (`/oxe` → spec → plan → execute �
 
 ## [1.21.2] — 2026-11-11
 
+> **Distribuição:** não publicada no npm — existe só como tag `v1.21.2` e GitHub Release. Para instalar, use a versão seguinte publicada.
+
 Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-build, mais o roteiro de excelência e os backlogs de comparação aprovados pelo TECH LEAD. Cada item tem uma seção em `docs/oxespace-1.5/BACKLOG.md`, com a evidência e o teste que a reproduz (`tests/oxe-1212-*.test.cjs`). Para usar só a trilha recomendada, veja [docs/HAPPY-PATH.md](docs/HAPPY-PATH.md).
 
 ### Execução que não desperdiça nem esconde a causa
@@ -1020,6 +1024,8 @@ Esta versão corrige o que mais custou e travou o TECH LEAD na F1 da 1.5.0, run 
 
 ## [1.21.0] — 2026-11-03
 
+> **Distribuição:** não publicada no npm — existe só como tag `v1.21.0` e GitHub Release. Para instalar, use a versão seguinte publicada.
+
 Esta versão consolida a 1.19 e a 1.20, que não foram publicadas, e acrescenta a 1.21. O objetivo é levar o OXE de "não mente sobre o que está pronto" para uma **maturidade medida**: aplicações de várias fases, corrigidas por um caminho único, dentro do orçamento e coerentes com as regras do repositório. Tudo foi validado construindo o OxeVoice 1.5 (F1) no oxespace e dois projetos de referência reais. Os 30 achados (OXB-001 a 030) estão em `docs/oxevoice/BACKLOG.md`.
 
 ### Programa por fases e aceite congelado (1.19)
@@ -1072,6 +1078,8 @@ Esta versão consolida a 1.19 e a 1.20, que não foram publicadas, e acrescenta 
 
 ## [1.18.0] — 2026-10-31
 
+> **Distribuição:** não publicada no npm nem marcada com tag — versão interna, consolidada na seguinte publicada.
+
 ### Executor nativo do host e contexto do nó
 
 - **ExecutorAdapter (`claude` | `http`):** o loop de tools da 1.17 é comum aos adapters, que só fornecem a
@@ -1102,6 +1110,8 @@ Esta versão consolida a 1.19 e a 1.20, que não foram publicadas, e acrescenta 
 
 ## [1.17.1] — 2026-10-31
 
+> **Distribuição:** não publicada no npm nem marcada com tag — versão interna, consolidada na seguinte publicada.
+
 ### Achados do benchmark real da 1.17
 
 O benchmark ponta a ponta da 1.17.0 (replay do linkly: 8/8 tarefas na 1ª tentativa,
@@ -1123,6 +1133,8 @@ oráculo independente 18/18, US$ 4,88 contra US$ 6,57 da 1.16) expôs estes defe
 ---
 
 ## [1.17.0] — 2026-10-31
+
+> **Distribuição:** não publicada no npm nem marcada com tag — versão interna, consolidada na seguinte publicada.
 
 ### Integridade da verificação: sem falso verde
 
@@ -1214,6 +1226,8 @@ qualidade mensurável e releases reproduzíveis.
 
 ## [1.15.0] — 2026-06-27
 
+> **Distribuição:** não publicada no npm nem marcada com tag — versão interna, consolidada na seguinte publicada.
+
 ### `.oxe/` enxuto no install + mapa vivo de artefatos
 
 Resposta ao feedback de que a quantidade de pastas criadas no install era grande
@@ -1260,6 +1274,8 @@ Aditivo — nenhum contrato existente muda. Complementa o 1.13.0 (`status --json
 ---
 
 ## [1.13.0] — 2026-05-29
+
+> **Distribuição:** não publicada no npm nem marcada com tag — versão interna, consolidada na seguinte publicada.
 
 ### Contratos de integração para hosts (IDEs, OXESpace)
 
@@ -1420,6 +1436,8 @@ Esta release endurece a coordenação multi-agent sobre workspaces reais, sem ab
 
 ## [1.9.0] — 2026-05-04
 
+> **Distribuição:** não publicada no npm nem marcada com tag — versão interna, consolidada na seguinte publicada.
+
 ### Runtime Real Maturity
 
 Esta release eleva a maturidade prática do OXE com foco em prova determinística do ciclo real `spec -> plan -> execute -> verify -> status/doctor`, sem abrir novos comandos públicos.
@@ -1455,6 +1473,8 @@ Esta release consolida a linha `1.8.3` para publicação no npm com foco em cons
 
 ## [1.8.2] — 2026-04-30
 
+> **Distribuição:** não publicada no npm — existe só como tag `v1.8.2`.
+
 ### Fluxo inicial mais coerente e geração de `spec`/`plan` mais forte
 
 Esta release fecha a linha de robustez do ciclo `install -> status/doctor -> /oxe -> spec -> plan -> execute -> verify` sem abrir nova superfície pública. O foco foi remover ruído operacional em projetos novos e aumentar a densidade executável dos artefatos que o OXE induz.
@@ -1479,6 +1499,8 @@ Esta release fecha a linha de robustez do ciclo `install -> status/doctor -> /ox
 - suíte focada de CLI/health atualizada para manter o comportamento novo estável
 
 ## [1.8.1] — 2026-04-30
+
+> **Distribuição:** não publicada no npm — existe só como tag `v1.8.1`.
 
 ### Hotfix — Gaps implementados no fonte TypeScript (não em arquivos compilados)
 
@@ -1731,6 +1753,8 @@ Esta release eleva a autonomia do runtime de ~65% para ~85%+ em projetos de baix
 
 ## [1.2.0] — 2026-04-18
 
+> **Distribuição:** não publicada no npm nem marcada com tag — versão interna, consolidada na seguinte publicada.
+
 ### Runtime Hardening & Robustez (Fases 1–9)
 
 **Fase 1 — Runtime Hardening**
@@ -1820,6 +1844,8 @@ Esta release eleva a autonomia do runtime de ~65% para ~85%+ em projetos de baix
 
 ## [1.1.0] — 2026-04-18
 
+> **Distribuição:** não publicada no npm nem marcada com tag — versão interna, consolidada na seguinte publicada.
+
 ### Mudança de superfície (simplificação estratégica de produto)
 
 **Trilha principal reduzida a 6 comandos**
@@ -1874,6 +1900,8 @@ Os seguintes comandos foram incorporados por estágios principais e continuam fu
 ---
 
 ## [0.8.0] — 2026-04-14
+
+> **Distribuição:** não publicada no npm nem marcada com tag — versão interna, consolidada na seguinte publicada.
 
 ### Adicionado
 
@@ -1953,6 +1981,8 @@ Os seguintes comandos foram incorporados por estágios principais e continuam fu
 
 ## [0.6.3] — 2026-04-04
 
+> **Distribuição:** não publicada no npm nem marcada com tag — versão interna, consolidada na seguinte publicada.
+
 ### Corrigido
 - `security_in_verify` agora é reconhecido como chave válida em `.oxe/config.json` (não mais rejeitado pelo doctor como "unknown key")
 - `plan-agents.schema.json`: enum atualizado de `[1, 2]` para `[2, 3]`; campos `persona` e `model_hint` adicionados ao schema dos agentes
@@ -1990,6 +2020,8 @@ Os seguintes comandos foram incorporados por estágios principais e continuam fu
 ---
 
 ## [0.6.1] — 2026-04-04
+
+> **Distribuição:** não publicada no npm nem marcada com tag — versão interna, consolidada na seguinte publicada.
 
 ### Adicionado
 - **`/oxe-security`** — auditoria OWASP Top 10 filtrada pelo stack; produz `.oxe/SECURITY.md` com achados P0/P1/P2
