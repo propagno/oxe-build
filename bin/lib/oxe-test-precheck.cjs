@@ -455,8 +455,9 @@ function flushPrecheckCache(cachePath, cache, root, cleanFiles, dirtyFiles) {
 function gitWorkspace(root) {
   return {
     create() {
-      const wt = path.join(root, '.oxe', 'precheck-ws', `p-${Date.now().toString(36)}`);
-      fs.mkdirSync(path.dirname(wt), { recursive: true });
+      const wsParent = path.join(root, '.oxe', '.cache', 'precheck-ws');
+      const wt = path.join(wsParent, `p-${Date.now().toString(36)}`);
+      fs.mkdirSync(wsParent, { recursive: true });
       const add = spawnSync('git', ['worktree', 'add', '-q', '--detach', wt, 'HEAD'], { cwd: root, encoding: 'utf8', windowsHide: true });
       if (add.status !== 0) throw new Error(`precheck: worktree add falhou: ${String(add.stderr || '').trim()}`);
       const nm = path.join(root, 'node_modules');
@@ -466,11 +467,26 @@ function gitWorkspace(root) {
     },
     dispose(wt) {
       const nm = path.join(wt, 'node_modules');
-      try { if (fs.lstatSync(nm).isSymbolicLink()) fs.unlinkSync(nm); } catch { /* no link */ }
+      try {
+        if (fs.lstatSync(nm).isSymbolicLink()) {
+          if (process.platform === 'win32') {
+            try { fs.rmdirSync(nm); } catch { fs.unlinkSync(nm); }
+          } else {
+            fs.unlinkSync(nm);
+          }
+        }
+      } catch { /* no link */ }
       let linkLeft = false;
       try { linkLeft = fs.lstatSync(nm).isSymbolicLink(); } catch { linkLeft = false; }
       if (linkLeft) return; // never remove with the link in place: it would delete the real node_modules
       spawnSync('git', ['worktree', 'remove', '--force', wt], { cwd: root, windowsHide: true });
+      if (fs.existsSync(wt)) {
+        try { fs.rmSync(wt, { recursive: true, force: true }); } catch { /* ignore */ }
+      }
+      const wsParent = path.dirname(wt);
+      try { if (fs.existsSync(wsParent) && fs.readdirSync(wsParent).length === 0) fs.rmdirSync(wsParent); } catch { /* ignore */ }
+      const cacheDir = path.dirname(wsParent);
+      try { if (path.basename(cacheDir) === '.cache' && fs.existsSync(cacheDir) && fs.readdirSync(cacheDir).length === 0) fs.rmdirSync(cacheDir); } catch { /* ignore */ }
       spawnSync('git', ['worktree', 'prune'], { cwd: root, windowsHide: true });
     },
   };

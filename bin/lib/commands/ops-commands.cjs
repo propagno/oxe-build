@@ -927,6 +927,40 @@ function createOpsCommandRegistry(deps = {}) {
         }
       },
     },
+    {
+      name: 'gc',
+      handler(argv) {
+        if (argv.includes('--help') || argv.includes('-h')) {
+          console.log(`\n  oxe-cc gc [--dry-run|--apply] [--keep-runs <N>] [--max-age-days <D>] [--dir <pasta>] [--json]
+  Limpa temporários de .oxe/.cache/ (e legados precheck-ws/, tmp/, rollback-ws/), pastas vazias opcionais
+  e aplica retenção segura em .oxe/runs/ e .oxe/evidence/ preservando a sessão/run ativa. Padrão: --dry-run.\n`);
+          return;
+        }
+        const o = { dir: process.cwd(), apply: false, keepRuns: 10, maxAgeDays: 14, json: false };
+        for (let i = 0; i < argv.length; i += 1) {
+          const a = argv[i];
+          if (a === '--json') o.json = true;
+          else if (a === '--apply') o.apply = true;
+          else if (a === '--dry-run') o.apply = false;
+          else if (a === '--keep-runs' && argv[i + 1]) o.keepRuns = Math.max(0, Number(argv[++i]) || 0);
+          else if (a === '--max-age-days' && argv[i + 1]) o.maxAgeDays = Math.max(0, Number(argv[++i]) || 0);
+          else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+          else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+        }
+        const out = require('../oxe-gc.cjs').runOxeGc(o.dir, o);
+        if (o.json) {
+          console.log(JSON.stringify(out, null, 2));
+        } else {
+          const kb = Math.round((out.dry_run ? out.reclaimable_bytes : out.reclaimed_bytes) / 1024);
+          if (out.dry_run) {
+            console.log(`  ${yellow}(simulação)${reset} oxe-cc gc: ${out.items.length} item(ns) elegível(is) · ~${kb} KB liberáveis`);
+            console.log(`  ${dim}rode com --apply para limpar preservando a sessão e a run ativa${reset}`);
+          } else {
+            console.log(`  ${green}✓${reset} oxe-cc gc: ${out.removed_count} item(ns) removido(s) · ~${kb} KB liberados`);
+          }
+        }
+      },
+    },
   ]);
 }
 

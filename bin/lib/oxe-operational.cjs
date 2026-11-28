@@ -11851,6 +11851,9 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
       base: options.base || null,
     });
   } catch { /* higiene de worktrees é auxiliar e nunca falha o close */ }
+  try {
+    require('./oxe-gc.cjs').cleanupLightweightAfterPhaseClose(projectRoot);
+  } catch { /* limpeza leve pós-close nunca falha o close */ }
   return {
     closed: true,
     phase: phase.id,
@@ -13359,6 +13362,10 @@ function runtimeDeliverRun(projectRoot, options = {}) {
   return require('./oxe-deliver-runner.cjs').runAutonomousDelivery(projectRoot, options);
 }
 
+function runtimeOxeGc(projectRoot, options = {}) {
+  return require('./oxe-gc.cjs').runOxeGc(projectRoot, options);
+}
+
 module.exports = {
   relatedTestsCommand,
   relatedRedsOfTask,
@@ -13582,5 +13589,6 @@ module.exports = {
   runtimeDeliverNext,
   runtimeDeliverAdvance,
   runtimeDeliverRun,
+  runtimeOxeGc,
   resolveEffectiveSession,
 };
