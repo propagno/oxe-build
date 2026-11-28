@@ -1163,6 +1163,20 @@
         "project_summary"
       ],
       "extraction_intent": "execution_input"
+    },
+    "deliver": {
+      "reasoning_mode": "execution",
+      "question_policy": "ask_high_impact_only",
+      "required_artifacts": [
+        "state"
+      ],
+      "optional_artifacts": [
+        "spec",
+        "plan",
+        "runtime",
+        "verify"
+      ],
+      "extraction_intent": "execution_input"
     }
   }
 }

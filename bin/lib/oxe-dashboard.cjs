@@ -589,6 +589,31 @@ function readProgramState(projectRoot, activeSession) {
   }
 }
 
+function readDeliveryContext(projectRoot, activeSession) {
+  try {
+    const engine = require('./oxe-deliver-engine.cjs');
+    const found = engine.readDeliveryState(projectRoot, { session: activeSession || undefined });
+    if (!found || !found.state) return null;
+    const baseDir = path.dirname(found.file);
+    const deliveryJsonPath = path.join(baseDir, 'DELIVERY.json');
+    const deliveryMdPath = path.join(baseDir, 'DELIVERY.md');
+    let handoff = null;
+    try {
+      if (fs.existsSync(deliveryJsonPath)) handoff = JSON.parse(fs.readFileSync(deliveryJsonPath, 'utf8'));
+    } catch { handoff = null; }
+    const deliveryMd = readTextIfExists(deliveryMdPath);
+    return {
+      exists: true,
+      file: found.file,
+      state: found.state,
+      handoff,
+      deliveryMd: deliveryMd ? summarizeText(deliveryMd, 1800) : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function buildHumanGuidance(ctx) {
   const collisions = ctx.agent_collisions || [];
   const pendingGates = (ctx.enterprise && ctx.enterprise.gateQueue && ctx.enterprise.gateQueue.pending) || [];
@@ -911,6 +936,7 @@ function loadDashboardContext(projectRoot, opts = {}) {
   ctx.reevaluate = live.reevaluate;
   ctx.scorecard_routing = live.scorecard_routing;
   ctx.onboard_summary = live.onboard_summary;
+  ctx.delivery = readDeliveryContext(projectRoot, activeSession || null);
   ctx.guidance = buildHumanGuidance(ctx);
   ctx.dashboard = { readOnly: false, version: 'v2' };
   return ctx;
@@ -1125,6 +1151,25 @@ function dashboardHtml() {
     const driftTone=driftCount?'blocked':syncCount?'warning':'done';
     const wtTone=wtDirty>0||wt.needs_gc?'warning':'done';
     const verifyManifest=(ctx.verify&&ctx.verify.parsed&&ctx.verify.parsed.manifest)||null;
+    const deliv=ctx.delivery&&ctx.delivery.state?ctx.delivery:null;
+    const delivCard=(()=>{
+      if(!deliv)return '';
+      const ds=deliv.state;
+      const dh=deliv.handoff;
+      if(ds.status==='DELIVERED'){
+        const cmds=(dh&&Array.isArray(dh.how_to_run)&&dh.how_to_run.length?dh.how_to_run:(ds.handoff&&ds.handoff.run_commands)||['npm test']);
+        return '<div class="panel" style="margin-bottom:18px;border-color:rgba(52,211,153,.45);background:linear-gradient(135deg,rgba(16,185,129,.12),rgba(18,27,46,.96))">'
+          +'<div class="head"><div><h2>Entrega Pronta — '+esc(ds.title||'Solução entregue')+'</h2><div class="small muted">Todas as fases verificadas + FINAL_SMOKE aprovado. Use os comandos abaixo para rodar agora:</div></div>'+badge('done','DELIVERED')+'</div>'
+          +'<div class="list">'+cmds.map((c)=>'<div class="cmd-bar"><code>'+esc(c)+'</code><button class="secondary" onclick="copyCmd(\\''+esc(c)+'\\',this)">Copiar</button></div>').join('')+'</div>'
+          +(deliv.deliveryMd?'<details style="margin-top:12px"><summary>Ver DELIVERY.md completo</summary><div class="raw">'+esc(deliv.deliveryMd)+'</div></details>':'')
+        +'</div>';
+      }
+      const needsDecision=ds.status==='DESIGN_REVIEW'||ds.approval_mode==='pending_choice';
+      return '<div class="panel" style="margin-bottom:18px;border-color:rgba(96,165,250,.45)">'
+        +'<div class="head"><div><h2>Entrega Autônoma em Curso — '+esc(ds.title||ds.deliver_id)+'</h2><div class="small muted">Estado: <code>'+esc(ds.status)+'</code> · Modo: <code>'+esc(ds.approval_mode)+'</code> · Orçamento: $'+esc(((ds.budget&&ds.budget.spent_usd)||0).toFixed(2))+' / $'+esc(((ds.budget&&ds.budget.max_usd)||0).toFixed(2))+'</div></div>'+badge(ds.status,ds.status)+'</div>'
+        +(needsDecision?'<div class="actions"><button class="secondary" '+(runtimeDisabled()?'disabled':'')+' onclick="deliverSetMode(\\'single-ok\\')">Modo: Aprovação única (single-ok)</button><button class="secondary" '+(runtimeDisabled()?'disabled':'')+' onclick="deliverSetMode(\\'auto\\')">Modo: 100% Automático (auto)</button>'+(ds.status==='DESIGN_REVIEW'?'<button class="primary" '+(runtimeDisabled()?'disabled':'')+' onclick="deliverApprove()">Aprovar e Iniciar Execução</button>':'')+'</div>':'')
+      +'</div>';
+    })();
 
     const phaseRows=prog&&prog.phases&&prog.phases.length?prog.phases.map((ph)=>{
       const st=String(ph.status||'pending').toLowerCase();
@@ -1156,6 +1201,7 @@ function dashboardHtml() {
 
     app.innerHTML=''
     +'<div class="view'+(tab==='overview'?' active':'')+'">'
+      +delivCard
       +'<div class="hero '+esc(g.tone)+'">'
         +'<div class="hero-top"><div><div class="label">O que fazer agora</div><div class="hero-title">'+esc(g.headline)+'</div></div>'+badge(g.tone,g.badgeLabel)+'</div>'
         +'<div class="hero-desc">'+esc(g.explanation)+'</div>'
@@ -1232,7 +1278,9 @@ function dashboardHtml() {
   async function resolveComment(id){await api('/api/review/comment-status',{method:'POST',body:JSON.stringify({commentId:id,status:'resolved',activeSession:session})});await refresh();}
   async function runtimeAction(action){if(runtimeDisabled())return;const reason=prompt('Motivo da transição:',action==='start'?'iniciar execução':'');if(reason==null)return;await api('/api/runtime/action',{method:'POST',body:JSON.stringify({action,reason,activeSession:session})});await refresh();}
   async function runtimeGateResolve(gateId,decision){if(runtimeDisabled())return;const needsReason=decision==='reject'||decision==='waive';const reason=needsReason?prompt('Justificativa obrigatória para '+decision+':',''):'';if(needsReason&&(!reason||!reason.trim()))return alert('Justificativa obrigatória.');await api('/api/runtime/gates/resolve',{method:'POST',body:JSON.stringify({gateId,decision,actor:'dashboard',reason:reason&&reason.trim()?reason.trim():undefined,activeSession:session})});await refresh();}
-  window.setTab=setTab;window.toggleAuto=toggleAuto;window.refresh=refresh;window.openSession=openSession;window.copyCmd=copyCmd;window.changeReview=changeReview;window.addComment=addComment;window.resolveComment=resolveComment;window.runtimeAction=runtimeAction;window.runtimeGateResolve=runtimeGateResolve;
+  async function deliverSetMode(mode){if(runtimeDisabled())return;await api('/api/deliver/mode',{method:'POST',body:JSON.stringify({mode,activeSession:session})});await refresh();}
+  async function deliverApprove(){if(runtimeDisabled())return;await api('/api/deliver/approve',{method:'POST',body:JSON.stringify({by:'dashboard',activeSession:session})});await refresh();}
+  window.setTab=setTab;window.toggleAuto=toggleAuto;window.refresh=refresh;window.openSession=openSession;window.copyCmd=copyCmd;window.changeReview=changeReview;window.addComment=addComment;window.resolveComment=resolveComment;window.runtimeAction=runtimeAction;window.runtimeGateResolve=runtimeGateResolve;window.deliverSetMode=deliverSetMode;window.deliverApprove=deliverApprove;
   refresh().then(()=>{if(autoOn)timer=setInterval(()=>{refresh().catch(()=>{});},10000);}).catch((err)=>{app.innerHTML='<div class="panel"><h2>Erro</h2><div class="small">'+esc(err.message)+'</div></div>';});
   </script></body></html>`;
 }
@@ -1296,8 +1344,27 @@ function createDashboardServer(projectRoot, opts = {}) {
         return;
       }
 
-      if (opts.readOnly && req.method === 'POST' && (reqUrl.pathname.startsWith('/api/review/') || reqUrl.pathname.startsWith('/api/runtime/'))) {
+      if (opts.readOnly && req.method === 'POST' && (reqUrl.pathname.startsWith('/api/review/') || reqUrl.pathname.startsWith('/api/runtime/') || reqUrl.pathname.startsWith('/api/deliver/'))) {
         sendJson(res, 403, { error: 'Dashboard em modo read-only.' });
+        return;
+      }
+
+      if (req.method === 'POST' && reqUrl.pathname === '/api/deliver/mode') {
+        const body = await readJsonBody(req);
+        const result = require('./oxe-deliver-engine.cjs').setApprovalMode(root, body && body.mode, {
+          session: (body && body.activeSession) || opts.activeSession || null,
+        });
+        sendJson(res, 200, result);
+        return;
+      }
+
+      if (req.method === 'POST' && reqUrl.pathname === '/api/deliver/approve') {
+        const body = await readJsonBody(req);
+        const result = require('./oxe-deliver-engine.cjs').approveDelivery(root, {
+          session: (body && body.activeSession) || opts.activeSession || null,
+          by: (body && body.by) || 'dashboard',
+        });
+        sendJson(res, 200, result);
         return;
       }
 

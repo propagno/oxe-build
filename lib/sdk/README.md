@@ -50,7 +50,7 @@ const { options, warnings: w } = oxe.install.resolveOptionsFromConfig(dir, {
 | **manifest** | `loadFileManifest`, `writeFileManifest`, `sha256File`, `collectFilesRecursive` |
 | **agents** | `adjustWorkflowPathsForNestedLayout`, `parseCursorCommandFrontmatter` |
 | **azure** | `azurePaths`, `detectAzureCli`, `loadAzureProfile`, `syncAzureInventory`, `planAzureOperation`, `applyAzureOperation`, `azureDoctor` |
-| **runtime / operational** | `buildRuntimePluginRegistry`, `readRuntimeGates`, `resolveRuntimeGate`, `runRuntimeVerify`, `runRuntimePromotion`, `recoverRuntimeState`, `replayRuntimeState`, `readRuntimeMultiAgentStatus`, `multiAgentStatus` |
+| **runtime / operational** | `buildRuntimePluginRegistry`, `readRuntimeGates`, `resolveRuntimeGate`, `runRuntimeVerify`, `runRuntimePromotion`, `recoverRuntimeState`, `replayRuntimeState`, `readRuntimeMultiAgentStatus`, `multiAgentStatus`, `runtimeOnboard`, `runtimeWorktreeHygiene`, `runtimeAgentsCoord`, `runtimeReevaluate`, `runtimeCiParity`, `runtimeMcpServer`, `runtimePrimer`, `runtimeDeliverInit`, `runtimeDeliverStatus`, `runtimeDeliverNext`, `runtimeDeliverAdvance`, `runtimeDeliverRun` |
 | **doctor** | `runDoctorChecks` — resultado estruturado (erros + avisos + diff de workflows + `workflowShape` com lint leve dos `.md`) |
 
 TypeScript: ver `index.d.ts` junto deste ficheiro.

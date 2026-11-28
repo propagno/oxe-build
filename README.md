@@ -21,6 +21,29 @@ npx oxe-cc@latest
 
 ---
 
+## Modo Autônomo Ponta a Ponta (`oxe-cc primer` + `oxe-cc deliver`)
+
+Quer instalar o OXE, deixar seu agente de IA compreender o uso em 5 segundos, entregar um briefing completo e receber a versão implementada e verificada?
+
+```bash
+# 1. O agente aprende o protocolo único em < 80 linhas (ou via MCP `oxe_primer`)
+npx oxe-cc primer
+
+# 2. Briefing → SPEC + Fases F1..Fn (pergunta single-ok vs. auto se omitido)
+npx oxe-cc deliver init --from briefing.md --approval single-ok   # ou --approval auto
+
+# 3a. No chat (Antigravity, Claude Code, Cursor, Copilot, Codex): loop guiado + MCP
+npx oxe-cc deliver next --json
+npx oxe-cc deliver advance --json
+
+# 3b. No terminal (headless): executa F1..Fn + FINAL_SMOKE + DELIVERY.md sozinho
+npx oxe-cc deliver run --from briefing.md --approval auto --executor claude --max-budget-usd 10
+```
+
+- **Proteções mecânicas:** testes congelados verificados por SHA-256 (anti-cheat), anti-stub, regressão cumulativa entre fases, auto-cura (`PHASE_HEAL`) com circuit breaker (`PAUSED_BLOCKED`), `FINAL_SMOKE` real e `DELIVERY.md` com comandos testados de como rodar — sem jamais executar `git push` ou `npm publish` sem seu OK explícito.
+
+---
+
 ## Por que o OXE existe
 
 Agentes de IA escrevem código rapidamente, mas velocidade sem método costuma gerar quatro problemas: contexto perdido entre conversas, requisitos implícitos, mudanças difíceis de auditar e uma falsa sensação de conclusão porque “o código parece pronto”.

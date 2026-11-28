@@ -6,7 +6,7 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ## [1.23.0] — 2026-11-27
 
-Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-61`..`OB-72`, 4 fases `F1`–`F4`, 11 entregas `OXB-230-01`..`OXB-230-11`, ADR `D-8`) eliminando os atritos reais observados no corte de `v1.22.2`, fechando os loops automáticos da `1.22.2` e inaugurando o ecossistema aberto com servidor MCP nativo, ALM GitHub/GitLab Issues, Dashboard v2 multi-agente ao vivo e Strangler Fig Fatia 3 (`D-6`) — com **zero novas dependências npm de produção**.
+Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-61`..`OB-76`, 8 fases `F1`–`F8`, 15 entregas `OXB-230-01`..`OXB-230-15`, ADR `D-8`) eliminando os atritos reais observados no corte de `v1.22.2`, fechando os loops automáticos da `1.22.2`, inaugurando o ecossistema aberto com servidor MCP nativo (`15` tools), ALM GitHub/GitLab Issues, Dashboard v2 multi-agente simplificado ao vivo, Strangler Fig Fatia 3 (`D-6`) e a experiência autônoma ponta a ponta **`oxe-cc primer` + `oxe-cc deliver`** (Chat-Driven e Terminal Headless) — com **zero novas dependências npm de produção**.
 
 ### Hardening CI/Release, Paridade Local & Fim do Flake de PID (`OB-62`..`OB-64`)
 
@@ -30,6 +30,13 @@ Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-61`..
 - **Dashboard v2 ao vivo (`OB-70`):** `bin/lib/oxe-dashboard.cjs` oferece interface completa de controle em tema escuro azul/obsidiana com navegação lateral por 8 seções cobrindo todo o ecossistema OXE e rota `GET /api/state` expondo `active_agents`, `agent_messages`, `agent_collisions`, `worktree_hygiene`, `reevaluate`, `scorecard_routing` e `onboard_summary`.
 - **Strangler Fig Fatia 3 (`OB-71`, ADR `D-6`):** extração de `bin/lib/operational/plan-lint-runtime.cjs` (`-1.007` linhas em `bin/lib/oxe-operational.cjs`) e `bin/lib/commands/status-doctor-commands.cjs` (`-1.076` linhas em `bin/oxe-cc.js`) com zero ciclos e 0 drift de SDK (`test:sdk-types`).
 - **ADR `D-8` e sincronização `1.23.0` (`OB-72`):** formalização em `docs/adr/D-8-*.md` (preservando `D-1..D-7`), sincronização de versão `1.23.0` nas 5 fontes + `package-lock.json` e atualização de `oxe/templates/CONFIG.md`, `oxe/workflows/help.md`, `oxe/workflows/ship.md`, `oxe/workflows/lean/execute.md` e `AGENTS.md`.
+
+### Entrega Autônoma Ponta a Ponta — `oxe-cc primer` + `oxe-cc deliver` (`F5`–`F8`, `A12`–`A15`)
+
+- **Primer compacto do agente e Intake autônomo (`OXB-230-12`):** `bin/lib/oxe-primer.cjs` (`oxe-cc primer [--json]` + tool MCP `oxe_primer`) ensina o protocolo único do OXE em `< 80` linhas detectando `greenfield`/`brownfield` e entregas ativas; `bin/lib/oxe-deliver-intake.cjs` (`oxe-cc deliver init`) pergunta no início entre `single-ok` (1 única aprovação) e `auto` (100% automático quando sem lacunas bloqueantes), filtra no máximo `0..5` perguntas bloqueantes, faz auto-bootstrap em perfil `lean` e gera `SPEC.md`, `ROADMAP.md` e `DELIVER.json`.
+- **Motor determinístico `oxe-deliver-engine`, Anti-Cheat SHA-256, Auto-Cura & MCP (`OXB-230-13`):** `bin/lib/oxe-deliver-engine.cjs` + CLI `oxe-cc deliver <init|mode|answer|approve|next|advance|run|resume|status|cancel>` + tools MCP `oxe_deliver_status`, `oxe_deliver_next` e `oxe_deliver_advance` (total de 15 tools MCP) impõem verificação SHA-256 contra adulteração de testes congelados, checagem anti-stub, regressão cumulativa `F1..Fn` e loop `PHASE_HEAL` com escalonamento de tier e circuit breaker para `PAUSED_BLOCKED`.
+- **Runner headless (`deliver run`), `FINAL_SMOKE` real e `DELIVERY.md` (`OXB-230-14`):** `bin/lib/oxe-deliver-runner.cjs` executa todas as fases de forma autônoma respeitando `approval_mode` e `max_budget_usd`; `bin/lib/oxe-deliver-handoff.cjs` executa smoke real da solução entregue (`FINAL_SMOKE`) e gera `DELIVERY.md` + `DELIVERY.json` com comandos testados de como rodar agora (sem jamais executar `git push`/`npm publish` sozinho).
+- **Dashboard v2 Live Deliver, `/oxe-deliver` e prova E2E greenfield + brownfield (`OXB-230-15`):** Dashboard v2 simplificado em torno de ação imediata (`Agora`) com progresso real de `PROGRAM.json`/`DELIVER.json`, botões `single-ok`/`auto`/aprovação (`POST /api/deliver/mode`, `/api/deliver/approve`) e cartão `Entrega Pronta`; novo workflow canônico `oxe/workflows/deliver.md` sincronizado em todas as IDEs com `0 mismatches`.
 
 ---
 
