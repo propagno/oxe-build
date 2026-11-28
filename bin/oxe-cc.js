@@ -16,6 +16,7 @@ const oxeManifest = require(path.join(__dirname, 'lib', 'oxe-manifest.cjs'));
 const oxeHealth = require(path.join(__dirname, 'lib', 'oxe-project-health.cjs'));
 const oxeAgentInstall = require(path.join(__dirname, 'lib', 'oxe-agent-install.cjs'));
 const oxeWorkflows = require(path.join(__dirname, 'lib', 'oxe-workflows.cjs'));
+const oxeLayout = require(path.join(__dirname, 'lib', 'oxe-layout.cjs'));
 const oxeInstallResolve = require(path.join(__dirname, 'lib', 'oxe-install-resolve.cjs'));
 const oxeNpmVersion = require(path.join(__dirname, 'lib', 'oxe-npm-version.cjs'));
 const oxeDashboard = require(path.join(__dirname, 'lib', 'oxe-dashboard.cjs'));
@@ -446,6 +447,13 @@ function parseInstallArgs(argv) {
     } else if (a === '--local') {
       out.installAssetsGlobal = false;
       out.explicitScope = true;
+    } else if (a === '--layout' && argv[i + 1]) {
+      // OXB-230-23: --layout nested|classic|core (core = assets estáticos em .oxe/core/)
+      const layout = String(argv[++i]);
+      if (!['nested', 'classic', 'core'].includes(layout)) out.unknownFlag = `--layout ${layout}`;
+      out.repoLayout = layout;
+      out.installAssetsGlobal = layout === 'classic';
+      out.explicitScope = true;
     } else if (a === '--ide-global') {
       out.ideLocal = false;
       out.explicitIdeScope = true;
@@ -486,6 +494,7 @@ function parseInstallArgs(argv) {
     else if (a === '--project') out.projectDoctor = true;
     else if (a === '--ci-parity') out.ciParity = true;
     else if (a === '--migrate-config') out.migrateConfig = true;
+    else if (a === '--migrate-layout') out.migrateLayout = true;
     else if (a === '--apply') out.applyMigration = true;
     else if (a === '--write-manifest') out.writeManifest = true;
     else if (!a.startsWith('-')) out.restPositional.push(a);
@@ -691,12 +700,20 @@ function copilotPromptsDirPath(opts) {
 
 /** Artefato de auditoria da integração Copilot VS Code. */
 function copilotWorkspaceManifestPath(opts) {
-  return path.join(path.resolve(opts.dir), '.oxe', 'install', 'copilot-vscode.json');
+  return path.join(installManifestDir(opts), 'copilot-vscode.json');
 }
 
 /** Artefato de auditoria da semântica multi-runtime. */
 function runtimeSemanticsManifestPath(opts) {
-  return path.join(path.resolve(opts.dir), '.oxe', 'install', 'runtime-semantics.json');
+  return path.join(installManifestDir(opts), 'runtime-semantics.json');
+}
+
+/** OXB-230-23: `.oxe/core/install` no layout core (flag ou projeto já em core); senão `.oxe/install`. */
+function installManifestDir(opts) {
+  const root = path.resolve(opts.dir);
+  if (opts.repoLayout === 'core') return path.join(root, '.oxe', 'core', 'install');
+  if (opts.repoLayout === 'nested' || opts.repoLayout === 'classic') return path.join(root, '.oxe', 'install');
+  return oxeLayout.resolveOxeAssetDir(root, 'install', { forWrite: true });
 }
 
 /**
@@ -1977,6 +1994,8 @@ function runInstall(opts) {
   const c = useAnsiColors();
   const fullLayout = useFullRepoLayout(opts);
   const idePathRewrite = !fullLayout;
+  // OXB-230-23: um projeto que já migrou para .oxe/core/ continua nele ao reinstalar sem --layout
+  if (!fullLayout && !opts.repoLayout && fs.existsSync(path.join(target, '.oxe', 'core'))) opts.repoLayout = 'core';
 
   console.log(`  ${c ? green : ''}Destino:${c ? reset : ''} ${c ? cyan : ''}${target}${c ? reset : ''}`);
   if (opts.dryRun) console.log(`  ${c ? yellow : ''}(dry-run)${c ? reset : ''}`);
@@ -1987,7 +2006,7 @@ function runInstall(opts) {
     );
   } else {
     console.log(
-      `  ${c ? dim : ''}Layout repo:${c ? reset : ''} ${c ? yellow : ''}só .oxe/${c ? reset : ''} ${c ? dim : ''}(${c ? cyan : ''}.oxe/workflows${c ? dim : ''})${c ? reset : ''}`
+      `  ${c ? dim : ''}Layout repo:${c ? reset : ''} ${c ? yellow : ''}só .oxe/${c ? reset : ''} ${c ? dim : ''}(${c ? cyan : ''}${opts.repoLayout === 'core' ? '.oxe/core/workflows' : '.oxe/workflows'}${c ? dim : ''})${c ? reset : ''}`
     );
   }
   const ideAny = anyIdeIntegration(opts);
@@ -2016,7 +2035,8 @@ function runInstall(opts) {
   if (fullLayout) {
     copyDir(path.join(PKG_ROOT, 'oxe'), path.join(target, 'oxe'), copyOpts, false);
   } else {
-    const nested = path.join(target, '.oxe');
+    // OXB-230-23: no layout core os assets estáticos vão para .oxe/core/ (a raiz .oxe/ fica só com o estado)
+    const nested = opts.repoLayout === 'core' ? path.join(target, '.oxe', 'core') : path.join(target, '.oxe');
     copyDir(path.join(PKG_ROOT, 'oxe', 'workflows'), path.join(nested, 'workflows'), copyOpts, true);
     // OXB-146: reapply the team/personal overlays on the new workflows; an overlay whose point vanished asks a decision.
     if (!opts.dryRun) {
@@ -2190,8 +2210,13 @@ function runInstall(opts) {
   if (!opts.noInitOxe) bootstrapOxe(target, { dryRun: opts.dryRun, force: opts.force });
   else ensureGitignoreIgnoresOxeDir(target, { dryRun: opts.dryRun });
 
+  // OXB-230-23: o layout escolhido fica no config para os próximos install/update
+  if (!opts.dryRun && !fullLayout && opts.repoLayout === 'core' && fs.existsSync(path.join(target, '.oxe', 'config.json'))) {
+    try { oxeLayout.writeCoreLayoutConfig(target); } catch { /* config inválido: o doctor acusa */ }
+  }
+
   if (!opts.dryRun) {
-    writeRuntimeSemanticsManifest(opts, { layout: fullLayout ? 'classic' : 'nested' });
+    writeRuntimeSemanticsManifest(opts, { layout: fullLayout ? 'classic' : opts.repoLayout === 'core' ? 'core' : 'nested' });
   }
 
   if (!opts.dryRun && (opts.cursor || opts.copilot || opts.copilotCli || opts.allAgents || anyGranularAgent(opts))) {
@@ -2867,6 +2892,10 @@ function runUninstall(u) {
 
     if (fs.existsSync(nestedWf)) rmTree(nestedWf);
     if (fs.existsSync(nestedTpl)) rmTree(nestedTpl);
+    // OXB-230-23: layout core — os mesmos assets dentro de .oxe/core/
+    const coreRoot = path.join(target, '.oxe', 'core');
+    for (const kind of ['workflows', 'templates']) rmTree(path.join(coreRoot, kind));
+    if (!u.dryRun) rmDirIfEmpty(coreRoot, u);
     if (fs.existsSync(globalOxe)) rmTree(globalOxe);
     if (fs.existsSync(globalCmd)) rmTree(globalCmd);
 
@@ -7752,7 +7781,8 @@ async function main() {
       let lean = false;
       try { lean = oxeHealth.isLeanCeremony(process.cwd(), null); } catch { lean = false; }
       if (lean) {
-        const candidates = [path.join(process.cwd(), '.oxe', 'workflows', 'lean', `${slug}.md`), path.join(wfDir, 'lean', `${slug}.md`)];
+        const projectWf = oxeWorkflows.resolveWorkflowsDir(process.cwd());
+        const candidates = [...(projectWf ? [path.join(projectWf, 'lean', `${slug}.md`)] : []), path.join(wfDir, 'lean', `${slug}.md`)];
         const leanFile = candidates.find((f) => fs.existsSync(f));
         if (leanFile) { console.log(leanFile); return; }
       }

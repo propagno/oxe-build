@@ -747,6 +747,19 @@ function createStatusDoctorHandlers(deps) {
   }
 
   function runDoctor(target, options = {}) {
+      // OXB-230-23: .oxe/<asset> → .oxe/core/<asset>; dry-run unless --apply, idempotent, never touches the project state.
+      if (options.migrateLayout) {
+        const out = require('../oxe-layout.cjs').migrateLayout(target, { apply: options.applyMigration === true });
+        process.exitCode = out.ok ? 0 : 1;
+        if (options.json) { console.log(JSON.stringify(out, null, 2)); return; }
+        printSection('OXE ▸ doctor --migrate-layout');
+        for (const mv of out.moves) console.log(`  ${out.apply ? 'movido' : 'pendente'}: ${mv.from} → ${mv.to}`);
+        for (const e of out.errors) console.log(`  ${red}✗${reset} ${e}`);
+        if (out.config_update) console.log(`  ${out.apply ? 'gravado' : 'pendente'}: install.repo_layout = "core" em .oxe/config.json`);
+        if (out.ok && !out.moves.length && !out.config_update) console.log('  nada a migrar — o projeto já está no layout .oxe/core/');
+        if (out.ok && !out.apply && (out.moves.length || out.config_update)) console.log('  aplicar: oxe-cc doctor --migrate-layout --apply');
+        return;
+      }
       // OXB-100: the config migrations of this version (notes + mechanical key moves), applied only with --apply.
       if (options.migrateConfig) {
         const ch = require('../oxe-channels.cjs');
@@ -916,7 +929,7 @@ function createStatusDoctorHandlers(deps) {
         `${dim}Obs.:${reset} Há workflows extras no projeto (ok em forks): ${extra.join(', ')}`
       );
     }
-    const wfLabel = wfTgt.includes(`${path.sep}.oxe${path.sep}`) ? '.oxe/workflows' : 'oxe/workflows';
+    const wfLabel = wfTgt.includes(`${path.sep}.oxe${path.sep}core${path.sep}`) ? '.oxe/core/workflows' : wfTgt.includes(`${path.sep}.oxe${path.sep}`) ? '.oxe/workflows' : 'oxe/workflows';
     console.log(`${green}OK${reset} ${wfLabel} contém os ${expected.length} arquivos esperados do pacote`);
 
     const shape = oxeWorkflows.validateWorkflowShapes(wfTgt);

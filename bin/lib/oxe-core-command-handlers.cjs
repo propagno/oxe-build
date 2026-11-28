@@ -66,7 +66,7 @@ function createCoreCommandRegistry(deps) {
       requireDirectory(opts.dir, false);
       return runDoctor(opts.dir, {
         release: opts.releaseDoctor, project: opts.projectDoctor, ciParity: opts.ciParity, json: opts.jsonOutput, writeManifest: opts.writeManifest,
-        migrateConfig: opts.migrateConfig, applyMigration: opts.applyMigration,
+        migrateConfig: opts.migrateConfig, migrateLayout: opts.migrateLayout, applyMigration: opts.applyMigration,
       });
     } },
     { name: 'status', handler(argv) {

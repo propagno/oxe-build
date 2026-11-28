@@ -28,6 +28,14 @@ const agents = oxe.agents.list();
 const delivery = oxe.deliver.status();
 ```
 
+Higiene e retomada (`v1.23.0`): `client.gc()` ensaia o que `oxe-cc gc` limparia em `.oxe/.cache/` e nas pastas opcionais vazias, e `client.gc({ apply: true })` limpa; `client.resume()` devolve o mesmo resumo de `oxe-cc resume --json` (sessão ativa, fase, CRs abertos e o próximo comando).
+
+```javascript
+const client = createClient(process.cwd());
+const brief = client.resume();
+console.log(brief.next_command);
+```
+
 ### API funcional direta (compatibilidade completa)
 
 ```javascript

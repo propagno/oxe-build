@@ -150,7 +150,8 @@ const VERIFICATION_DEPTHS = ['standard', 'thorough', 'quick'];
 const INSTALL_PROFILES = ['recommended', 'cursor', 'copilot', 'core', 'cli', 'all_agents'];
 
 /** Layout do repositório: `nested` = só `.oxe/`; `classic` = `oxe/` na raiz + `.oxe/`. */
-const INSTALL_REPO_LAYOUTS = ['nested', 'classic'];
+/** OXB-230-23: `core` = assets estáticos do install em `.oxe/core/` (raiz `.oxe/` só com o estado do projeto). */
+const INSTALL_REPO_LAYOUTS = ['nested', 'classic', 'core'];
 
 /** @type {string[]} */
 const INSTALL_OBJECT_KEYS = ['profile', 'repo_layout', 'ide_scope', 'vscode', 'include_commands_dir', 'include_agents_md'];
@@ -493,7 +494,7 @@ function validateConfigShape(cfg) {
           typeErrors.push('install.repo_layout deve ser string');
         } else if (!INSTALL_REPO_LAYOUTS.includes(inst.repo_layout)) {
           typeErrors.push(
-            `install.repo_layout deve ser "nested" ou "classic"`
+            `install.repo_layout deve ser um de: ${INSTALL_REPO_LAYOUTS.join(', ')}`
           );
         }
       }
@@ -1037,7 +1038,7 @@ function copilotWorkspacePaths(target) {
     root: path.join(target, '.github'),
     promptsDir: path.join(target, '.github', 'prompts'),
     instructions: path.join(target, '.github', 'copilot-instructions.md'),
-    manifest: path.join(target, '.oxe', 'install', 'copilot-vscode.json'),
+    manifest: require('./oxe-layout.cjs').resolveOxeAssetFile(target, 'install', 'copilot-vscode.json', { forWrite: true }),
   };
 }
 
@@ -1621,7 +1622,7 @@ function promptWorkflowPathWarnings(filePath, target) {
   const hasClassicRef = /(^|[`"'(\s])oxe\/workflows\//i.test(text);
   const hasNestedRef = /(^|[`"'(\s])\.oxe\/workflows\//i.test(text);
   const classicExists = fs.existsSync(path.join(target, 'oxe', 'workflows'));
-  const nestedExists = fs.existsSync(path.join(target, '.oxe', 'workflows'));
+  const nestedExists = fs.existsSync(path.join(target, '.oxe', 'workflows')) || fs.existsSync(path.join(target, '.oxe', 'core', 'workflows'));
   /** @type {string[]} */
   const warnings = [];
   if (nestedExists && !classicExists && hasClassicRef && !hasNestedRef) {

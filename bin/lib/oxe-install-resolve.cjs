@@ -33,6 +33,8 @@ function resolveInstallOptionsFromConfig(projectRoot, optsIn) {
 
   if (!opts.explicitScope && !opts.oxeOnly && typeof inst.repo_layout === 'string' && layoutSet.has(inst.repo_layout)) {
     opts.installAssetsGlobal = inst.repo_layout === 'classic';
+    // OXB-230-23: `core` é o nested com os assets estáticos em .oxe/core/
+    if (inst.repo_layout === 'core' && !opts.repoLayout) opts.repoLayout = 'core';
     opts.explicitScope = true;
   }
 

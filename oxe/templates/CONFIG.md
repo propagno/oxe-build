@@ -234,7 +234,7 @@ Keys explícitas no `config.json` **prevalecem** sobre os valores do profile.
 | Chave | Tipo | Significado |
 |-------|------|-------------|
 | `profile` | string | `recommended` (Cursor+Copilot), `cursor`, `copilot`, `core` (só `.oxe`/workflows no projeto, sem integrações em `~`), `cli` (+ Copilot CLI / skills), `all_agents` (multi-plataforma como `--all-agents`). |
-| `repo_layout` | string | `nested` = só `.oxe/workflows` (padrão enxuto); `classic` = pasta `oxe/` na raiz + `.oxe/`. Equivale a `--local` / `--global` quando não passa essas flags. |
+| `repo_layout` | string | `nested` = só `.oxe/workflows` (padrão enxuto); `classic` = pasta `oxe/` na raiz + `.oxe/`; `core` = assets estáticos em `.oxe/core/` (raiz `.oxe/` enxuta; `--layout core`, migração por `oxe-cc doctor --migrate-layout --apply`). Equivale a `--local` / `--global` quando não passa essas flags. |
 | `vscode` | boolean | Se `true`, copia `.vscode/settings.json` do pacote quando o layout for `classic`. |
 | `include_commands_dir` | boolean | Com layout `classic`, copiar `commands/oxe/` para o repo. |
 | `include_agents_md` | boolean | Com layout `classic`, copiar `AGENTS.md` para a raiz. |

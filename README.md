@@ -461,6 +461,7 @@ Flags relevantes:
 | `--ide-local` | mantém integrações suportadas dentro do repositório |
 | `--ide-global` | instala integrações no HOME do usuário |
 | `--local` | layout mínimo em `.oxe/` |
+| `--layout core` | assets estáticos (workflows, templates, personas, schemas…) em `.oxe/core/`, raiz `.oxe/` com até 5 entradas; projeto existente: `oxe-cc doctor --migrate-layout --apply` |
 | `--global` | layout clássico com `oxe/` canônico na raiz |
 | `--oxe-only` | instala o núcleo sem integrações de IDE |
 | `--dry-run` | mostra as alterações sem gravar |

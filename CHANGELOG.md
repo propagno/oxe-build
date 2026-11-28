@@ -46,6 +46,14 @@ Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-61`..
 
 ---
 
+### Higiene Arquitetural do `.oxe/` (`F12`–`F16`, `A19`–`A23`)
+
+- **Catálogo blindado (`OXB-230-19`):** `bin/lib/oxe-artifact-catalog.cjs` cobre os artefatos modernos (`PLAN.json`, `PRD.md`, `program/`, `alm/`, `evidence/`, `DELIVER.json`, `skills/`, `.cache/`, `core/`) e o legado morto `OXE-EVENTS.jsonl` sai; o gate exige 0 extras.
+- **Zero `mkdirSync` ansioso (`OXB-230-20`):** `install`, `init-oxe` e as leituras read-only (status, doctor, capabilities, dashboard) não criam mais pastas vazias em `.oxe/`.
+- **Zona `.oxe/.cache/` e `oxe-cc gc` (`OXB-230-21`):** temporários do precheck/rollback/verify vão para `.oxe/.cache/`, o `precheck-ws/` desmonta as junctions NTFS antes de apagar, e `oxe-cc gc [--dry-run]` limpa o que sobrou.
+- **Fonte única de sessão ativa (`OXB-230-22`):** `.oxe/state.json` guarda o ponteiro `active_session`, a SPEC é lida da sessão ativa (raiz só como fallback legado) e `oxe-cc resume [--json]` devolve onde parar e o próximo comando.
+- **Layout enxuto `.oxe/core/` (`OXB-230-23`):** `oxe-cc install --layout core` (ou `install.repo_layout: "core"`) põe workflows, templates, personas, agents, schemas e manifests do install em `.oxe/core/`, deixando a raiz `.oxe/` com até 5 entradas (`README.md`, `STATE.md`, `config.json`, `core/`, `skills/`). A leitura é retroativa (`.oxe/core/` → `.oxe/` → `oxe/`), inclusive no bloco de resolução dos wrappers, então projetos `nested` e `classic` seguem iguais. `oxe-cc doctor --migrate-layout [--apply] [--json]` migra um projeto existente: ensaio por padrão, sem sobrescrever destino existente, sem tocar no estado do projeto e idempotente. O SDK expõe `client.gc()` e `client.resume()` com `0 drift` em `lib/sdk/index.d.ts`.
+
 ## [1.22.2] — 2026-11-27
 
 Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-37`..`OB-60`, 9 fases `F1`–`F9`, 21 entregas + `RFC-1`) incorporando os achados de uso real no OXESpace `v1.6.3`, as fricções catalogadas no bench `v1.22.0`, gates mecânicos de qualidade de specs/cards, onboarding agnóstico multi-CI/multi-ALM com auto-proposta de config, higiene operacional segura de worktrees, `runtime verify` paralelo + cache incremental, coordenação multi-agente local, reavaliação contínua, `CiAdapter` multi-provedor e roteamento empírico de modelos (`OXB-222-01`..`OXB-222-21`).

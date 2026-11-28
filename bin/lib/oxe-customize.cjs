@@ -21,7 +21,9 @@ const crypto = require('crypto');
 const sha = (s) => crypto.createHash('sha256').update(String(s).replace(/\r\n/g, '\n')).digest('hex');
 const slug = (h) => String(h).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[`*_]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 const CUSTOM = (root) => path.join(root, '.oxe', 'custom');
-const APPLIED = (root) => path.join(root, '.oxe', 'workflows', '.oxe-applied.json');
+// OXB-230-23: the installed copy lives in .oxe/core/workflows/ under the core layout
+const WF_DIR = (root) => (fs.existsSync(path.join(root, '.oxe', 'core', 'workflows')) ? path.join(root, '.oxe', 'core', 'workflows') : path.join(root, '.oxe', 'workflows'));
+const APPLIED = (root) => path.join(WF_DIR(root), '.oxe-applied.json');
 
 /** Sections by heading: [{ slug, level, start, end }] (line indexes; end exclusive). */
 function sections(lines) {
@@ -73,7 +75,7 @@ function apply(text, overlay) {
 
 /** Applies every overlay to the installed copies (`.oxe/workflows/`); records the applied hashes. */
 function applyAll(root, options = {}) {
-  const wfDir = path.join(root, '.oxe', 'workflows');
+  const wfDir = WF_DIR(root);
   const pkgDir = options.pkgDir || path.join(__dirname, '..', '..', 'oxe', 'workflows');
   const out = { reapplied: 0, decisions: [], workflows: [] };
   if (!fs.existsSync(wfDir)) return out;
@@ -97,7 +99,7 @@ function applyAll(root, options = {}) {
 /** Installed copies edited by hand since the last apply. */
 function directEdits(root) {
   const rec = readJson(APPLIED(root)) || {};
-  const wfDir = path.join(root, '.oxe', 'workflows');
+  const wfDir = WF_DIR(root);
   return Object.entries(rec).filter(([n, h]) => fs.existsSync(path.join(wfDir, n)) && sha(fs.readFileSync(path.join(wfDir, n), 'utf8')) !== h).map(([n]) => n);
 }
 
@@ -106,7 +108,7 @@ function migrate(root, options = {}) {
   const pkgDir = options.pkgDir || path.join(__dirname, '..', '..', 'oxe', 'workflows');
   const result = [];
   for (const name of directEdits(root)) {
-    const edited = fs.readFileSync(path.join(root, '.oxe', 'workflows', name), 'utf8').split(/\r?\n/);
+    const edited = fs.readFileSync(path.join(WF_DIR(root), name), 'utf8').split(/\r?\n/);
     const expected = apply(fs.readFileSync(path.join(pkgDir, name), 'utf8'), overlayFor(root, name)).text.split(/\r?\n/);
     const expSet = new Set(expected.map((l) => l.trim()));
     const editSet = new Set(edited.map((l) => l.trim()));

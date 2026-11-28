@@ -4,16 +4,12 @@ const fs = require('fs');
 const path = require('path');
 
 /**
- * Resolve o diretório de workflows OXE no projeto (`.oxe/workflows` tem precedência sobre `oxe/workflows`).
+ * Resolve o diretório de workflows OXE no projeto: `.oxe/core/workflows` (layout core) → `.oxe/workflows` → `oxe/workflows`.
  * @param {string} targetProject raiz do repositório alvo
  * @returns {string | null} caminho absoluto ou null
  */
 function resolveWorkflowsDir(targetProject) {
-  const nested = path.join(targetProject, '.oxe', 'workflows');
-  const root = path.join(targetProject, 'oxe', 'workflows');
-  if (fs.existsSync(nested)) return nested;
-  if (fs.existsSync(root)) return root;
-  return null;
+  return require('./oxe-layout.cjs').resolveOxeAssetDir(targetProject, 'workflows');
 }
 
 /**
