@@ -7708,7 +7708,29 @@ async function main() {
     const sub = argv[0];
     const wfDir = path.join(PKG_ROOT, 'oxe', 'workflows');
     if (sub === 'list') { for (const f of fs.readdirSync(wfDir).filter((x) => x.endsWith('.md')).sort()) console.log(f.replace(/\.md$/, '')); return; }
-    if (sub !== 'path' || !argv[1]) { console.error(`${red}Uso:${reset} oxe-cc workflow path <slug> (ex.: quick) · oxe-cc workflow list`); process.exitCode = 1; return; }
+    if (sub === 'new') {
+      const slug = argv[1];
+      if (!slug || slug.startsWith('-')) { console.error(`${red}Uso:${reset} oxe-cc workflow new <slug> [--description "..."] [--mode execution|review|planning|discovery|status] [--dir <pasta>] [--force] [--json]`); process.exitCode = 1; return; }
+      const o = { dir: process.cwd(), description: null, mode: 'execution', force: false, json: false };
+      for (let i = 2; i < argv.length; i += 1) {
+        const a = argv[i];
+        if (a === '--json') o.json = true;
+        else if (a === '--force') o.force = true;
+        else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+        else if (a === '--description' && argv[i + 1]) o.description = String(argv[++i]);
+        else if (a === '--mode' && argv[i + 1]) o.mode = String(argv[++i]);
+      }
+      try {
+        const out = require(path.join(__dirname, 'lib', 'oxe-workflows.cjs')).scaffoldWorkflow(o.dir, slug, o);
+        if (o.json) console.log(JSON.stringify({ oxeWorkflowScaffoldSchema: 1, ...out }, null, 2));
+        else console.log(`  ${green}✓${reset} workflow ${out.slug} criado (${out.written.join(', ')}) — rode \`npm run sync:runtime-metadata && npm run sync:cursor\` se estiver no repo oxe-build`);
+      } catch (err) {
+        console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
+        process.exitCode = 1;
+      }
+      return;
+    }
+    if (sub !== 'path' || !argv[1]) { console.error(`${red}Uso:${reset} oxe-cc workflow path <slug> · oxe-cc workflow list · oxe-cc workflow new <slug>`); process.exitCode = 1; return; }
     const slug = String(argv[1]).replace(/^oxe-/, '').replace(/\.md$/, '');
     if (!/^[a-z][a-z0-9-]*$/.test(slug)) { console.error(`${red}✗${reset} slug inválido: ${argv[1]}`); process.exitCode = 1; return; }
     const file = path.join(wfDir, `${slug}.md`);

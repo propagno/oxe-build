@@ -277,6 +277,11 @@ function resolveEffectiveSession(projectRoot, explicitSession) {
       if (active && typeof active === 'string') return active.trim().replace(/\\/g, '/');
       if (active && typeof active === 'object' && active.id) return String(active.id).trim().replace(/\\/g, '/');
     }
+    const stateMd = readTextIfExists(path.join(projectRoot, '.oxe', 'STATE.md'));
+    if (stateMd && health && typeof health.parseActiveSession === 'function') {
+      const parsed = health.parseActiveSession(stateMd);
+      if (parsed && typeof parsed === 'string') return parsed.trim().replace(/\\/g, '/');
+    }
   } catch { /* ignore */ }
   try {
     const md = readTextIfExists(path.join(projectRoot, '.oxe', 'SESSIONS.md'));
@@ -2626,15 +2631,16 @@ function reduceCanonicalRunState(projectRoot, activeSession, options = {}) {
 // ── 1.21.2: product and technical documents (PRD, RFC, ADR, publish) and the ALM ──────────────────────────────────
 
 function prdPathFor(projectRoot, activeSession) {
-  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
-  if (activeSession) {
-    const clean = String(activeSession).replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').replace(/^\.oxe\//, '');
+  const effSession = resolveEffectiveSession(projectRoot, activeSession);
+  const paths = resolveRuntimeArtifactPaths(projectRoot, effSession || activeSession);
+  if (effSession) {
+    const clean = String(effSession).replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').replace(/^\.oxe\//, '');
     const sessRel = /^(?:sessions|workstreams)\//.test(clean) ? clean : `sessions/${clean}`;
     const direct = path.join(projectRoot, '.oxe', sessRel, 'PRD.md');
     if (fs.existsSync(direct)) return direct;
     const nested = path.join(projectRoot, '.oxe', sessRel, 'spec', 'PRD.md');
     if (fs.existsSync(nested)) return nested;
-    return direct;
+    if (activeSession) return direct;
   }
   return path.join(paths.spec ? path.dirname(paths.spec) : path.join(projectRoot, '.oxe'), 'PRD.md');
 }

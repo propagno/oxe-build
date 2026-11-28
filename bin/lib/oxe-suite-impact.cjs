@@ -502,12 +502,27 @@ function messages(findings, { mode = 'error' } = {}) {
   const errors = [];
   const warnings = [];
   for (const f of findings) {
+    const errSuites = [];
+    const warnSuites = [];
     for (const s of f.suites) {
-      const line = s.level === 'error'
-        ? `${f.task}: ${s.test} importa ${s.names.join(', ')} de ${f.file} — a tarefa muda essa lista/constante e a suíte afirma sobre ela, mas não está no verify nem no escopo (inclua no verify, ou em files se a tarefa pode ter de mudá-la) [G30]`
-        : `${f.task}: ${s.test} importa ${f.file} e não está no verify nem no escopo da tarefa — se a mudança a quebrar, o vermelho fica fora do escopo (inclua no verify) [G30]`;
-      if (s.level === 'error' && mode === 'error') errors.push(line);
-      else warnings.push(line);
+      if (s.level === 'error' && mode === 'error') errSuites.push(s);
+      else warnSuites.push(s);
+    }
+    for (const s of errSuites) {
+      errors.push(`${f.task}: ${s.test} importa ${s.names.join(', ')} de ${f.file} — a tarefa muda essa lista/constante e a suíte afirma sobre ela, mas não está no verify nem no escopo (inclua no verify, ou em files se a tarefa pode ter de mudá-la) [G30]`);
+    }
+    if (warnSuites.length > 5) {
+      for (const s of warnSuites.slice(0, 3)) {
+        warnings.push(`${f.task}: ${s.test} importa ${f.file} e não está no verify nem no escopo da tarefa — se a mudança a quebrar, o vermelho fica fora do escopo (inclua no verify) [G30]`);
+      }
+      warnings.push(`${f.task}: +${warnSuites.length - 3} outra(s) suíte(s) (${warnSuites.length} no total) importam ${f.file} fora do verify — rode a suíte completa antes de fechar [G30]`);
+    } else {
+      for (const s of warnSuites) {
+        const line = s.level === 'error'
+          ? `${f.task}: ${s.test} importa ${s.names.join(', ')} de ${f.file} — a tarefa muda essa lista/constante e a suíte afirma sobre ela, mas não está no verify nem no escopo (inclua no verify, ou em files se a tarefa pode ter de mudá-la) [G30]`
+          : `${f.task}: ${s.test} importa ${f.file} e não está no verify nem no escopo da tarefa — se a mudança a quebrar, o vermelho fica fora do escopo (inclua no verify) [G30]`;
+        warnings.push(line);
+      }
     }
     for (const d of f.data || []) {
       warnings.push(`${f.task}: ${d.test} (que importa ${f.file}) lê ${d.file} — se a tarefa muda o que essa suíte compara (ids, rótulos, uma lista), ${d.file} precisa estar em files da tarefa [G30b]`);

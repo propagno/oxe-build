@@ -26,10 +26,10 @@ function stripNoise(text) {
     .replace(/^(?:```|~~~)[^\n]*\n[\s\S]*?^(?:```|~~~)\s*$/gm, ' ');
 }
 
-function tableRows(text, heading) {
+function tableWithHeaders(text, heading) {
   const lines = stripNoise(text).split(/\r?\n/);
   const start = lines.findIndex((l) => new RegExp(`^##\\s+${heading}`, 'i').test(l.trim()));
-  if (start < 0) return [];
+  if (start < 0) return { headers: [], rows: [] };
   const rows = [];
   for (let i = start + 1; i < lines.length; i += 1) {
     const l = lines[i].trim();
@@ -43,7 +43,11 @@ function tableRows(text, heading) {
     if (cells.length && cells.every((c) => /^:?-{2,}:?$/.test(c))) continue;
     rows.push(cells);
   }
-  return rows.slice(1); // header row
+  return { headers: rows[0] || [], rows: rows.slice(1) };
+}
+
+function tableRows(text, heading) {
+  return tableWithHeaders(text, heading).rows;
 }
 
 /** ALM keys cited in a row (OXE-48, CODE-8, AB#123), never the OXE's own ids (US-, R-, A-, M-, D-, CA-, RN-, RT-, F). */
@@ -62,9 +66,47 @@ function parsePrd(text) {
   const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(String(text || ''));
   const field = (k) => { const m = fm && new RegExp(`^${k}:\\s*(.+)$`, 'm').exec(fm[1]); return m ? m[1].trim() : null; };
   const cleanId = (v) => String(v || '').replace(/\*/g, '').trim();
-  const stories = tableRows(text, 'Hist[óo]rias de usu[áa]rio')
+  const storyTable = tableWithHeaders(text, 'Hist[óo]rias de usu[áa]rio');
+  const normH = (h) => String(h || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+  const hdrs = storyTable.headers.map(normH);
+  const colIdx = (re, fallback) => {
+    const idx = hdrs.findIndex((h) => re.test(h));
+    return idx >= 0 ? idx : fallback;
+  };
+  const isCompact = hdrs.length > 0 && hdrs.length <= 5 && hdrs.some((h) => /historia|story/.test(h));
+  const critIdx = colIdx(/criteri|aceite|a\*/, isCompact ? 2 : 5);
+  const reqIdx = colIdx(/requisit|r\*/, isCompact ? -1 : 4);
+  const prioIdx = colIdx(/prioridad|fase|phase/, isCompact ? 3 : 6);
+  const stories = storyTable.rows
     .filter((c) => /^US-\d+$/i.test(cleanId(c[0])))
-    .map((c) => ({ id: cleanId(c[0]).toUpperCase(), persona: c[1] || '', want: c[2] || '', benefit: c[3] || '', requirements: ID_LIST(c[4]).filter((x) => /^R/.test(x)), criteria: ID_LIST(c[5]).filter((x) => /^[AG]\d+(?:\.\d+)?$/.test(x)), priority: c[6] || null, cards: cardKeys(c.slice(1).join(' ')) }));
+    .map((c) => {
+      let persona = c[1] || '';
+      let want = c[2] || '';
+      let benefit = c[3] || '';
+      if (isCompact) {
+        const storyText = String(c[1] || '').trim();
+        const mFull = /^como\s+([^,]+),\s*quero\s+(.+?)(?:,?\s+para\s+(.+))?$/i.exec(storyText);
+        if (mFull) {
+          persona = mFull[1].trim();
+          want = mFull[2].trim();
+          benefit = (mFull[3] || mFull[2]).trim();
+        } else {
+          persona = storyText ? 'usuário' : '';
+          want = storyText;
+          benefit = storyText;
+        }
+      }
+      return {
+        id: cleanId(c[0]).toUpperCase(),
+        persona,
+        want,
+        benefit,
+        requirements: reqIdx >= 0 ? ID_LIST(c[reqIdx]).filter((x) => /^R/.test(x)) : [],
+        criteria: critIdx >= 0 ? ID_LIST(c[critIdx]).filter((x) => /^[AG]\d+(?:\.\d+)?$/.test(x)) : [],
+        priority: prioIdx >= 0 ? (c[prioIdx] || null) : null,
+        cards: cardKeys(c.slice(1).join(' ')),
+      };
+    });
   const metrics = tableRows(text, 'Objetivos e m[ée]tricas')
     .filter((c) => /^M-\d+$/i.test(cleanId(c[0])))
     .map((c) => ({ id: cleanId(c[0]).toUpperCase(), goal: c[1] || '', metric: c[2] || '', target: c[3] || '', how: c[4] || '' }));

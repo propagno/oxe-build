@@ -279,21 +279,65 @@ function checkPosixSymlinkGitignore(projectRoot, options = {}) {
   };
 }
 
+function majorMinor(ver) {
+  const m = String(ver || '').trim().match(/^(\d+)\.(\d+)/);
+  return m ? `${m[1]}.${m[2]}` : null;
+}
+
+/**
+ * Checks whether tracked `release-evidence/scorecard-report.json` matches the root package's `major.minor` line.
+ * Prevents surprises in CI (`npm run release:manifest`) when bumping to a new minor version.
+ */
+function checkScorecardEvidenceParity(projectRoot, options = {}) {
+  const rootAbs = path.resolve(projectRoot || process.cwd());
+  const pkgPath = path.join(rootAbs, 'package.json');
+  const evidencePath = path.join(rootAbs, 'release-evidence', 'scorecard-report.json');
+  const problems = [];
+  const warnings = [];
+  if (!fs.existsSync(pkgPath) || !fs.existsSync(evidencePath)) {
+    return { ok: true, checked: false, drifted: false, package_version: null, evidence_version: null, problems, warnings };
+  }
+  let pkgVersion = null;
+  let evVersion = null;
+  try { pkgVersion = String(JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version || ''); } catch { pkgVersion = null; }
+  try { evVersion = String(JSON.parse(fs.readFileSync(evidencePath, 'utf8')).oxe_version || ''); } catch { evVersion = null; }
+  const pkgLine = majorMinor(pkgVersion);
+  const evLine = majorMinor(evVersion);
+  const drifted = Boolean(pkgLine && evLine && pkgLine !== evLine);
+  if (drifted) {
+    const msg = `release-evidence/scorecard-report.json está na linha ${evVersion} (package.json=${pkgVersion}) — o CI exige scorecard da linha ${pkgLine}.x antes do release`;
+    if (options.strictScorecard) problems.push(msg);
+    else warnings.push(msg);
+  }
+  return {
+    ok: problems.length === 0,
+    checked: true,
+    drifted,
+    package_version: pkgVersion,
+    evidence_version: evVersion,
+    problems,
+    warnings,
+  };
+}
+
 function runCiParityCheck(projectRoot, options = {}) {
   const rootAbs = path.resolve(projectRoot || process.cwd());
   const cleanCheckout = checkCleanCheckoutDoctor(rootAbs, options);
   const enginesParity = checkEnginesParity(rootAbs);
   const symlinkGitignore = checkPosixSymlinkGitignore(rootAbs, options);
+  const scorecardEvidence = checkScorecardEvidenceParity(rootAbs, options);
 
   const problems = [
     ...cleanCheckout.problems,
     ...enginesParity.problems,
     ...symlinkGitignore.problems,
+    ...scorecardEvidence.problems,
   ];
   const warnings = [
     ...cleanCheckout.warnings,
     ...enginesParity.warnings,
     ...symlinkGitignore.warnings,
+    ...scorecardEvidence.warnings,
   ];
 
   return {
@@ -305,6 +349,7 @@ function runCiParityCheck(projectRoot, options = {}) {
       clean_checkout_doctor: cleanCheckout,
       engines_parity: enginesParity,
       posix_symlink_gitignore: symlinkGitignore,
+      scorecard_evidence: scorecardEvidence,
     },
     problems,
     warnings,
@@ -316,5 +361,6 @@ module.exports = {
   checkCleanCheckoutDoctor,
   checkEnginesParity,
   checkPosixSymlinkGitignore,
+  checkScorecardEvidenceParity,
   parseMinNodeMajor,
 };
