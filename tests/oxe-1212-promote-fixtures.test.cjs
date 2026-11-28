@@ -125,7 +125,7 @@ describe('OXB-160: promote fixtures and its own leftover branch', () => {
     const wt = path.join(dir, '.oxe', 'promote-ws', 't3-old');
     git(dir, 'worktree', 'add', '-q', wt, 'oxe/promote-t3');
     fs.writeFileSync(path.join(wt, 'pendente.txt'), 'x\n');
-    const dead = Number(require('child_process').spawnSync(process.execPath, ['-e', 'console.log(process.pid)'], { encoding: 'utf8' }).stdout.trim());
+    const dead = require('../bin/lib/oxe-agent-coord.cjs').findGuaranteedDeadPid();
     fs.writeFileSync(`${wt}.pid`, JSON.stringify({ pid: dead, task: 'T3' }));
     const again = op.runtimePromote(dir, null, { task: 'T3', base: 'main' });
     assert.equal(again.error, undefined, again.error);

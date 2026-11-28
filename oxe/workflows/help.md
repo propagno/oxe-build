@@ -76,7 +76,9 @@ Estes são os únicos comandos que você precisa conhecer para seguir o framewor
 ```
 /oxe-capabilities → listar, instalar, remover ou atualizar capabilities nativas do projeto
 /oxe-skill        → descobrir, invocar e gerenciar skills OXE via @<id>
-/oxe-alm          → configurar e operar o ALM (Jira / Azure DevOps, por REST ou MCP)
+/oxe-alm          → configurar e operar o ALM (Jira, Azure DevOps, github-issues via gh ou gitlab-issues via glab)
+oxe-cc mcp        → servidor MCP (Model Context Protocol) nativo em JSON-RPC 2.0 stdio (zero dependências externas)
+oxe-cc doctor --ci-parity → valida checkout limpo, paridade engines.node e symlinks POSIX antes do push
 oxe-cc onboard    → dossiê 100% read-only e agnóstico (multi-CI, multi-ALM, ambiente e lacunas de gates) para novos agentes/devs (`--json`, `--write`, `--propose-config [--apply]`)
 oxe-cc agents     → coordenação multi-agente local entre worktrees (`register|heartbeat|release|list|collisions|send|inbox` via `<git-common-dir>/oxe/`)
 oxe-cc reevaluate → reavalia tarefas pendentes do `PLAN.json` contra commits novos na base (`no_impact` | `mechanical_sync` | `contract_drift`)

@@ -4,6 +4,56 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.23.0] — 2026-11-28
+
+Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-61`..`OB-76`, 11 fases `F1`–`F11`, 18 entregas `OXB-230-01`..`OXB-230-18`, ADR `D-8`) eliminando os atritos reais observados no corte de `v1.22.2` e no dogfooding da `v1.23.0`, fechando os loops automáticos da `1.22.2`, inaugurando o ecossistema aberto com servidor MCP nativo (`15` tools), ALM GitHub/GitLab Issues, Dashboard v2 multi-agente simplificado ao vivo, Strangler Fig Fatia 3 (`D-6`), a experiência autônoma ponta a ponta **`oxe-cc primer` + `oxe-cc deliver`** (Chat-Driven, Terminal Headless, smoke HTTP real, auto-branch/commit e ondas paralelas disjuntas) e a facade ergonômica **`createClient(projectRoot)` com ESM nativo** — com **zero novas dependências npm de produção**.
+
+### Hardening CI/Release, Paridade Local & Fim do Flake de PID (`OB-62`..`OB-64`)
+
+- **Pipeline de release endurecido (`OB-62`):** `.github/workflows/release.yml` executa `publish-npm` em **Node 24** (OIDC Trusted Publishing nativo + fallback `NPM_TOKEN`) com loop de retry/backoff no `npm view` para absorver respostas `202 Accepted` assíncronas do registry; todas as GitHub Actions em `release.yml` e `ci.yml` foram atualizadas para SHAs pinadas em Node 24 (`checkout@v7.0.1`, `setup-node@v7.1.0`, `upload-artifact@v7.0.2`, `download-artifact@v8.0.2`).
+- **Isolamento `.oxe/` em `product_package` e gate `oxe-cc doctor --ci-parity` (`OB-63`):** `oxe-project-health.cjs` tolera `active_session` local gitignored em checkouts limpos de `product_package` sem reportar `broken` (preservando `broken` para projetos `oxe_project` comuns); novo módulo `bin/lib/oxe-ci-parity.cjs` + CLI `oxe-cc doctor --ci-parity [--json]` + `runtimeCiParity` validam checkout limpo (`git read-tree`/`checkout-index`), paridade de `engines.node` em sub-pacotes/templates e higiene de symlinks/`.gitignore` POSIX antes do push.
+- **Fim determinístico do flake de PID no Windows (`OB-64`):** `findGuaranteedDeadPid()` em `bin/lib/oxe-agent-coord.cjs` localiza PID inativo (`ESRCH`) sem criar processo filho efêmero, adotado em `tests/oxe-1212-promote-fixtures.test.cjs`.
+
+### Fechamento dos Loops Automáticos da 1.22.2 (`OB-65`..`OB-67`)
+
+- **Auto-lease multi-agente automático (`OB-65`):** `quick` (`start`/`done`/`cancel`), `runtime commit-task` e `runtime execute` gerenciam leases automaticamente em `<git-common-dir>/oxe/active-agents.json`, desativável por `agents.auto_lease: false` (`isAutoLeaseEnabled` / `tryAutoLease`).
+- **Reavaliação contínua integrada a `execute` e `promote` (`OB-66`):** `buildRuntimeExecutePreflight` e `runtimePromote` executam `reevaluateAgainstBase` automaticamente, anexando o diagnóstico `reevaluate` e avisos acionáveis por padrão, e bloqueando apenas quando `reevaluate.block_on_drift: true`.
+- **Roteamento empírico opt-in (`models.auto_route: true`, `OB-67`):** `createModelSelector` em `bin/lib/oxe-model-tiers.cjs` consome `task.suggested_model_hint` quando `models.auto_route: true`, preservando precedência estrita `override > model_hint > suggested_model_hint > default_tier > 'balanced'` e escalonamento em falhas de lógica.
+
+### Ecossistema Aberto — Servidor MCP Nativo & ALM GitHub/GitLab Issues (`OB-68`..`OB-69`)
+
+- **Servidor MCP local nativo (`oxe-cc mcp`, `OB-68`):** `bin/lib/oxe-mcp-server.cjs` + CLI `oxe-cc mcp` + `runtimeMcpServer` implementam JSON-RPC 2.0 stdio puro (framing `Content-Length` e NDJSON, zero dependências externas) expondo 11 ferramentas OXE tipadas (`oxe_status`, `oxe_onboard`, `oxe_agents_list`, `oxe_agents_register`, `oxe_agents_collisions`, `oxe_agents_send`, `oxe_agents_inbox`, `oxe_reevaluate`, `oxe_plan_lint`, `oxe_doctor_ci_parity`, `oxe_scorecard`).
+- **ALM nativo para GitHub Issues (`gh`) e GitLab Issues (`glab`) (`OB-69`):** novo `bin/lib/oxe-alm-vcs.cjs` integrado a `oxe-alm.cjs` (`almConfig`, `almDoctor`, `almPush`, `almMove`, `almDefect`) e `oxe-onboard.cjs` (`detectAlmProfile`), com labels `stage:<etapa>`, fechamento em `integrated`/`released`, `--dry-run` seguro por padrão e zero chamadas a Jira.
+
+### Dashboard v2 Multi-Agente, Strangler Fig Fatia 3 & ADR `D-8` (`OB-70`..`OB-72`)
+
+- **Dashboard v2 ao vivo (`OB-70`):** `bin/lib/oxe-dashboard.cjs` oferece interface completa de controle em tema escuro azul/obsidiana com navegação lateral por 8 seções cobrindo todo o ecossistema OXE e rota `GET /api/state` expondo `active_agents`, `agent_messages`, `agent_collisions`, `worktree_hygiene`, `reevaluate`, `scorecard_routing` e `onboard_summary`.
+- **Strangler Fig Fatia 3 (`OB-71`, ADR `D-6`):** extração de `bin/lib/operational/plan-lint-runtime.cjs` (`-1.007` linhas em `bin/lib/oxe-operational.cjs`) e `bin/lib/commands/status-doctor-commands.cjs` (`-1.076` linhas em `bin/oxe-cc.js`) com zero ciclos e 0 drift de SDK (`test:sdk-types`).
+- **ADR `D-8` e sincronização `1.23.0` (`OB-72`):** formalização em `docs/adr/D-8-*.md` (preservando `D-1..D-7`), sincronização de versão `1.23.0` nas 5 fontes + `package-lock.json` e atualização de `oxe/templates/CONFIG.md`, `oxe/workflows/help.md`, `oxe/workflows/ship.md`, `oxe/workflows/lean/execute.md` e `AGENTS.md`.
+
+### Entrega Autônoma Ponta a Ponta — `oxe-cc primer` + `oxe-cc deliver` (`F5`–`F8`, `A12`–`A15`)
+
+- **Primer compacto do agente e Intake autônomo (`OXB-230-12`):** `bin/lib/oxe-primer.cjs` (`oxe-cc primer [--json]` + tool MCP `oxe_primer`) ensina o protocolo único do OXE em `< 80` linhas detectando `greenfield`/`brownfield` e entregas ativas; `bin/lib/oxe-deliver-intake.cjs` (`oxe-cc deliver init`) pergunta no início entre `single-ok` (1 única aprovação) e `auto` (100% automático quando sem lacunas bloqueantes), filtra no máximo `0..5` perguntas bloqueantes, faz auto-bootstrap em perfil `lean` e gera `SPEC.md`, `ROADMAP.md` e `DELIVER.json`.
+- **Motor determinístico `oxe-deliver-engine`, Anti-Cheat SHA-256, Auto-Cura & MCP (`OXB-230-13`):** `bin/lib/oxe-deliver-engine.cjs` + CLI `oxe-cc deliver <init|mode|answer|approve|next|advance|run|resume|status|cancel>` + tools MCP `oxe_deliver_status`, `oxe_deliver_next` e `oxe_deliver_advance` (total de 15 tools MCP) impõem verificação SHA-256 contra adulteração de testes congelados, checagem anti-stub, regressão cumulativa `F1..Fn` e loop `PHASE_HEAL` com escalonamento de tier e circuit breaker para `PAUSED_BLOCKED`.
+- **Runner headless (`deliver run`), `FINAL_SMOKE` real e `DELIVERY.md` (`OXB-230-14`):** `bin/lib/oxe-deliver-runner.cjs` executa todas as fases de forma autônoma respeitando `approval_mode` e `max_budget_usd`; `bin/lib/oxe-deliver-handoff.cjs` executa smoke real da solução entregue (`FINAL_SMOKE`) e gera `DELIVERY.md` + `DELIVERY.json` com comandos testados de como rodar agora (sem jamais executar `git push`/`npm publish` sozinho).
+- **Dashboard v2 Live Deliver, `/oxe-deliver` e prova E2E greenfield + brownfield (`OXB-230-15`):** Dashboard v2 simplificado em torno de ação imediata (`Agora`) com progresso real de `PROGRAM.json`/`DELIVER.json`, botões `single-ok`/`auto`/aprovação (`POST /api/deliver/mode`, `/api/deliver/approve`) e cartão `Entrega Pronta`; novo workflow canônico `oxe/workflows/deliver.md` sincronizado em todas as IDEs com `0 mismatches`.
+
+### Ergonomia do Dogfooding, Deliver Pro & SDK Facade + ESM Nativo (`F9`–`F11`, `A16`–`A18`)
+
+- **Correções de dogfooding e scaffold de workflows (`OXB-230-16`):** `bin/lib/oxe-prd.cjs` agora parseia tabelas compactas de 4 colunas (`| ID | História | Critérios | Fase |`) além do formato canônico de 7 colunas; `resolveEffectiveSession` e `prdPathFor` em `bin/lib/oxe-operational.cjs` resolvem o `PRD.md` da sessão ativa via `STATE.md` antes da raiz; `bin/lib/oxe-suite-impact.cjs` agrupa avisos `[G30]` (> 5 suítes) em 3 exemplos + 1 linha resumo; `oxe-cc doctor --ci-parity` (`checkScorecardEvidenceParity`) detecta drift `major.minor` em `release-evidence/scorecard-report.json` antes do push; novo subcomando `oxe-cc workflow new <slug>` (`scaffoldWorkflow`) cria e registra novos workflows canônicos com `<objective>`, `<success_criteria>`, `size-budget.json` e `workflow-runtime-contracts.json` em um comando.
+- **`oxe-cc deliver` Pro (`OXB-230-17`):** `probeHttpServerSmoke` em `bin/lib/oxe-deliver-handoff.cjs` sobe servidores web/API em porta efêmera `127.0.0.1`, valida HTTP `< 400` em `/health`/`/` e encerra a árvore de processos com segurança; `oxe-deliver-runner.cjs` adiciona `partitionDisjointTasks` (execução paralela via `Promise.all` com auto-lease por tarefa para `write_set` disjunto) e modo `autoGit` (`deliver/<slug>` + commits automáticos com trailer `OXE-Deliver: <id>/<fase>` por fase, sem nunca fazer push).
+- **SDK Facade `createClient` & ESM Nativo (`OXB-230-18`):** novo `lib/sdk/client.cjs` (`createClient(projectRoot, options)`), entrypoint ESM nativo `lib/sdk/index.mjs` e `exports["."]` condicional em `package.json` (`types`, `import`, `require`) suportando tanto `require('oxe-cc')` quanto `import { createClient } from 'oxe-cc'`, com declarações `lib/sdk/index.d.ts` regeneradas com `0 drift` (`npm run test:sdk-types`).
+
+---
+
+### Higiene Arquitetural do `.oxe/` (`F12`–`F16`, `A19`–`A23`)
+
+- **Catálogo blindado (`OXB-230-19`):** `bin/lib/oxe-artifact-catalog.cjs` cobre os artefatos modernos (`PLAN.json`, `PRD.md`, `program/`, `alm/`, `evidence/`, `DELIVER.json`, `skills/`, `.cache/`, `core/`) e o legado morto `OXE-EVENTS.jsonl` sai; o gate exige 0 extras.
+- **Zero `mkdirSync` ansioso (`OXB-230-20`):** `install`, `init-oxe` e as leituras read-only (status, doctor, capabilities, dashboard) não criam mais pastas vazias em `.oxe/`.
+- **Zona `.oxe/.cache/` e `oxe-cc gc` (`OXB-230-21`):** temporários do precheck/rollback/verify vão para `.oxe/.cache/`, o `precheck-ws/` desmonta as junctions NTFS antes de apagar, e `oxe-cc gc [--dry-run]` limpa o que sobrou.
+- **Fonte única de sessão ativa (`OXB-230-22`):** `.oxe/state.json` guarda o ponteiro `active_session`, a SPEC é lida da sessão ativa (raiz só como fallback legado) e `oxe-cc resume [--json]` devolve onde parar e o próximo comando.
+- **Layout enxuto `.oxe/core/` (`OXB-230-23`):** `oxe-cc install --layout core` (ou `install.repo_layout: "core"`) põe workflows, templates, personas, agents, schemas e manifests do install em `.oxe/core/`, deixando a raiz `.oxe/` com até 5 entradas (`README.md`, `STATE.md`, `config.json`, `core/`, `skills/`). A leitura é retroativa (`.oxe/core/` → `.oxe/` → `oxe/`), inclusive no bloco de resolução dos wrappers, então projetos `nested` e `classic` seguem iguais. `oxe-cc doctor --migrate-layout [--apply] [--json]` migra um projeto existente: ensaio por padrão, sem sobrescrever destino existente, sem tocar no estado do projeto e idempotente. O SDK expõe `client.gc()` e `client.resume()` com `0 drift` em `lib/sdk/index.d.ts`.
+
 ## [1.22.2] — 2026-11-27
 
 Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-37`..`OB-60`, 9 fases `F1`–`F9`, 21 entregas + `RFC-1`) incorporando os achados de uso real no OXESpace `v1.6.3`, as fricções catalogadas no bench `v1.22.0`, gates mecânicos de qualidade de specs/cards, onboarding agnóstico multi-CI/multi-ALM com auto-proposta de config, higiene operacional segura de worktrees, `runtime verify` paralelo + cache incremental, coordenação multi-agente local, reavaliação contínua, `CiAdapter` multi-provedor e roteamento empírico de modelos (`OXB-222-01`..`OXB-222-21`).
@@ -62,6 +112,8 @@ Construída ponta a ponta com o próprio `oxe-build` em perfil `lean` (`OB-37`..
 ---
 
 ## [1.22.1] — 2026-11-26
+
+> **Distribuição:** não publicada no npm nem marcada com tag — versão interna, consolidada na seguinte publicada.
 
 Construída ponta a ponta com o próprio `oxe-build v1.22.0` em perfil `lean` como bench controlado (`OB-21`..`OB-36`, 3 fases `F1`–`F3`, 12 entregas + 1 hotfix P0 descoberto no dogfooding).
 
@@ -813,6 +865,8 @@ O bench rodou a trilha principal à mão (`/oxe` → spec → plan → execute �
 
 ## [1.21.2] — 2026-11-11
 
+> **Distribuição:** não publicada no npm — existe só como tag `v1.21.2` e GitHub Release. Para instalar, use a versão seguinte publicada.
+
 Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-build, mais o roteiro de excelência e os backlogs de comparação aprovados pelo TECH LEAD. Cada item tem uma seção em `docs/oxespace-1.5/BACKLOG.md`, com a evidência e o teste que a reproduz (`tests/oxe-1212-*.test.cjs`). Para usar só a trilha recomendada, veja [docs/HAPPY-PATH.md](docs/HAPPY-PATH.md).
 
 ### Execução que não desperdiça nem esconde a causa
@@ -970,6 +1024,8 @@ Esta versão corrige o que mais custou e travou o TECH LEAD na F1 da 1.5.0, run 
 
 ## [1.21.0] — 2026-11-03
 
+> **Distribuição:** não publicada no npm — existe só como tag `v1.21.0` e GitHub Release. Para instalar, use a versão seguinte publicada.
+
 Esta versão consolida a 1.19 e a 1.20, que não foram publicadas, e acrescenta a 1.21. O objetivo é levar o OXE de "não mente sobre o que está pronto" para uma **maturidade medida**: aplicações de várias fases, corrigidas por um caminho único, dentro do orçamento e coerentes com as regras do repositório. Tudo foi validado construindo o OxeVoice 1.5 (F1) no oxespace e dois projetos de referência reais. Os 30 achados (OXB-001 a 030) estão em `docs/oxevoice/BACKLOG.md`.
 
 ### Programa por fases e aceite congelado (1.19)
@@ -1022,6 +1078,8 @@ Esta versão consolida a 1.19 e a 1.20, que não foram publicadas, e acrescenta 
 
 ## [1.18.0] — 2026-10-31
 
+> **Distribuição:** não publicada no npm nem marcada com tag — versão interna, consolidada na seguinte publicada.
+
 ### Executor nativo do host e contexto do nó
 
 - **ExecutorAdapter (`claude` | `http`):** o loop de tools da 1.17 é comum aos adapters, que só fornecem a
@@ -1052,6 +1110,8 @@ Esta versão consolida a 1.19 e a 1.20, que não foram publicadas, e acrescenta 
 
 ## [1.17.1] — 2026-10-31
 
+> **Distribuição:** não publicada no npm nem marcada com tag — versão interna, consolidada na seguinte publicada.
+
 ### Achados do benchmark real da 1.17
 
 O benchmark ponta a ponta da 1.17.0 (replay do linkly: 8/8 tarefas na 1ª tentativa,
@@ -1073,6 +1133,8 @@ oráculo independente 18/18, US$ 4,88 contra US$ 6,57 da 1.16) expôs estes defe
 ---
 
 ## [1.17.0] — 2026-10-31
+
+> **Distribuição:** não publicada no npm nem marcada com tag — versão interna, consolidada na seguinte publicada.
 
 ### Integridade da verificação: sem falso verde
 
@@ -1164,6 +1226,8 @@ qualidade mensurável e releases reproduzíveis.
 
 ## [1.15.0] — 2026-06-27
 
+> **Distribuição:** não publicada no npm nem marcada com tag — versão interna, consolidada na seguinte publicada.
+
 ### `.oxe/` enxuto no install + mapa vivo de artefatos
 
 Resposta ao feedback de que a quantidade de pastas criadas no install era grande
@@ -1210,6 +1274,8 @@ Aditivo — nenhum contrato existente muda. Complementa o 1.13.0 (`status --json
 ---
 
 ## [1.13.0] — 2026-05-29
+
+> **Distribuição:** não publicada no npm nem marcada com tag — versão interna, consolidada na seguinte publicada.
 
 ### Contratos de integração para hosts (IDEs, OXESpace)
 
@@ -1370,6 +1436,8 @@ Esta release endurece a coordenação multi-agent sobre workspaces reais, sem ab
 
 ## [1.9.0] — 2026-05-04
 
+> **Distribuição:** não publicada no npm nem marcada com tag — versão interna, consolidada na seguinte publicada.
+
 ### Runtime Real Maturity
 
 Esta release eleva a maturidade prática do OXE com foco em prova determinística do ciclo real `spec -> plan -> execute -> verify -> status/doctor`, sem abrir novos comandos públicos.
@@ -1405,6 +1473,8 @@ Esta release consolida a linha `1.8.3` para publicação no npm com foco em cons
 
 ## [1.8.2] — 2026-04-30
 
+> **Distribuição:** não publicada no npm — existe só como tag `v1.8.2`.
+
 ### Fluxo inicial mais coerente e geração de `spec`/`plan` mais forte
 
 Esta release fecha a linha de robustez do ciclo `install -> status/doctor -> /oxe -> spec -> plan -> execute -> verify` sem abrir nova superfície pública. O foco foi remover ruído operacional em projetos novos e aumentar a densidade executável dos artefatos que o OXE induz.
@@ -1429,6 +1499,8 @@ Esta release fecha a linha de robustez do ciclo `install -> status/doctor -> /ox
 - suíte focada de CLI/health atualizada para manter o comportamento novo estável
 
 ## [1.8.1] — 2026-04-30
+
+> **Distribuição:** não publicada no npm — existe só como tag `v1.8.1`.
 
 ### Hotfix — Gaps implementados no fonte TypeScript (não em arquivos compilados)
 
@@ -1681,6 +1753,8 @@ Esta release eleva a autonomia do runtime de ~65% para ~85%+ em projetos de baix
 
 ## [1.2.0] — 2026-04-18
 
+> **Distribuição:** não publicada no npm nem marcada com tag — versão interna, consolidada na seguinte publicada.
+
 ### Runtime Hardening & Robustez (Fases 1–9)
 
 **Fase 1 — Runtime Hardening**
@@ -1770,6 +1844,8 @@ Esta release eleva a autonomia do runtime de ~65% para ~85%+ em projetos de baix
 
 ## [1.1.0] — 2026-04-18
 
+> **Distribuição:** não publicada no npm nem marcada com tag — versão interna, consolidada na seguinte publicada.
+
 ### Mudança de superfície (simplificação estratégica de produto)
 
 **Trilha principal reduzida a 6 comandos**
@@ -1824,6 +1900,8 @@ Os seguintes comandos foram incorporados por estágios principais e continuam fu
 ---
 
 ## [0.8.0] — 2026-04-14
+
+> **Distribuição:** não publicada no npm nem marcada com tag — versão interna, consolidada na seguinte publicada.
 
 ### Adicionado
 
@@ -1903,6 +1981,8 @@ Os seguintes comandos foram incorporados por estágios principais e continuam fu
 
 ## [0.6.3] — 2026-04-04
 
+> **Distribuição:** não publicada no npm nem marcada com tag — versão interna, consolidada na seguinte publicada.
+
 ### Corrigido
 - `security_in_verify` agora é reconhecido como chave válida em `.oxe/config.json` (não mais rejeitado pelo doctor como "unknown key")
 - `plan-agents.schema.json`: enum atualizado de `[1, 2]` para `[2, 3]`; campos `persona` e `model_hint` adicionados ao schema dos agentes
@@ -1940,6 +2020,8 @@ Os seguintes comandos foram incorporados por estágios principais e continuam fu
 ---
 
 ## [0.6.1] — 2026-04-04
+
+> **Distribuição:** não publicada no npm nem marcada com tag — versão interna, consolidada na seguinte publicada.
 
 ### Adicionado
 - **`/oxe-security`** — auditoria OWASP Top 10 filtrada pelo stack; produz `.oxe/SECURITY.md` com achados P0/P1/P2

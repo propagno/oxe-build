@@ -893,6 +893,29 @@ function createPromoteRuntime(deps = {}) {
         : `${f} está no verify de ${taskId} e difere de ${base}, mas não é da tarefa (fora dos files e dos testes congelados dela): o PR roda a versão de ${base}${by.length ? ` — mudado por ${by.join('; ')}` : ''}. Se a tarefa foi construída contra a nova, ponha o arquivo nos files dela (ou promova junto com a dona)`);
     }
     resolvedBase.warnings.push(...notCarriedWarnings);
+    // 1.23.0 (OXB-230-05): check upstream drift against base before promoting (warn by default; block if reevaluate.block_on_drift === true)
+    let reevaluateReport = null;
+    try {
+      const reevCfg = (readProjectConfig(projectRoot) || {}).reevaluate || {};
+      if (reevCfg.enabled !== false && options.reevaluate !== false) {
+        const reev = require('../oxe-reevaluate.cjs').reevaluateAgainstBase(projectRoot, { against: base });
+        if (reev && reev.ok) {
+          reevaluateReport = reev;
+          if (reev.summary && reev.summary.contract_drift > 0) {
+            const driftIds = (reev.tasks || []).filter((t) => t.classification === 'contract_drift').map((t) => t.id).join(', ');
+            const driftMsg = `reevaluate: ${reev.summary.contract_drift} tarefa(s) com contract_drift contra ${base} (${driftIds}) — rode oxe-cc reevaluate --against ${base}`;
+            if (reevCfg.block_on_drift === true) {
+              throw Object.assign(new Error(`promote bloqueado por ${driftMsg}`), { oxeReevaluateBlocked: true });
+            }
+            resolvedBase.warnings.push(driftMsg);
+          } else if (reev.summary && reev.summary.mechanical_sync > 0) {
+            resolvedBase.warnings.push(`reevaluate: ${reev.summary.mechanical_sync} tarefa(s) com mechanical_sync contra ${base} — rode oxe-cc sync --base ${base} --apply`);
+          }
+        }
+      }
+    } catch (err) {
+      if (err && err.oxeReevaluateBlocked) throw err;
+    }
     if (options.dryRun) {
       const quickShaSet = new Set(quickSelection.quicks.map((q) => q.sha));
       const pcfgDry = readProjectConfig(projectRoot) || {};
@@ -934,6 +957,7 @@ function createPromoteRuntime(deps = {}) {
         ...(skippedFixtures.length ? { skipped_fixtures: skippedFixtures } : {}),
         ...(dryRiskSuites.length ? { ci_risk_suites: dryRiskSuites } : {}),
         ...(dryPreviewCmds.length ? { preview_ci_commands: dryPreviewCmds } : {}),
+        ...(reevaluateReport ? { reevaluate: reevaluateReport } : {}),
         frozen_tests: withFixtures,
         conflict: null,
         pr_ready: null,
@@ -983,6 +1007,7 @@ function createPromoteRuntime(deps = {}) {
       ...(quickSelection.skipped.length ? { skipped_quicks: quickSelection.skipped } : {}),
       ...(skippedFixtures.length ? { skipped_fixtures: skippedFixtures } : {}),
       ...(unpromoDeps.dependencies.length ? { unpromoted_dependencies: unpromoDeps.dependencies, suggested_promote_order: unpromoDeps.suggested_order } : {}),
+      ...(reevaluateReport ? { reevaluate: reevaluateReport } : {}),
       conflict: null,
       pr_ready: null,
       body_file: null,

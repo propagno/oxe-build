@@ -152,6 +152,11 @@ Os checks pesados (e2e, build empacotado, Android) rodam no CI do repositório n
 - **`verify.allow_oxe_refs`:** quando `true`, desativa o falso positivo `oxe_internal_reference` em projetos que manipulam artefatos `.oxe/` (como o próprio `oxe-build`).
 - **`ci.provider`:** opcional (`"github"` | `"gitlab"` | `"azure-devops"` | `"local"`) para o `CiAdapter` usado por `ship` e `release`; quando omitido, é detectado automaticamente pelo remote git e pelos arquivos de pipeline com fallback `"local"` offline.
 - **`oxe-cc onboard --propose-config [--apply]`:** traduz pipelines detectados (GitHub Actions, GitLab CI, Azure Pipelines, Bitbucket, CircleCI, Jenkins) em proposta declarativa de `phase_gates`, `profile: "lean"` e `worktree.auto_gc` (`--dry-run` padrão, `--apply` mescla sem sobrescrever chaves do usuário).
+- **`agents.auto_lease` (`1.23.0`):** padrão `true` — `quick` (`start`/`done`/`cancel`), `runtime commit-task` e `runtime execute` gerenciam leases automaticamente em `<git-common-dir>/oxe/active-agents.json` (desative com `"agents": { "auto_lease": false }`).
+- **`reevaluate.block_on_drift` (`1.23.0`):** padrão `false` (apenas aviso acionável) — quando `true`, `buildRuntimeExecutePreflight` e `runtime promote` bloqueiam se `reevaluateAgainstBase` detectar `contract_drift` contra a branch base.
+- **`models.auto_route` (`1.23.0`):** opt-in (`false` por padrão) — quando `true`, `createModelSelector` consome `task.suggested_model_hint` preservando precedência `override > model_hint > suggested_model_hint > default_tier > "balanced"`.
+- **ALM VCS nativo (`1.23.0`):** `alm.provider` aceita `"github-issues"` (`gh`, bloco `github_issues: { repo }`) e `"gitlab-issues"` (`glab`, bloco `gitlab_issues: { repo }`), com `--dry-run` seguro por padrão e zero dependência de Jira.
+- **Servidor MCP e paridade pré-push (`1.23.0`):** `oxe-cc mcp` inicia servidor JSON-RPC 2.0 stdio nativo (11 ferramentas tipadas, zero dependências externas); `oxe-cc doctor --ci-parity [--json]` valida checkout limpo, `engines.node` e symlinks/`.gitignore` POSIX localmente.
 
 ## Retomada automática do execute (`autoresume`)
 
@@ -229,7 +234,7 @@ Keys explícitas no `config.json` **prevalecem** sobre os valores do profile.
 | Chave | Tipo | Significado |
 |-------|------|-------------|
 | `profile` | string | `recommended` (Cursor+Copilot), `cursor`, `copilot`, `core` (só `.oxe`/workflows no projeto, sem integrações em `~`), `cli` (+ Copilot CLI / skills), `all_agents` (multi-plataforma como `--all-agents`). |
-| `repo_layout` | string | `nested` = só `.oxe/workflows` (padrão enxuto); `classic` = pasta `oxe/` na raiz + `.oxe/`. Equivale a `--local` / `--global` quando não passa essas flags. |
+| `repo_layout` | string | `nested` = só `.oxe/workflows` (padrão enxuto); `classic` = pasta `oxe/` na raiz + `.oxe/`; `core` = assets estáticos em `.oxe/core/` (raiz `.oxe/` enxuta; `--layout core`, migração por `oxe-cc doctor --migrate-layout --apply`). Equivale a `--local` / `--global` quando não passa essas flags. |
 | `vscode` | boolean | Se `true`, copia `.vscode/settings.json` do pacote quando o layout for `classic`. |
 | `include_commands_dir` | boolean | Com layout `classic`, copiar `commands/oxe/` para o repo. |
 | `include_agents_md` | boolean | Com layout `classic`, copiar `AGENTS.md` para a raiz. |

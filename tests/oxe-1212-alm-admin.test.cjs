@@ -90,6 +90,20 @@ describe('alm intake', () => {
     assert.match(JSON.stringify(j.issues.get(out.key).fields.description), /Medir o boot frio/);
     await assert.rejects(op.runtimeAlmAdmin(dir, null, { action: 'intake', type: 'spike', summary: 'xxxxxxx', http: j.http, env: ENV }), /--type spike/);
   });
+
+  it('--no-program-labels (oxespace 28/11, OXE-495): a card outside the program gets neither alm.labels nor the program in its ref label', async () => {
+    const dir = project();
+    const cfgPath = path.join(dir, '.oxe', 'config.json');
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    cfg.alm.labels = ['area-oxechat', 'redesign'];
+    fs.writeFileSync(cfgPath, JSON.stringify(cfg));
+    const j = fakeJira();
+    const base = { action: 'intake', type: 'task', summary: 'Relatório de desempenho', labels: 'area-desempenho', dryRun: true, http: j.http, env: ENV };
+    const inherited = await op.runtimeAlmAdmin(dir, null, { ...base, ref: 'IN-1' });
+    assert.ok(inherited.planned.labels.includes('area-oxechat') && inherited.planned.labels.includes('ref-p-IN-1'), JSON.stringify(inherited.planned.labels));
+    const own = await op.runtimeAlmAdmin(dir, null, { ...base, ref: 'IN-2', noProgramLabels: true });
+    assert.deepEqual(own.planned.labels, ['ref-IN-2', 'area-desempenho']);
+  });
 });
 
 describe('alm doctor and version ensure', () => {

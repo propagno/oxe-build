@@ -101,8 +101,11 @@ async function intake(rest, cfg, input, ctx) {
   const ref = String(input.ref || `IN-${Date.now().toString(36).toUpperCase()}`);
   const known = alm.links(ctx.programDir);
   if (known.has(ref)) return { ref, key: known.get(ref).key, reused: true };
-  const label = cfg.ref_label === 'plain' ? `ref-${ref}` : alm.refLabel(ref, cfg);
-  const labels = [...new Set([...cfg.labels, label, ...(kind === 'bug' ? [cfg.p.bug_label || 'bug'] : []), ...String(input.labels || '').split(',').map((s) => s.trim()).filter(Boolean)])];
+  // --no-program-labels (oxespace 28/11, OXE-495): a card outside the active program gets neither alm.labels nor the
+  // program's name in its ref label — only ref-<ref>, the bug label and --labels
+  const own = input.noProgramLabels === true;
+  const label = own || cfg.ref_label === 'plain' ? `ref-${ref}` : alm.refLabel(ref, cfg);
+  const labels = [...new Set([...(own ? [] : cfg.labels), label, ...(kind === 'bug' ? [cfg.p.bug_label || 'bug'] : []), ...String(input.labels || '').split(',').map((s) => s.trim()).filter(Boolean)])];
   // the description: the given file (a study, a report) or the skeleton of the type, every gap "A confirmar"
   let body;
   if (input.fromText) body = String(input.fromText);

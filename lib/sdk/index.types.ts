@@ -689,6 +689,55 @@ interface RuntimeSemanticsAPI {
   auditRuntimeTargets: (projectRoot: string) => Record<string, unknown>;
 }
 
+interface OxeClientOptions {
+  session?: string | null;
+  packageRoot?: string;
+}
+
+interface OxeClient {
+  projectRoot: string;
+  version: string;
+  status: () => OxeHealthReport;
+  summary: () => OxeStatusSummary;
+  doctor: (opts?: Record<string, unknown>) => DoctorChecksResult;
+  primer: (opts?: Record<string, unknown>) => Record<string, unknown>;
+  onboard: (opts?: Record<string, unknown>) => Record<string, unknown>;
+  ciParity: (opts?: Record<string, unknown>) => Record<string, unknown>;
+  gc: (opts?: Record<string, unknown>) => Record<string, unknown>;
+  resume: (opts?: Record<string, unknown>) => Record<string, unknown>;
+  reevaluate: (opts?: Record<string, unknown>) => Record<string, unknown>;
+  agents: {
+    list: (opts?: Record<string, unknown>) => Array<Record<string, unknown>>;
+    register: (lease?: Record<string, unknown>, opts?: Record<string, unknown>) => Record<string, unknown>;
+    heartbeat: (agentId: string, updates?: Record<string, unknown>, opts?: Record<string, unknown>) => Record<string, unknown> | null;
+    release: (agentId: string, opts?: Record<string, unknown>) => Record<string, unknown>;
+    collisions: (files?: string[], opts?: Record<string, unknown>) => Record<string, unknown>;
+    send: (msg?: Record<string, unknown>, opts?: Record<string, unknown>) => Record<string, unknown>;
+    inbox: (opts?: Record<string, unknown>) => Array<Record<string, unknown>>;
+  };
+  deliver: {
+    init: (opts?: Record<string, unknown>) => Record<string, unknown>;
+    status: (opts?: Record<string, unknown>) => Record<string, unknown>;
+    next: (opts?: Record<string, unknown>) => Record<string, unknown>;
+    advance: (opts?: Record<string, unknown>) => Record<string, unknown>;
+    mode: (mode: string, opts?: Record<string, unknown>) => Record<string, unknown>;
+    answer: (answers: Record<string, string>, opts?: Record<string, unknown>) => Record<string, unknown>;
+    approve: (opts?: Record<string, unknown>) => Record<string, unknown>;
+    resume: (opts?: Record<string, unknown>) => Record<string, unknown>;
+    cancel: (opts?: Record<string, unknown>) => Record<string, unknown>;
+    run: (opts?: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    probeHttp: (opts?: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  };
+  dashboard: {
+    context: (opts?: Record<string, unknown>) => Record<string, unknown>;
+  };
+  operational: {
+    verify: (opts?: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    scorecard: (opts?: Record<string, unknown>) => Record<string, unknown>;
+    programStatus: (opts?: Record<string, unknown>) => Record<string, unknown>;
+  };
+}
+
 interface OxeSdk {
   version: string;
   name: string;
@@ -927,6 +976,8 @@ interface OxeSdk {
     workflowLintOptions?: { maxBytesSoft?: number };
     includeSecurity?: boolean;
   }) => DoctorChecksResult;
+
+  createClient: (projectRoot?: string, options?: OxeClientOptions) => OxeClient;
 }
 
 declare const sdk: OxeSdk & typeof import('../runtime/index');

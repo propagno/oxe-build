@@ -4,16 +4,12 @@ const fs = require('fs');
 const path = require('path');
 
 /**
- * Resolve o diretório de workflows OXE no projeto (`.oxe/workflows` tem precedência sobre `oxe/workflows`).
+ * Resolve o diretório de workflows OXE no projeto: `.oxe/core/workflows` (layout core) → `.oxe/workflows` → `oxe/workflows`.
  * @param {string} targetProject raiz do repositório alvo
  * @returns {string | null} caminho absoluto ou null
  */
 function resolveWorkflowsDir(targetProject) {
-  const nested = path.join(targetProject, '.oxe', 'workflows');
-  const root = path.join(targetProject, 'oxe', 'workflows');
-  if (fs.existsSync(nested)) return nested;
-  if (fs.existsSync(root)) return root;
-  return null;
+  return require('./oxe-layout.cjs').resolveOxeAssetDir(targetProject, 'workflows');
 }
 
 /**
@@ -137,11 +133,132 @@ function validateWorkflowShapes(workflowsDir, options = {}) {
   return { fileResults, warnings };
 }
 
+/**
+ * 1.23.0 (OXB-230-16): Scaffolds a new canonical workflow with valid <objective> + <success_criteria>,
+ * registers it in `oxe/workflows/size-budget.json` and `workflow-runtime-contracts.json`,
+ * and creates matching `.github/prompts/oxe-<slug>.prompt.md` and `commands/oxe/<slug>.md` wrappers.
+ */
+function scaffoldWorkflow(projectRoot, rawSlug, opts = {}) {
+  const rootAbs = path.resolve(projectRoot || process.cwd());
+  const slug = String(rawSlug || '').trim().toLowerCase().replace(/^oxe-/, '').replace(/\.md$/, '');
+  if (!/^[a-z][a-z0-9-]*$/.test(slug)) {
+    throw new Error(`Slug de workflow inválido: "${rawSlug}". Use letras minúsculas, números e hífen (ex.: audit-demo).`);
+  }
+  const description = String(opts.description || `OXE — Workflow ${slug}`).trim();
+  const mode = ['discovery', 'planning', 'execution', 'review', 'status'].includes(opts.mode) ? opts.mode : 'execution';
+  const sizeClass = ['s', 'm', 'l'].includes(opts.size) ? opts.size : 's';
+
+  const wfDir = path.join(rootAbs, 'oxe', 'workflows');
+  const wfPath = path.join(wfDir, `${slug}.md`);
+  if (fs.existsSync(wfPath) && !opts.force) {
+    throw new Error(`Workflow já existe: oxe/workflows/${slug}.md (passe --force para sobrescrever).`);
+  }
+
+  fs.mkdirSync(wfDir, { recursive: true });
+  const wfMd = [
+    `# OXE — Workflow: ${slug}`,
+    '',
+    '<objective>',
+    `${description}.`,
+    '</objective>',
+    '',
+    '<context>',
+    '- Ler `.oxe/STATE.md` e artefatos da sessão ativa antes de agir.',
+    '- Manter escopo estrito e validação verificável.',
+    '</context>',
+    '',
+    '## Passos',
+    '',
+    '1. Inspecionar o estado atual com `oxe-cc status --json`.',
+    '2. Executar a ação principal deste workflow validando o resultado.',
+    '',
+    '<success_criteria>',
+    `- Objetivo de \`${slug}\` concluído com evidência verificável e sem regressões.`,
+    '</success_criteria>',
+    '',
+  ].join('\n');
+  fs.writeFileSync(wfPath, wfMd, 'utf8');
+
+  const written = [path.relative(rootAbs, wfPath).replace(/\\/g, '/')];
+
+  // Register in size-budget.json if present
+  const budgetPath = path.join(wfDir, 'size-budget.json');
+  if (fs.existsSync(budgetPath)) {
+    const budget = JSON.parse(fs.readFileSync(budgetPath, 'utf8'));
+    budget.files = budget.files || {};
+    budget.files[`workflows/${slug}.md`] = sizeClass;
+    const sorted = Object.fromEntries(Object.keys(budget.files).sort().map((k) => [k, budget.files[k]]));
+    budget.files = sorted;
+    fs.writeFileSync(budgetPath, `${JSON.stringify(budget, null, 2)}\n`, 'utf8');
+    written.push('oxe/workflows/size-budget.json');
+  }
+
+  // Register in workflow-runtime-contracts.json if present
+  const contractsPath = path.join(wfDir, 'references', 'workflow-runtime-contracts.json');
+  if (fs.existsSync(contractsPath)) {
+    const reg = JSON.parse(fs.readFileSync(contractsPath, 'utf8'));
+    reg.workflows = reg.workflows || {};
+    if (!reg.workflows[slug] || opts.force) {
+      reg.workflows[slug] = {
+        reasoning_mode: mode,
+        question_policy: 'ask_high_impact_only',
+        required_artifacts: ['state'],
+        optional_artifacts: ['spec', 'plan'],
+        extraction_intent: mode === 'review' ? 'verification' : 'execution_input',
+      };
+      fs.writeFileSync(contractsPath, `${JSON.stringify(reg, null, 2)}\n`, 'utf8');
+      written.push('oxe/workflows/references/workflow-runtime-contracts.json');
+    }
+  }
+
+  // Create Copilot prompt & Claude/IDE command wrappers
+  const promptDir = path.join(rootAbs, '.github', 'prompts');
+  const cmdDir = path.join(rootAbs, 'commands', 'oxe');
+  if (fs.existsSync(promptDir)) {
+    const promptPath = path.join(promptDir, `oxe-${slug}.prompt.md`);
+    fs.writeFileSync(promptPath, [
+      '---',
+      `name: oxe-${slug}`,
+      'agent: agent',
+      `description: "${description.replace(/"/g, '\\"')}"`,
+      `oxe_workflow_slug: ${slug}`,
+      '---',
+      '',
+      `Aplicar o workflow canônico \`oxe/workflows/${slug}.md\`.`,
+      '',
+    ].join('\n'), 'utf8');
+    written.push(`.github/prompts/oxe-${slug}.prompt.md`);
+  }
+  if (fs.existsSync(cmdDir)) {
+    const cmdPath = path.join(cmdDir, `${slug}.md`);
+    fs.writeFileSync(cmdPath, [
+      '---',
+      `name: oxe:${slug}`,
+      `description: "${description.replace(/"/g, '\\"')}"`,
+      'allowed-tools:',
+      '  - Read',
+      '  - Write',
+      '  - Glob',
+      '  - Grep',
+      '  - Bash',
+      `oxe_workflow_slug: ${slug}`,
+      '---',
+      '',
+      `Aplicar o workflow canônico \`oxe/workflows/${slug}.md\`.`,
+      '',
+    ].join('\n'), 'utf8');
+    written.push(`commands/oxe/${slug}.md`);
+  }
+
+  return { ok: true, slug, mode, size: sizeClass, written };
+}
+
 module.exports = {
   resolveWorkflowsDir,
   listWorkflowMdFiles,
   diffWorkflows,
   validateWorkflowShapes,
+  scaffoldWorkflow,
   DEFAULT_MAX_BYTES_SOFT,
   SUCCESS_CRITERIA_EXCEPTIONS,
 };

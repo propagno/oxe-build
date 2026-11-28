@@ -458,7 +458,7 @@ function createOpsCommandRegistry(deps = {}) {
   oxe-cc quick commit -m "<mensagem>" [<arquivos…>|--all] [--plain|--json]                                                o commit do quick, feito pelo CLI com os trailers
   oxe-cc quick cancel --reason "…" [--evidence <url|caminho>] [--no-alm] [--apply|--dry-run] [--plain|--json]             abandona o quick aberto (nunca "feito"); o card é comentado, não avança
   oxe-cc quick done [--verify "<comando>"] [--no-commit] [--no-alm] [--apply|--dry-run] [--plain|--json]                  fecha: commits com OXE-Quick, verificação rodada pelo CLI
-  oxe-cc quick promote [--id <Q-...>] [--open-pr] [--base <branch>] [--draft] [--dry-run] [--force] [--plain|--json]      roda check-origin, faz push da branch e abre PR com Fecha <KEY>
+  oxe-cc quick promote [--id <Q-...>] [--open-pr] [--base <branch>] [--title "<título>"] [--draft] [--dry-run] [--force] [--plain|--json]      roda check-origin, faz push da branch e abre PR com Fecha <KEY>
 
   Modos de escrita:
     --dry-run       simula sem gravar nem localmente (.oxe/quick/ e QUICK.md ficam intactos; commits sem origem falham no hook commit-msg).
@@ -491,7 +491,7 @@ function createOpsCommandRegistry(deps = {}) {
           else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
           else if (a === '--alm-dir' && argv[i + 1]) o.almDir = path.resolve(argv[++i]);
           else if (a === '--from-card' && argv[i + 1]) o.fromCard = String(argv[++i]);
-          else if (['--by', '--verify', '--id', '--key', '--objective', '--reason', '--evidence', '--base'].includes(a) && argv[i + 1] != null) o[a.slice(2)] = String(argv[++i]);
+          else if (['--by', '--verify', '--id', '--key', '--objective', '--reason', '--evidence', '--base', '--title'].includes(a) && argv[i + 1] != null) o[a.slice(2)] = String(argv[++i]);
           else if (!a.startsWith('-')) positional.push(a);
           else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
         }
@@ -742,6 +742,246 @@ function createOpsCommandRegistry(deps = {}) {
         } catch (err) {
           console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
           process.exitCode = 1;
+        }
+      },
+    },
+    {
+      name: 'mcp',
+      async handler(argv) {
+        if (argv.includes('--help') || argv.includes('-h')) {
+          console.log(`\n  oxe-cc mcp [--dir <pasta>] [--session <sessão>]
+  Inicia o servidor MCP (Model Context Protocol) nativo do OXE em JSON-RPC 2.0 sobre stdio
+  (zero dependências externas), expondo ferramentas tipadas como oxe_status, oxe_onboard,
+  oxe_agents_list, oxe_agents_collisions, oxe_reevaluate, oxe_plan_lint e oxe_scorecard.\n`);
+          return;
+        }
+        const o = { dir: process.cwd(), session: null };
+        for (let i = 0; i < argv.length; i += 1) {
+          const a = argv[i];
+          if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+          else if (a === '--session' && argv[i + 1]) o.session = String(argv[++i]);
+          else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+        }
+        await require('../oxe-mcp-server.cjs').startStdioServer({
+          projectRoot: o.dir,
+          activeSession: o.session,
+        });
+      },
+    },
+    {
+      name: 'primer',
+      handler(argv) {
+        if (argv.includes('--help') || argv.includes('-h')) {
+          console.log(`\n  oxe-cc primer [--dir <pasta>] [--session <sessão>] [--json]
+  Guia compacto (< 80 linhas) para qualquer agente compreender imediatamente o uso do OXE,
+  detectando greenfield/brownfield, entrega ativa e o protocolo único de \`oxe-cc deliver\`.\n`);
+          return;
+        }
+        const o = { dir: process.cwd(), session: null, json: false };
+        for (let i = 0; i < argv.length; i += 1) {
+          const a = argv[i];
+          if (a === '--json') o.json = true;
+          else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+          else if (a === '--session' && argv[i + 1]) o.session = String(argv[++i]);
+          else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+        }
+        const primerMod = require('../oxe-primer.cjs');
+        const primer = primerMod.buildPrimer(o.dir, { activeSession: o.session });
+        if (o.json) {
+          console.log(JSON.stringify(primer, null, 2));
+        } else {
+          process.stdout.write(primerMod.formatPrimerMarkdown(primer));
+        }
+      },
+    },
+    {
+      name: 'deliver',
+      async handler(argv) {
+        const sub = argv[0] && !argv[0].startsWith('-') ? argv[0] : 'status';
+        const rest = argv[0] && !argv[0].startsWith('-') ? argv.slice(1) : argv;
+        if (argv.includes('--help') || argv.includes('-h')) {
+          console.log(`\n  oxe-cc deliver <init|mode|answer|approve|next|advance|run|resume|status|cancel> [opções]
+  Orquestrador autônomo ponta-a-ponta (Briefing → SPEC/Fases → Testes Congelados → Execução → FINAL_SMOKE → DELIVERY.md).
+    init --from <briefing.md> | --text "..." [--approval single-ok|auto] [--max-budget-usd <N>] [--dir <pasta>] [--json]
+    mode <single-ok|auto> [--dir <pasta>] [--json]
+    answer --answers-json '{"Q1":"..."}' [--dir <pasta>] [--json]
+    approve [--by <autor>] [--dir <pasta>] [--json]
+    next [--dir <pasta>] [--json]
+    advance [--frozen-tests a.test.cjs,b.test.cjs] [--verify "<cmd>"] [--smoke "<cmd>"] [--dir <pasta>] [--json]
+    run [--from <briefing.md>] [--approval single-ok|auto] [--executor claude|codex] [--max-budget-usd <N>] [--dir <pasta>] [--json]
+    resume [--note "..."] [--add-budget-usd <N>] [--dir <pasta>] [--json]
+    status [--dir <pasta>] [--json]
+    cancel [--reason "..."] [--dir <pasta>] [--json]\n`);
+          return;
+        }
+        const o = {
+          dir: process.cwd(),
+          session: null,
+          json: false,
+          from: null,
+          text: null,
+          approval: null,
+          maxBudgetUsd: null,
+          maxAttempts: null,
+          frozenTests: null,
+          verifyCommand: null,
+          smokeCommand: null,
+          answersJson: null,
+          by: null,
+          note: null,
+          reason: null,
+          executor: null,
+          addBudgetUsd: null,
+          positional: [],
+        };
+        for (let i = 0; i < rest.length; i += 1) {
+          const a = rest[i];
+          if (a === '--json') o.json = true;
+          else if (a === '--dir' && rest[i + 1]) o.dir = path.resolve(rest[++i]);
+          else if (a === '--session' && rest[i + 1]) o.session = String(rest[++i]);
+          else if (a === '--from' && rest[i + 1]) o.from = String(rest[++i]);
+          else if (a === '--text' && rest[i + 1]) o.text = String(rest[++i]);
+          else if (a === '--approval' && rest[i + 1]) o.approval = String(rest[++i]);
+          else if (a === '--max-budget-usd' && rest[i + 1]) o.maxBudgetUsd = Number(rest[++i]);
+          else if (a === '--max-attempts' && rest[i + 1]) o.maxAttempts = Number(rest[++i]);
+          else if (a === '--frozen-tests' && rest[i + 1]) o.frozenTests = String(rest[++i]).split(',').map((x) => x.trim()).filter(Boolean);
+          else if (a === '--verify' && rest[i + 1]) o.verifyCommand = String(rest[++i]);
+          else if (a === '--smoke' && rest[i + 1]) o.smokeCommand = String(rest[++i]);
+          else if (a === '--answers-json' && rest[i + 1]) o.answersJson = String(rest[++i]);
+          else if (a === '--by' && rest[i + 1]) o.by = String(rest[++i]);
+          else if (a === '--note' && rest[i + 1]) o.note = String(rest[++i]);
+          else if (a === '--reason' && rest[i + 1]) o.reason = String(rest[++i]);
+          else if (a === '--executor' && rest[i + 1]) o.executor = String(rest[++i]);
+          else if (a === '--add-budget-usd' && rest[i + 1]) o.addBudgetUsd = Number(rest[++i]);
+          else if (!a.startsWith('-')) o.positional.push(a);
+          else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+        }
+        try {
+          const intake = require('../oxe-deliver-intake.cjs');
+          const engine = require('../oxe-deliver-engine.cjs');
+          let out = null;
+          if (sub === 'init') {
+            out = intake.initDelivery(o.dir, {
+              from: o.from,
+              briefingText: o.text,
+              approval: o.approval,
+              session: o.session,
+              maxBudgetUsd: o.maxBudgetUsd,
+              maxAttempts: o.maxAttempts,
+            });
+          } else if (sub === 'mode') {
+            const targetMode = o.approval || o.positional[0];
+            out = engine.setApprovalMode(o.dir, targetMode, { session: o.session });
+          } else if (sub === 'answer') {
+            const answers = o.answersJson ? JSON.parse(o.answersJson) : {};
+            out = engine.answerClarification(o.dir, answers, { session: o.session });
+          } else if (sub === 'approve') {
+            out = engine.approveDelivery(o.dir, { session: o.session, by: o.by });
+          } else if (sub === 'next') {
+            out = engine.getNextDeliveryStep(o.dir, { session: o.session });
+          } else if (sub === 'advance') {
+            out = engine.advanceDelivery(o.dir, {
+              session: o.session,
+              frozenTests: o.frozenTests,
+              verifyCommand: o.verifyCommand,
+              smokeCommand: o.smokeCommand,
+            });
+          } else if (sub === 'resume') {
+            out = engine.resumeDelivery(o.dir, { session: o.session, note: o.note, addBudgetUsd: o.addBudgetUsd });
+          } else if (sub === 'cancel') {
+            out = engine.cancelDelivery(o.dir, { session: o.session, reason: o.reason });
+          } else if (sub === 'run') {
+            const runnerPath = path.join(__dirname, '..', 'oxe-deliver-runner.cjs');
+            if (!fs.existsSync(runnerPath)) throw new Error('Runner headless (oxe-deliver-runner.cjs) indisponível.');
+            out = await require(runnerPath).runAutonomousDelivery(o.dir, {
+              from: o.from,
+              briefingText: o.text,
+              approval: o.approval,
+              executor: o.executor,
+              maxBudgetUsd: o.maxBudgetUsd,
+              maxAttempts: o.maxAttempts,
+              session: o.session,
+            });
+          } else {
+            out = engine.getDeliveryStatus(o.dir, { session: o.session });
+          }
+          if (o.json) {
+            console.log(JSON.stringify(out, null, 2));
+          } else if (sub === 'init') {
+            console.log(`  ${green}✓${reset} deliver init: ${out.deliver_id} · status=${out.state.status} · modo=${out.state.approval_mode}`);
+            if (out.approval_prompt) console.log(`  ${yellow}?${reset} ${out.approval_prompt}`);
+          } else if (sub === 'next') {
+            console.log(`  deliver next [${out.state}]${out.phase ? ` (${out.phase.id} ${out.phase.index}/${out.phase.total})` : ''}`);
+            console.log(`  Instrução: ${out.instruction}`);
+            if (out.advance_cmd) console.log(`  Avançar:   ${out.advance_cmd}`);
+          } else if (sub === 'status') {
+            if (!out.exists) console.log('  Nenhuma entrega ativa. Inicie com `oxe-cc deliver init --from <briefing.md>`.');
+            else console.log(`  deliver ${out.deliver_id} · status=${out.state.status} · fases=${out.progress.closed}/${out.progress.total} (${out.progress.pct}%) · modo=${out.state.approval_mode}`);
+          } else {
+            console.log(`  ${out && out.ok === false ? `${red}✗${reset}` : `${green}✓${reset}`} deliver ${sub}: ${out && out.error ? out.error : (out && out.state ? out.state.status : 'ok')}`);
+          }
+          if (out && out.ok === false) process.exitCode = 1;
+        } catch (err) {
+          console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
+          process.exitCode = 1;
+        }
+      },
+    },
+    {
+      name: 'gc',
+      handler(argv) {
+        if (argv.includes('--help') || argv.includes('-h')) {
+          console.log(`\n  oxe-cc gc [--dry-run|--apply] [--keep-runs <N>] [--max-age-days <D>] [--dir <pasta>] [--json]
+  Limpa temporários de .oxe/.cache/ (e legados precheck-ws/, tmp/, rollback-ws/), pastas vazias opcionais
+  e aplica retenção segura em .oxe/runs/ e .oxe/evidence/ preservando a sessão/run ativa. Padrão: --dry-run.\n`);
+          return;
+        }
+        const o = { dir: process.cwd(), apply: false, keepRuns: 10, maxAgeDays: 14, json: false };
+        for (let i = 0; i < argv.length; i += 1) {
+          const a = argv[i];
+          if (a === '--json') o.json = true;
+          else if (a === '--apply') o.apply = true;
+          else if (a === '--dry-run') o.apply = false;
+          else if (a === '--keep-runs' && argv[i + 1]) o.keepRuns = Math.max(0, Number(argv[++i]) || 0);
+          else if (a === '--max-age-days' && argv[i + 1]) o.maxAgeDays = Math.max(0, Number(argv[++i]) || 0);
+          else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+          else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+        }
+        const out = require('../oxe-gc.cjs').runOxeGc(o.dir, o);
+        if (o.json) {
+          console.log(JSON.stringify(out, null, 2));
+        } else {
+          const kb = Math.round((out.dry_run ? out.reclaimable_bytes : out.reclaimed_bytes) / 1024);
+          if (out.dry_run) {
+            console.log(`  ${yellow}(simulação)${reset} oxe-cc gc: ${out.items.length} item(ns) elegível(is) · ~${kb} KB liberáveis`);
+            console.log(`  ${dim}rode com --apply para limpar preservando a sessão e a run ativa${reset}`);
+          } else {
+            console.log(`  ${green}✓${reset} oxe-cc gc: ${out.removed_count} item(ns) removido(s) · ~${kb} KB liberados`);
+          }
+        }
+      },
+    },
+    {
+      name: 'resume',
+      handler(argv) {
+        if (argv.includes('--help') || argv.includes('-h')) {
+          console.log(`\n  oxe-cc resume [--session <id>] [--dir <pasta>] [--json]
+  Resumo de retomada em < 20 linhas a partir das fontes canônicas (state.json, PROGRAM.json, DELIVER.json e git).\n`);
+          return;
+        }
+        const o = { dir: process.cwd(), session: null, json: false };
+        for (let i = 0; i < argv.length; i += 1) {
+          const a = argv[i];
+          if (a === '--json') o.json = true;
+          else if (a === '--session' && argv[i + 1]) o.session = String(argv[++i]);
+          else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+          else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+        }
+        const brief = oxeOperational.buildResumeBrief(o.dir, { session: o.session });
+        if (o.json) {
+          console.log(JSON.stringify(brief, null, 2));
+        } else {
+          process.stdout.write(oxeOperational.formatResumeText(brief));
         }
       },
     },

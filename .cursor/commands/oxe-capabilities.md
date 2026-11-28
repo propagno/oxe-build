@@ -1,0 +1,47 @@
+---
+description: "OXE — gerir capabilities nativas do projeto"
+argument-hint: "[list|install <id>|remove <id>|update]"
+oxe_workflow_slug: capabilities
+oxe_reasoning_mode: execution
+oxe_question_policy: ask_high_impact_only
+oxe_output_contract: execution
+oxe_tool_profile: mixed
+oxe_confidence_policy: explicit
+oxe_context_tier: standard
+oxe_contract_version: 2.0.0
+oxe_semantics_hash: 35b244a016d5c65c
+---
+
+OXE — gerir capabilities nativas do projeto
+
+<!-- oxe-reasoning-contract:start -->
+
+**Contrato de raciocínio OXE deste comando**
+- **Workflow:** capabilities
+- **Modo:** execução
+- **Perguntas:** perguntar só alto impacto
+- **Saída esperada:** execução
+- **Perfil de ferramentas:** misto
+- **Política de confiança:** explícita
+- **Tier de contexto padrão:** padrão
+- **Versão do contrato:** 2.0.0
+- **Checksum semântico:** `35b244a016d5c65c`
+- **Entrada de contexto prioritária:** `.oxe/context/packs/capabilities.md` e `.oxe/context/packs/capabilities.json`
+- **Regra pack-first:** ler o context pack primeiro; se estiver stale, incompleto ou ausente, cair para leitura direta com fallback explícito.
+- **Inspeção estruturada:** `oxe-cc context inspect --workflow capabilities --json`
+- Fazer reconhecimento curto antes de editar ou executar mutações.
+- Trabalhar no menor write set viável e validar após cada fatia relevante.
+- Parar e explicitar o bloqueio quando houver hipótese crítica não verificada.
+- **Seções esperadas:** Contexto lido · Alvo da mudança · Validação executada · Resultado · Próximo passo
+- **Bloqueios formais:** missing:state · missing:plan
+- **Referência canónica:** `oxe/workflows/references/reasoning-execution.md`
+
+<!-- oxe-reasoning-contract:end -->
+
+<!-- oxe-workflow-resolution:start -->
+
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/core/workflows/capabilities.md, .oxe/workflows/capabilities.md ou oxe/workflows/capabilities.md (nessa ordem). Ler e aplicar integralmente o primeiro ficheiro encontrado. No layout core (`.oxe/core/` existe), todo caminho `.oxe/workflows/…` ou `.oxe/templates/…` citado neste comando fica em `.oxe/core/workflows/…` / `.oxe/core/templates/…`. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir (um worktree sem .oxe/, um repo sem a cópia dos workflows), rodar `oxe-cc workflow path capabilities` (sem `oxe-cc` no PATH: `npx oxe-cc@<oxe_version de .oxe/oxe-version.json> workflow path capabilities` — nunca o `npx oxe-cc` sem versão, que pega outra release): ele devolve o workflow do pacote oxe-cc instalado. Aplicar esse ficheiro e avisar uma vez: "este repositório não tem .oxe/workflows; para fixar a versão, rode oxe-cc install --oxe-only .". Só se o comando também falhar, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
+
+Usa o texto adicional desta mensagem como ação sobre capabilities.

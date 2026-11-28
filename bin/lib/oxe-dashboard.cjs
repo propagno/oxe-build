@@ -86,27 +86,72 @@ function parsePlan(planMd) {
 }
 
 function parseSpec(specMd) {
-  const objective = (((specMd.match(/##\s*Objetivo\s*\n+([\s\S]*?)(?=\n##\s|\n#[^\#]|$)/im) || [null, ''])[1]) || '').trim().split('\n')[0].trim() || null;
+  const normalized = String(specMd || '').replace(/\r\n/g, '\n');
+  const objective = (((normalized.match(/(?:^|\n)##\s*Objetivo\s*\n+([\s\S]*?)(?=\n##\s|\n#[^#]|$)/i) || [null, ''])[1]) || '').trim().split('\n')[0].trim() || null;
   const criteria = [];
-  const m = specMd.match(/##\s*Critérios.*?aceite[\s\S]*?(\|[\s\S]*?)(?=\n##\s|\n#[^\#]|$)/im);
+  const seen = new Set();
+  const m = normalized.match(/(?:^|\n)##\s*Crit[eé]rios[^\n]*aceite[^\n]*\n+([\s\S]*?)(?=\n##\s|\n#[^#]|$)/i);
   if (m) {
-    for (const row of m[1].split('\n').filter((l) => l.startsWith('|'))) {
-      const cells = row.split('|').map((c) => c.trim()).filter(Boolean);
-      if (cells.length >= 2 && /^(?:A\d+(?:\.\d+)?|G\d+)$/i.test(cells[0])) criteria.push({ id: cells[0].toUpperCase(), criterion: cells[1] || '', howToVerify: cells[2] || '' });
+    const tables = parseMarkdownTables(m[1]);
+    if (tables.length) {
+      for (const row of tables[0].rows) {
+        const idRaw = row.ID || row.Id || row['Critério'] || '';
+        const idMatch = String(idRaw).match(/^(A\d+(?:\.\d+)?|G\d+)$/i);
+        if (!idMatch) continue;
+        const id = idMatch[1].toUpperCase();
+        if (seen.has(id)) continue;
+        seen.add(id);
+        criteria.push({
+          id,
+          criterion: row['Critério'] || row.Criterio || row.Criterion || row['Descrição'] || '',
+          risk: row.Risco || row.Risk || '',
+          howToVerify: row['Como verificar'] || row['Verificação'] || row.Verify || row.Verificacao || '',
+        });
+      }
+    }
+    if (!criteria.length) {
+      for (const row of m[1].split('\n').filter((l) => l.startsWith('|'))) {
+        const cells = row.split('|').map((c) => c.trim()).filter(Boolean);
+        if (cells.length >= 2 && /^(?:A\d+(?:\.\d+)?|G\d+)$/i.test(cells[0])) {
+          const id = cells[0].toUpperCase();
+          if (seen.has(id)) continue;
+          seen.add(id);
+          criteria.push({ id, criterion: cells[1] || '', risk: cells.length >= 4 ? cells[2] : '', howToVerify: cells[cells.length - 1] || '' });
+        }
+      }
+    }
+  }
+  if (!criteria.length) {
+    for (const line of normalized.split('\n')) {
+      const bm = line.match(/^\s*-\s+\*\*(A\d+(?:\.\d+)?)\b[^*]*\*\*\s*[:—-]?\s*(.+)$/);
+      if (!bm) continue;
+      const id = bm[1].toUpperCase();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      criteria.push({ id, criterion: bm[2].trim(), risk: '', howToVerify: '' });
     }
   }
   return { objective, criteria };
 }
 
+function sanitizeTemplateValue(raw) {
+  if (!raw) return null;
+  const cleaned = String(raw).replace(/`/g, '').trim();
+  if (!cleaned || cleaned === '—' || /\|\s*[a-z_]+\s*\|/i.test(cleaned)) return null;
+  return cleaned;
+}
+
 function parseRuntime(runtimeMd) {
   const agentTable = findTableByHeaders(runtimeMd, ['ID', 'Papel', 'Tarefas', 'Estado']);
   const checkpointTable = findTableByHeaders(runtimeMd, ['ID', 'Tipo', 'Escopo', 'Estado']);
+  const waveRaw = sanitizeTemplateValue(firstMatch(runtimeMd, /\*\*Onda:\*\*\s*([^\n]+)/i));
+  const waveNum = waveRaw && /^\d+$/.test(waveRaw) ? Number(waveRaw) : null;
   return {
-    currentWave: Number(firstMatch(runtimeMd, /\*\*Onda:\*\*\s*([^\n]+)/i)) || firstMatch(runtimeMd, /\*\*Onda:\*\*\s*([^\n]+)/i),
-    status: firstMatch(runtimeMd, /\*\*Estado:\*\*\s*([^\n]+)/i),
-    activeTasks: ((firstMatch(runtimeMd, /\*\*Tarefas ativas:\*\*\s*([^\n]+)/i) || '').split(',').map((x) => x.trim()).filter(Boolean)),
-    nextAction: firstMatch(runtimeMd, /\*\*Ação:\*\*\s*([^\n]+)/i),
-    nextReason: firstMatch(runtimeMd, /\*\*Motivo:\*\*\s*([^\n]+)/i),
+    currentWave: waveNum != null ? waveNum : waveRaw,
+    status: sanitizeTemplateValue(firstMatch(runtimeMd, /\*\*Estado:\*\*\s*([^\n]+)/i)),
+    activeTasks: ((sanitizeTemplateValue(firstMatch(runtimeMd, /\*\*Tarefas ativas:\*\*\s*([^\n]+)/i)) || '').split(',').map((x) => x.trim()).filter(Boolean)),
+    nextAction: sanitizeTemplateValue(firstMatch(runtimeMd, /\*\*Ação:\*\*\s*([^\n]+)/i)),
+    nextReason: sanitizeTemplateValue(firstMatch(runtimeMd, /\*\*Motivo:\*\*\s*([^\n]+)/i)),
     agents: (agentTable?.rows || []).map((row) => ({ id: row.ID || row.Id || '—', role: row.Papel || row.Role || '—', tasks: (row.Tarefas || row.Tasks || '').split(',').map((x) => x.trim()).filter(Boolean), status: row.Estado || row.Status || '—' })),
     checkpoints: (checkpointTable?.rows || []).map((row) => ({ id: row.ID || row.Id || '—', type: row.Tipo || row.Type || '—', scope: row.Escopo || row.Scope || '—', status: row.Estado || row.Status || '—', decision: row.Decisão || row.Decisao || row.Decision || '—' })),
     evidence: listSectionItems(runtimeMd, 'Evidências produzidas'),
@@ -140,16 +185,40 @@ function normalizeEvidenceStatus(raw) {
 }
 
 function parseVerify(md) {
-  const criteria = [];
+  const byId = new Map();
+  const rank = { mentioned: 1, passed: 2, failed: 3 };
+  const record = (id, status, summary) => {
+    const prev = byId.get(id);
+    if (!prev || (rank[status] || 0) >= (rank[prev.status] || 0)) {
+      byId.set(id, { id, status, summary: summary || (prev ? prev.summary : '') });
+    }
+  };
   for (const table of parseMarkdownTables(md)) {
     for (const row of table.rows) {
-      const idCandidate = row.ID || row.Id || row['Critério'] || row['Criterio'] || '';
-      const match = String(idCandidate).match(/A\d+/i);
-      if (!match) continue;
-      criteria.push({ id: match[0].toUpperCase(), status: normalizeEvidenceStatus(row.Status || row.Resultado || row.Result || row.Veredito || row['Passou?'] || ''), summary: row.Evidência || row.Evidencia || row.Resumo || row.Notas || '' });
+      const idCandidate = row.Aceite || row.ID || row.Id || row['Critério'] || row['Criterio'] || '';
+      const matches = String(idCandidate).match(/\bA\d+(?:\.\d+)?\b/gi) || [];
+      if (!matches.length) continue;
+      const st = normalizeEvidenceStatus(row.Status || row.Resultado || row.Result || row.Veredito || row['Passou?'] || '');
+      const sum = row.Evidência || row.Evidencia || row['Evidências'] || row.Check || row.Resumo || row.Notas || '';
+      for (const m of matches) record(m.toUpperCase(), st, sum);
     }
   }
-  return { criteria, mentionedCriteria: Array.from(new Set((md.match(/\bA\d+\b/g) || []).map((x) => x.toUpperCase()))), failed: /\b(verify_failed|falhou|falha|reprovad)\b/i.test(md), passed: /\b(verify_complete|aprovad|passou|sucesso)\b/i.test(md) };
+  const checksTotal = Number(firstMatch(md, /\*\*Checks:\*\*\s*(\d+)/i)) || null;
+  const checksPass = Number(firstMatch(md, /\*\*Pass:\*\*\s*(\d+)/i));
+  const checksFail = Number(firstMatch(md, /\*\*Fail:\*\*\s*(\d+)/i));
+  const coveragePct = Number(firstMatch(md, /\*\*Cobertura:\*\*\s*(\d+)%/i));
+  return {
+    criteria: Array.from(byId.values()),
+    mentionedCriteria: Array.from(new Set((md.match(/\bA\d+\b/g) || []).map((x) => x.toUpperCase()))),
+    failed: /\b(verify_failed|falhou|falha|reprovad)\b/i.test(md) || (Number.isFinite(checksFail) && checksFail > 0),
+    passed: /\b(verify_complete|aprovad|passou|sucesso)\b/i.test(md) || /\*\*All passed:\*\*\s*sim/i.test(md),
+    manifest: checksTotal != null ? {
+      total: checksTotal,
+      pass: Number.isFinite(checksPass) ? checksPass : 0,
+      fail: Number.isFinite(checksFail) ? checksFail : 0,
+      coveragePercent: Number.isFinite(coveragePct) ? coveragePct : null,
+    } : null,
+  };
 }
 
 function confidenceBand(confidence, threshold) {
@@ -216,7 +285,7 @@ function computeReadiness(ctx, threshold) {
   };
 }
 
-function buildCoverageMatrix(spec, plan, verify) {
+function buildCoverageMatrix(spec, plan, verify, program = null) {
   const taskMap = new Map();
   for (const task of plan.tasks) {
     for (const criterion of task.aceite || []) {
@@ -224,16 +293,43 @@ function buildCoverageMatrix(spec, plan, verify) {
       taskMap.get(criterion).push(task.id);
     }
   }
+  const phaseByCriterion = new Map();
+  if (program && Array.isArray(program.phases)) {
+    for (const ph of program.phases) {
+      for (const a of (ph.acceptance || [])) {
+        phaseByCriterion.set(String(a).toUpperCase(), ph);
+      }
+    }
+  }
   const verifyMap = new Map((verify.criteria || []).map((x) => [x.id, x]));
-  return spec.criteria.map((c) => ({
-    id: c.id,
-    criterion: c.criterion,
-    verifyHow: c.howToVerify,
-    tasks: taskMap.get(c.id) || [],
-    planCovered: taskMap.has(c.id),
-    verifyStatus: verifyMap.has(c.id) ? verifyMap.get(c.id).status : (verify.mentionedCriteria || []).includes(c.id) ? 'mentioned' : 'missing',
-    verifySummary: verifyMap.has(c.id) ? verifyMap.get(c.id).summary : '',
-  }));
+  return spec.criteria.map((c) => {
+    const ph = phaseByCriterion.get(c.id) || null;
+    const tasks = taskMap.get(c.id) || [];
+    const closedPhase = ph && String(ph.status || '').toLowerCase() === 'closed';
+    const rawVerify = verifyMap.has(c.id)
+      ? verifyMap.get(c.id).status
+      : (verify.mentionedCriteria || []).includes(c.id)
+        ? 'mentioned'
+        : closedPhase
+          ? 'passed'
+          : 'missing';
+    return {
+      id: c.id,
+      criterion: c.criterion,
+      risk: c.risk || '',
+      verifyHow: c.howToVerify,
+      phase: ph ? ph.id : null,
+      phaseStatus: ph ? ph.status : null,
+      tasks,
+      planCovered: tasks.length > 0 || Boolean(ph),
+      verifyStatus: rawVerify,
+      verifySummary: verifyMap.has(c.id)
+        ? verifyMap.get(c.id).summary
+        : closedPhase
+          ? `Fase ${ph.id} fechada e validada`
+          : '',
+    };
+  });
 }
 
 function computeCalibration(phase, confidence, verify, threshold) {
@@ -357,6 +453,289 @@ function updatePlanReviewCommentStatus(projectRoot, input = {}) {
   return comments[idx];
 }
 
+function collectLiveTelemetry(projectRoot, activeSession) {
+  const rootAbs = path.resolve(projectRoot);
+  let activeAgents = [];
+  let agentMessages = [];
+  const agentCollisions = [];
+  try {
+    const coord = require('./oxe-agent-coord.cjs');
+    activeAgents = coord.listActiveAgents(rootAbs, { readOnly: true }) || [];
+    agentMessages = coord.readAgentMessages(rootAbs, { limit: 40 }) || [];
+    const seenPairs = new Set();
+    for (const a of activeAgents) {
+      const files = Array.isArray(a.write_set) ? a.write_set : [];
+      if (!files.length) continue;
+      const col = coord.detectWriteSetCollisions(rootAbs, files, { readOnly: true, excludeAgentId: a.agent_id });
+      for (const hit of (col && col.collisions) || []) {
+        const pairKey = [hit.file, ...[a.agent_id, hit.agent_id].sort()].join('|');
+        if (seenPairs.has(pairKey)) continue;
+        seenPairs.add(pairKey);
+        agentCollisions.push({
+          file: hit.file,
+          agents: [a.agent_id, hit.agent_id],
+          providers: [a.provider, hit.provider],
+          branches: [a.branch || null, hit.branch || null],
+          tasks: [a.task || null, hit.task || null],
+        });
+      }
+    }
+  } catch { /* auxiliary */ }
+
+  let worktreeHygiene = { ok: true, total: 0, clean: [], dirty: [], orphans: [], warnings: [] };
+  try {
+    const gc = require('./oxe-worktree-gc.cjs');
+    if (typeof gc.summarizeWorktreeHygiene === 'function') {
+      const h = gc.summarizeWorktreeHygiene(rootAbs);
+      if (h && typeof h === 'object') worktreeHygiene = h;
+    }
+  } catch { /* non-git or unavailable */ }
+
+  let reevaluate = {
+    ok: false,
+    overall_status: 'unavailable',
+    base: null,
+    since: null,
+    upstream_commits_count: 0,
+    upstream_changed_files: [],
+    tasks: [],
+    summary: { no_impact: 0, mechanical_sync: 0, contract_drift: 0 },
+  };
+  try {
+    const reev = require('./oxe-reevaluate.cjs').reevaluateAgainstBase(rootAbs);
+    if (reev && typeof reev === 'object') reevaluate = reev;
+  } catch { /* non-git or no base ref */ }
+
+  let scorecardRouting = { ok: false, tiers: { fast: 0, balanced: 0, powerful: 0 }, auto_route: false, scorecard: null };
+  try {
+    const cfg = health.loadOxeConfigMerged(rootAbs).config || {};
+    const autoRoute = Boolean(cfg.models && cfg.models.auto_route === true);
+    const tierCounts = { fast: 0, balanced: 0, powerful: 0 };
+    const planJsonPath = path.join(rootAbs, '.oxe', 'PLAN.json');
+    if (fs.existsSync(planJsonPath)) {
+      const pdoc = JSON.parse(fs.readFileSync(planJsonPath, 'utf8'));
+      for (const t of (pdoc && Array.isArray(pdoc.tasks) ? pdoc.tasks : [])) {
+        const hint = t.model_hint || t.suggested_model_hint || 'balanced';
+        if (Object.prototype.hasOwnProperty.call(tierCounts, hint)) tierCounts[hint] += 1;
+      }
+    }
+    let sc = null;
+    try {
+      sc = operational.runtimeScorecard(rootAbs, activeSession || null, { withCi: true, withRouting: true });
+    } catch { sc = null; }
+    scorecardRouting = { ok: true, auto_route: autoRoute, tiers: tierCounts, scorecard: sc };
+  } catch { /* auxiliary */ }
+
+  let onboardSummary = null;
+  try {
+    const pack = require('./oxe-onboard.cjs').buildOnboardingPack(rootAbs, { activeSession: activeSession || null });
+    onboardSummary = {
+      stacks: (pack.project && pack.project.stacks) || [],
+      ci_mode: pack.ci ? pack.ci.mode : 'local-only',
+      ci_providers: (pack.ci && pack.ci.providers) || [],
+      alm_provider: (pack.alm && pack.alm.provider) || 'none',
+      alm_project: (pack.alm && pack.alm.project) || null,
+      env_ok: pack.environment ? Boolean(pack.environment.ok) : true,
+    };
+  } catch { /* auxiliary */ }
+
+  return {
+    active_agents: activeAgents,
+    agent_messages: agentMessages,
+    agent_collisions: agentCollisions,
+    worktree_hygiene: worktreeHygiene,
+    reevaluate,
+    scorecard_routing: scorecardRouting,
+    onboard_summary: onboardSummary,
+  };
+}
+
+function resolveFirstExisting(candidates) {
+  for (const cand of candidates) {
+    if (cand && fs.existsSync(cand)) return cand;
+  }
+  return candidates.find(Boolean) || null;
+}
+
+function readProgramState(projectRoot, activeSession) {
+  const candidates = [];
+  if (activeSession) {
+    candidates.push(path.join(projectRoot, '.oxe', activeSession, 'program', 'PROGRAM.json'));
+    candidates.push(path.join(projectRoot, '.oxe', activeSession, 'PROGRAM.json'));
+  }
+  candidates.push(path.join(projectRoot, '.oxe', 'program', 'PROGRAM.json'));
+  const filePath = candidates.find((c) => fs.existsSync(c));
+  if (!filePath) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    const phases = Array.isArray(raw && raw.phases) ? raw.phases : [];
+    const totalCount = phases.length;
+    const closedCount = phases.filter((ph) => String(ph.status || '').toLowerCase() === 'closed').length;
+    const activeCount = phases.filter((ph) => String(ph.status || '').toLowerCase() === 'active').length;
+    const pendingCount = Math.max(0, totalCount - closedCount - activeCount);
+    return {
+      path: filePath,
+      active_phase: raw.active_phase || null,
+      phases,
+      totalCount,
+      closedCount,
+      activeCount,
+      pendingCount,
+      allClosed: totalCount > 0 && closedCount === totalCount,
+      pct: totalCount > 0 ? Math.round((closedCount / totalCount) * 100) : 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function readDeliveryContext(projectRoot, activeSession) {
+  try {
+    const engine = require('./oxe-deliver-engine.cjs');
+    const found = engine.readDeliveryState(projectRoot, { session: activeSession || undefined });
+    if (!found || !found.state) return null;
+    const baseDir = path.dirname(found.file);
+    const deliveryJsonPath = path.join(baseDir, 'DELIVERY.json');
+    const deliveryMdPath = path.join(baseDir, 'DELIVERY.md');
+    let handoff = null;
+    try {
+      if (fs.existsSync(deliveryJsonPath)) handoff = JSON.parse(fs.readFileSync(deliveryJsonPath, 'utf8'));
+    } catch { handoff = null; }
+    const deliveryMd = readTextIfExists(deliveryMdPath);
+    return {
+      exists: true,
+      file: found.file,
+      state: found.state,
+      handoff,
+      deliveryMd: deliveryMd ? summarizeText(deliveryMd, 1800) : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function buildHumanGuidance(ctx) {
+  const collisions = ctx.agent_collisions || [];
+  const pendingGates = (ctx.enterprise && ctx.enterprise.gateQueue && ctx.enterprise.gateQueue.pending) || [];
+  const driftCount = (ctx.reevaluate && ctx.reevaluate.summary && ctx.reevaluate.summary.contract_drift) || 0;
+  const syncCount = (ctx.reevaluate && ctx.reevaluate.summary && ctx.reevaluate.summary.mechanical_sync) || 0;
+  const program = ctx.program || null;
+  const wt = ctx.worktree_hygiene || {};
+  const wtDirty = typeof wt.dirty === 'number' ? wt.dirty : Array.isArray(wt.dirty) ? wt.dirty.length : 0;
+  const verifyManifest = (ctx.verify && ctx.verify.parsed && ctx.verify.parsed.manifest) || null;
+  const criteriaTotal = (ctx.coverage || []).length;
+  const criteriaPassed = (ctx.coverage || []).filter((c) => c.verifyStatus === 'passed').length;
+
+  const checklist = [];
+  if (program && program.totalCount > 0) {
+    checklist.push({
+      status: program.allClosed ? 'done' : 'active',
+      text: `${program.closedCount}/${program.totalCount} fases do programa concluídas (${program.pct}%)`,
+    });
+  } else if (ctx.plan && ctx.plan.totalTasks > 0) {
+    checklist.push({ status: 'active', text: `${ctx.plan.totalTasks} tarefa(s) planejadas em ${(ctx.plan.waves || []).length} onda(s)` });
+  }
+  if (criteriaTotal > 0) {
+    checklist.push({
+      status: criteriaPassed === criteriaTotal ? 'done' : 'active',
+      text: `${criteriaPassed}/${criteriaTotal} critérios de aceite (A*) validados`,
+    });
+  }
+  if (verifyManifest && verifyManifest.total > 0) {
+    checklist.push({
+      status: verifyManifest.fail === 0 ? 'done' : 'blocked',
+      text: `${verifyManifest.pass}/${verifyManifest.total} checks de verificação aprovados${verifyManifest.coveragePercent != null ? ` (${verifyManifest.coveragePercent}% evidência)` : ''}`,
+    });
+  }
+  checklist.push({
+    status: collisions.length ? 'blocked' : 'done',
+    text: collisions.length ? `${collisions.length} colisão(ões) de arquivos entre agentes` : 'Sem colisões entre agentes ativos',
+  });
+  if (wtDirty > 0 || wt.needs_gc) {
+    checklist.push({
+      status: 'warning',
+      text: `${wt.total || 0} worktree(s) no repositório (${wtDirty} com alterações locais) — opcional revisar limpeza`,
+    });
+  }
+
+  let tone = 'active';
+  let badgeLabel = 'Em andamento';
+  let headline = 'Acompanhe o próximo passo da trilha';
+  let explanation = (ctx.nextStep && ctx.nextStep.reason) || 'Verifique o progresso nas fases e avance pelo CLI.';
+  let command = (ctx.nextStep && ctx.nextStep.cursorCmd) || 'oxe-cc status';
+  let ctaLabel = 'Ver Fases & Tarefas';
+  let ctaTab = 'plan';
+
+  if (collisions.length > 0) {
+    tone = 'blocked';
+    badgeLabel = 'Colisão detectada';
+    headline = `Atenção: ${collisions.length} arquivo(s) editado(s) por dois agentes ao mesmo tempo`;
+    explanation = 'Coordene os agentes antes de continuar para evitar sobrescrita de trabalho entre worktrees.';
+    command = 'oxe-cc agents collisions';
+    ctaLabel = 'Abrir Agentes & Colisões';
+    ctaTab = 'agents';
+  } else if (pendingGates.length > 0) {
+    tone = 'warning';
+    badgeLabel = 'Ação humana pendente';
+    headline = `Há ${pendingGates.length} gate(s) aguardando sua aprovação`;
+    explanation = 'O runtime pausou uma ação sensível. Aprove, dispense ou rejeite na aba de Execução.';
+    command = 'oxe-cc runtime gates';
+    ctaLabel = 'Resolver Gates Agora';
+    ctaTab = 'execution';
+  } else if (driftCount > 0) {
+    tone = 'warning';
+    badgeLabel = 'Drift na base';
+    headline = `${driftCount} tarefa(s) pendente(s) sofreram drift contra a branch base`;
+    explanation = 'Novos commits entraram na base e tocam arquivos planejados. Reavalie o impacto antes de executar ou promover.';
+    command = 'oxe-cc reevaluate';
+    ctaLabel = 'Ver Drift na Base';
+    ctaTab = 'reevaluate';
+  } else if (program && program.allClosed && (ctx.phase === 'verify_complete' || (ctx.verify && ctx.verify.parsed && ctx.verify.parsed.passed))) {
+    tone = 'done';
+    badgeLabel = 'Entrega concluída';
+    headline = `Todas as ${program.totalCount} fases foram fechadas e verificadas`;
+    explanation = 'Nenhuma pendência de implementação nesta sessão. Confira o resumo das fases ou rode os gates de envio/release quando estiver pronto.';
+    command = 'oxe-cc ship status';
+    ctaLabel = 'Revisar Fases Entregues';
+    ctaTab = 'plan';
+  } else if (program && program.active_phase) {
+    const activePh = program.phases.find((ph) => ph.id === program.active_phase);
+    tone = 'active';
+    badgeLabel = `Fase ${program.active_phase} ativa`;
+    headline = activePh ? `Em execução: ${activePh.id} — ${activePh.title}` : `Executando fase ${program.active_phase}`;
+    explanation = 'Implemente as tarefas pendentes da fase atual e rode a verificação antes de fechar a fase.';
+    command = 'oxe-cc runtime verify';
+    ctaLabel = 'Abrir Fases & Tarefas';
+    ctaTab = 'plan';
+  } else if (ctx.phase === 'plan_ready' && ctx.planReviewStatus !== 'approved' && !ctx.isLean) {
+    tone = 'active';
+    badgeLabel = 'Aguardando aprovação';
+    headline = 'Revise e aprove o plano antes de executar';
+    explanation = 'Confira as tarefas e critérios de aceite abaixo e clique em Aprovar plano para liberar a execução.';
+    command = 'oxe-cc plan lint';
+    ctaLabel = 'Revisar Plano';
+    ctaTab = 'plan';
+  } else if (syncCount > 0) {
+    tone = 'warning';
+    badgeLabel = 'Sync recomendado';
+    headline = `${syncCount} tarefa(s) precisa(m) de sincronização mecânica com a base`;
+    explanation = 'Não há quebra de contrato, mas vale sincronizar recursos sequenciais antes do promote.';
+    command = 'oxe-cc sync --dry-run';
+    ctaLabel = 'Ver Drift na Base';
+    ctaTab = 'reevaluate';
+  } else if (!ctx.readiness.go && (ctx.readiness.blockers || []).length > 0) {
+    tone = 'blocked';
+    badgeLabel = 'Bloqueado';
+    headline = 'Existem bloqueios impedindo o avanço';
+    explanation = `Resolva os bloqueios apontados (${ctx.readiness.blockers.slice(0, 3).join(', ')}) antes de executar ou publicar.`;
+    command = 'oxe-cc doctor --project';
+    ctaLabel = 'Ver Diagnóstico';
+    ctaTab = 'execution';
+  }
+
+  return { tone, badgeLabel, headline, explanation, command, ctaLabel, ctaTab, checklist };
+}
+
 function loadDashboardContext(projectRoot, opts = {}) {
   const globalPaths = health.oxePaths(projectRoot);
   const stateText = readTextIfExists(globalPaths.state) || '';
@@ -364,11 +743,19 @@ function loadDashboardContext(projectRoot, opts = {}) {
   const p = reviewPaths(projectRoot, activeSession || null);
   const rootScoped = reviewPaths(projectRoot, null);
   const report = health.buildHealthReport(projectRoot);
-  const specText = readScopedText(p.spec, rootScoped.spec);
+  const cfgMerged = health.loadOxeConfigMerged(projectRoot).config || {};
+  const isLean = cfgMerged.profile === 'lean' || cfgMerged.plan_ceremony === 'lean';
+  const resolvedSpecPath = resolveFirstExisting([
+    activeSession ? path.join(projectRoot, '.oxe', activeSession, 'SPEC.md') : null,
+    p.spec,
+    rootScoped.spec,
+  ]);
+  const specText = resolvedSpecPath ? readTextIfExists(resolvedSpecPath) || '' : '';
   const planText = readScopedText(p.plan, rootScoped.plan);
   const verifyText = readScopedText(p.verify, rootScoped.verify);
   const runtimeText = readScopedText(p.runtime, rootScoped.runtime);
   const checkpointsText = readScopedText(p.checkpoints, rootScoped.checkpoints);
+  const program = readProgramState(projectRoot, activeSession || null);
   const spec = parseSpec(specText);
   const plan = parsePlan(planText);
   const runtime = parseRuntime(runtimeText);
@@ -387,17 +774,24 @@ function loadDashboardContext(projectRoot, opts = {}) {
   const sessions = parseSessionsIndex(sessionsRaw);
   const sessionPath = activeSession ? path.join(projectRoot, '.oxe', activeSession, 'SESSION.md') : null;
   const sessionRaw = sessionPath ? readTextIfExists(sessionPath) || '' : '';
+  const phaseCriteriaSet = new Set();
+  if (program && Array.isArray(program.phases)) {
+    for (const ph of program.phases) for (const a of (ph.acceptance || [])) phaseCriteriaSet.add(String(a).toUpperCase());
+  }
   const ctx = {
     projectRoot: path.resolve(projectRoot),
+    projectName: path.basename(path.resolve(projectRoot)),
     workspaceMode: report.workspaceMode || 'oxe_project',
+    isLean,
+    program,
     releaseReadiness: report.releaseReadiness || null,
     activeSession: activeSession || null,
     phase: report.phase || health.parseStatePhase(stateText),
     healthStatus: report.healthStatus,
     nextStep: report.next,
     planReviewStatus: report.planReviewStatus || 'draft',
-    state: { path: globalPaths.state, raw: stateText, parsed: { phase: health.parseStatePhase(stateText), activeSession, runtimeStatus: firstMatch(stateText, /\*\*runtime_status:\*\*\s*([^\n]+)/i) } },
-    spec: { path: p.spec, raw: specText, objective: spec.objective, criteria: spec.criteria, uncoveredCriteria: spec.criteria.filter((c) => !plan.tasks.some((t) => (t.aceite || []).includes(c.id))) },
+    state: { path: globalPaths.state, raw: stateText, parsed: { phase: health.parseStatePhase(stateText), activeSession, runtimeStatus: sanitizeTemplateValue(firstMatch(stateText, /\*\*runtime_status:\*\*\s*([^\n]+)/i)) } },
+    spec: { path: resolvedSpecPath || p.spec, raw: specText, objective: spec.objective, criteria: spec.criteria, uncoveredCriteria: spec.criteria.filter((c) => !plan.tasks.some((t) => (t.aceite || []).includes(c.id)) && !phaseCriteriaSet.has(c.id)) },
     plan: { path: p.plan, raw: planText, tasks: plan.tasks, waves: plan.waves, totalTasks: plan.totalTasks, selfEvaluation: report.planSelfEvaluation },
     executionRationality: report.executionRationality || null,
     runtime: { path: p.runtime, raw: runtimeText, summary: summarizeText(runtimeText, 800), parsed: runtime },
@@ -474,10 +868,14 @@ function loadDashboardContext(projectRoot, opts = {}) {
     };
   }
   ctx.readiness = computeReadiness(ctx, report.planConfidenceThreshold || 90);
-  ctx.coverage = buildCoverageMatrix(ctx.spec, ctx.plan, verify);
+  ctx.coverage = buildCoverageMatrix(ctx.spec, ctx.plan, verify, program);
   ctx.calibration = computeCalibration(ctx.phase, ctx.plan.selfEvaluation.confidence, verify, ctx.readiness.threshold);
+  const runtimeEffectiveStatus = ctx.runtime.parsed.status || (ctx.activeRun && ctx.activeRun.status) || null;
+  const verifyDetail = verify.manifest
+    ? `${verify.manifest.pass}/${verify.manifest.total} checks aprovados`
+    : ctx.calibration.status;
   ctx.visual = {
-    flow: { nodes: [{ label: 'STATE', status: 'done' }, { label: 'SPEC', status: ctx.spec.raw ? 'done' : 'pending' }, { label: 'PLAN', status: ctx.plan.raw ? 'done' : 'pending' }, { label: 'REVIEW', status: ctx.planReviewStatus === 'approved' ? 'done' : /(rejected|needs_revision)/i.test(ctx.planReviewStatus) ? 'blocked' : 'active' }, { label: 'EXECUTE', status: ctx.runtime.parsed.status === 'running' ? 'active' : ctx.runtime.raw ? 'done' : 'pending' }, { label: 'CHECKPOINTS', status: ctx.readiness.checkpointPending ? 'active' : ctx.checkpoints.parsed.length ? 'done' : 'pending' }, { label: 'VERIFY', status: ctx.verify.raw ? 'done' : 'pending' }, { label: 'LESSONS', status: 'pending' }] },
+    flow: { nodes: [{ label: 'STATE', status: 'done' }, { label: 'SPEC', status: ctx.spec.raw ? 'done' : 'pending' }, { label: 'PLAN', status: ctx.plan.raw ? 'done' : 'pending' }, { label: 'REVIEW', status: (ctx.planReviewStatus === 'approved' || (isLean && program && program.allClosed)) ? 'done' : /(rejected|needs_revision)/i.test(ctx.planReviewStatus) ? 'blocked' : 'active' }, { label: 'EXECUTE', status: runtimeEffectiveStatus === 'running' ? 'active' : (ctx.runtime.raw || ctx.activeRun) ? 'done' : 'pending' }, { label: 'CHECKPOINTS', status: ctx.readiness.checkpointPending ? 'active' : ctx.checkpoints.parsed.length ? 'done' : 'pending' }, { label: 'VERIFY', status: ctx.verify.raw ? 'done' : 'pending' }, { label: 'LESSONS', status: 'pending' }] },
     artifactGraph: [
       { id: 'state', label: 'STATE', path: ctx.state.path, detail: ctx.phase || 'índice global', status: 'done' },
       { id: 'spec', label: 'SPEC', path: ctx.spec.path, detail: ctx.spec.objective || 'contrato', status: ctx.spec.raw ? 'done' : 'pending' },
@@ -487,7 +885,7 @@ function loadDashboardContext(projectRoot, opts = {}) {
         label: 'IMPLEMENTATION PACK',
         path: ctx.executionRationality && ctx.executionRationality.implementationPack ? ctx.executionRationality.implementationPack.path : '—',
         detail: ctx.executionRationality && ctx.executionRationality.implementationPack ? `${ctx.executionRationality.implementationPack.taskCount || 0} contratos` : 'sem contrato',
-        status: ctx.executionRationality && ctx.executionRationality.implementationPackReady ? 'done' : 'blocked',
+        status: ctx.executionRationality && ctx.executionRationality.implementationPackReady ? 'done' : (isLean && program && program.allClosed) ? 'done' : 'blocked',
       },
       {
         id: 'reference-anchors',
@@ -503,12 +901,12 @@ function loadDashboardContext(projectRoot, opts = {}) {
         detail: ctx.executionRationality && ctx.executionRationality.fixturePack ? `${ctx.executionRationality.fixturePack.fixtureCount || 0} fixtures` : 'sem fixtures',
         status: ctx.executionRationality && ctx.executionRationality.fixturePackReady ? 'done' : 'blocked',
       },
-      { id: 'review', label: 'PLAN REVIEW', path: ctx.review.markdownPath, detail: ctx.planReviewStatus, status: ctx.planReviewStatus === 'approved' ? 'done' : 'active' },
-      { id: 'runtime', label: 'RUNTIME', path: ctx.runtime.path, detail: ctx.runtime.parsed.status || 'sem status', status: ctx.runtime.raw ? 'active' : 'pending' },
-      { id: 'active-run', label: 'ACTIVE RUN', path: operational.operationalPaths(projectRoot, activeSession || null).activeRun, detail: ctx.activeRun && ctx.activeRun.run_id ? `${ctx.activeRun.run_id} · ${ctx.activeRun.status}` : 'sem run ativo', status: ctx.activeRun ? 'active' : 'pending' },
+      { id: 'review', label: 'PLAN REVIEW', path: ctx.review.markdownPath, detail: isLean && ctx.planReviewStatus === 'draft' ? 'lean (testes congelados)' : ctx.planReviewStatus, status: (ctx.planReviewStatus === 'approved' || isLean) ? 'done' : 'active' },
+      { id: 'runtime', label: 'RUNTIME', path: ctx.runtime.path, detail: runtimeEffectiveStatus || 'sem status', status: runtimeEffectiveStatus === 'completed' ? 'done' : (ctx.runtime.raw || ctx.activeRun) ? 'active' : 'pending' },
+      { id: 'active-run', label: 'ACTIVE RUN', path: operational.operationalPaths(projectRoot, activeSession || null).activeRun, detail: ctx.activeRun && ctx.activeRun.run_id ? `${ctx.activeRun.run_id} · ${ctx.activeRun.status}` : 'sem run ativo', status: ctx.activeRun && ctx.activeRun.status === 'completed' ? 'done' : ctx.activeRun ? 'active' : 'pending' },
       { id: 'events', label: 'TRACE', path: operational.operationalPaths(projectRoot, activeSession || null).events, detail: `${ctx.tracing.summary.total} evento(s)`, status: ctx.tracing.summary.total ? 'done' : 'pending' },
       { id: 'checkpoints', label: 'CHECKPOINTS', path: ctx.checkpoints.path, detail: `${ctx.checkpoints.parsed.length} gates`, status: ctx.readiness.checkpointPending ? 'active' : 'pending' },
-      { id: 'verify', label: 'VERIFY', path: ctx.verify.path, detail: ctx.calibration.status, status: ctx.verify.raw ? 'done' : 'pending' },
+      { id: 'verify', label: 'VERIFY', path: ctx.verify.path, detail: verifyDetail, status: ctx.verify.raw ? 'done' : 'pending' },
     ],
   };
   if (ctx.azure) {
@@ -530,84 +928,360 @@ function loadDashboardContext(projectRoot, opts = {}) {
     );
   }
   ctx.operationalGraph = ctx.activeRun ? operational.buildOperationalGraph(ctx.activeRun) : { nodes: [], edges: [] };
-  ctx.dashboard = { readOnly: false };
+  const live = collectLiveTelemetry(projectRoot, activeSession || null);
+  ctx.active_agents = live.active_agents;
+  ctx.agent_messages = live.agent_messages;
+  ctx.agent_collisions = live.agent_collisions;
+  ctx.worktree_hygiene = live.worktree_hygiene;
+  ctx.reevaluate = live.reevaluate;
+  ctx.scorecard_routing = live.scorecard_routing;
+  ctx.onboard_summary = live.onboard_summary;
+  ctx.delivery = readDeliveryContext(projectRoot, activeSession || null);
+  ctx.guidance = buildHumanGuidance(ctx);
+  ctx.dashboard = { readOnly: false, version: 'v2' };
   return ctx;
 }
 
 function dashboardHtml() {
-  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>OXE Dashboard</title><style>
-  :root{--bg:#f4efe6;--bg2:#edf4ed;--panel:#fff;--ink:#1d2f3e;--muted:#617787;--line:#dbe3e8;--brand:#173f58;--ok:#1f7a52;--warn:#9d6b12;--bad:#a53e3e;--info:#235f84;--okbg:#e4f3eb;--warnbg:#fbf0da;--badbg:#f8e8e8;--infobg:#e5eff7;--shadow:0 16px 40px rgba(17,32,44,.08);--radius:18px}*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,var(--bg),var(--bg2));font-family:"Segoe UI",Arial,sans-serif;color:var(--ink)}.page{max-width:1560px;margin:0 auto;padding:24px}.hero,.stats,.tabs,.grid2,.grid3,.layout{display:grid;gap:16px}.hero{grid-template-columns:1.2fr .8fr}.stats{grid-template-columns:repeat(5,minmax(0,1fr));margin:0 0 16px}.layout{grid-template-columns:1.45fr .95fr}.grid2{grid-template-columns:repeat(2,minmax(0,1fr))}.grid3{grid-template-columns:repeat(3,minmax(0,1fr))}.panel,.metric,.mini,.item,.entry{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}.panel{padding:18px}.metric,.mini,.item,.entry{padding:14px}.stack,.list,.rail{display:grid;gap:14px}.rail{grid-template-columns:repeat(8,minmax(100px,1fr))}.tabs{grid-template-columns:repeat(7,max-content)}.tab{padding:10px 14px;border:1px solid var(--line);border-radius:999px;background:#fff;cursor:pointer;font-weight:700}.tab.active{background:var(--brand);color:#fff;border-color:var(--brand)}.view{display:none}.view.active{display:block}.label{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}.value{font-size:24px;font-weight:800;margin-top:6px}.muted{color:var(--muted)}.small{font-size:13px}.badge{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;padding:6px 10px;font-size:11px;text-transform:uppercase;font-weight:800}.done{background:var(--okbg);color:var(--ok)}.active{background:var(--infobg);color:var(--info)}.warning{background:var(--warnbg);color:var(--warn)}.blocked{background:var(--badbg);color:var(--bad)}.pending{background:#edf1f4;color:#567181}.head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:12px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}button{border:0;border-radius:12px;padding:10px 12px;font-weight:700;cursor:pointer}.primary{background:var(--brand);color:#fff}.secondary{background:#edf2f5;color:var(--ink)}.warnbtn{background:#f2e3c5;color:#81540a}.danger{background:#f5dada;color:#8d3030}input,select,textarea{width:100%;border:1px solid var(--line);border-radius:12px;padding:10px;font:inherit}.form{display:grid;gap:10px}.raw{white-space:pre-wrap;background:#f8faf9;border:1px solid var(--line);border-radius:12px;padding:12px;max-height:220px;overflow:auto}.chip{display:inline-flex;border-radius:999px;padding:4px 8px;background:#eef3f6;color:#355267;font-size:12px;margin:4px 6px 0 0}.node{padding:12px;border:1px solid var(--line);border-radius:16px;background:#fff}.go{background:linear-gradient(180deg,#f2fbf5,#ebf7ef)}.nogo{background:linear-gradient(180deg,#fff5f5,#faeded)}@media (max-width:1200px){.hero,.layout{grid-template-columns:1fr}.rail{grid-template-columns:repeat(4,minmax(100px,1fr))}}@media (max-width:860px){.stats,.grid2,.grid3,.tabs,.rail{grid-template-columns:1fr}.page{padding:16px}}</style></head><body><div class="page"><div class="hero"><div class="panel"><h1 style="margin:0;font-size:42px">OXE Decision Control Room</h1><div class="muted" style="margin-top:10px">Control room para decisões reais de Go / No-Go, sem duplicar a fonte de verdade textual do OXE.</div></div><div class="grid2"><div class="mini"><div class="label">Projeto</div><div class="small" id="hero-project">—</div></div><div class="mini"><div class="label">Sessão</div><div class="value" id="hero-session">—</div></div><div class="mini"><div class="label">Próximo passo</div><div class="small" id="hero-next">—</div></div><div class="mini"><div class="label">Confiança</div><div class="value" id="hero-confidence">—</div></div></div></div><div id="app">Carregando…</div></div><script>
-  const app=document.getElementById('app');let ctx=null;let tab='decision';let session=null;
-  const esc=(s)=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); const cls=(s)=>{const v=String(s||'').toLowerCase();if(/(healthy|approved|done|go|well-calibrated|passed|ready|completed)/.test(v))return'done';if(/(running|in_review|active|mentioned|acceptable|controlled|replaying)/.test(v))return'active';if(/(rejected|needs_revision|blocked|failed|no-go|overconfident|do_not_execute|aborted|waiting_approval)/.test(v))return'blocked';if(/(risk|warning|underconfident|needs_refinement|paused)/.test(v))return'warning';return'pending';}; const badge=(s,l)=>'<span class="badge '+cls(s)+'">'+esc(l||s||'pending')+'</span>'; const list=(items,empty)=>items&&items.length?'<div class="list">'+items.join('')+'</div>':'<div class="entry small">'+esc(empty)+'</div>'; const runtimeDisabled=()=>ctx&&ctx.dashboard&&ctx.dashboard.readOnly;
-  async function api(url,opts={}){const res=await fetch(url,{headers:{'Content-Type':'application/json'},...opts});if(!res.ok)throw new Error(await res.text());return res.json();} async function refresh(){ctx=await api('/api/context'+(session?'?session='+encodeURIComponent(session):''));render();}
-  function render(){document.getElementById('hero-project').textContent=ctx.projectRoot||'—';document.getElementById('hero-session').textContent=ctx.activeSession||'modo legado';document.getElementById('hero-next').textContent=(ctx.nextStep.step||'—')+' · '+(ctx.nextStep.reason||'—');document.getElementById('hero-confidence').textContent=ctx.readiness.confidence!=null?ctx.readiness.confidence+'%':'—';
-    const flow=(ctx.visual.flow.nodes||[]).map((n)=>'<div class="node"><div class="label">Etapa</div><div style="font-weight:800;font-size:18px;margin-top:6px">'+esc(n.label)+'</div><div style="margin-top:10px">'+badge(n.status)+'</div></div>');
-    const graph=(ctx.visual.artifactGraph||[]).map((n)=>'<div class="item"><div class="head"><strong>'+esc(n.label)+'</strong>'+badge(n.status)+'</div><div class="small">'+esc(n.detail||'—')+'</div><div class="small muted" style="margin-top:8px">'+esc(n.path||'—')+'</div></div>');
-    const waves=(ctx.plan.waves||[]).map((w)=>'<div class="panel"><div class="head"><div><strong>Onda '+esc(w.wave)+'</strong><div class="small muted">'+esc(w.taskIds.length)+' tarefas</div></div>'+badge(String(ctx.runtime.parsed.currentWave)===String(w.wave)?'running':'planned')+'</div>'+w.tasks.map((t)=>'<div class="entry"><div style="font-weight:800">'+esc(t.id)+' — '+esc(t.title)+'</div><div class="small muted" style="margin-top:6px">Depende de: '+esc(t.dependsOn.length?t.dependsOn.join(', '):'—')+'</div><div class="small muted">Verificação: '+esc(t.verifyCommand||'—')+'</div><div class="small" style="margin-top:6px">'+(t.aceite||[]).map((x)=>'<span class="chip">'+esc(x)+'</span>').join('')+(t.decisions||[]).map((x)=>'<span class="chip">'+esc(x)+'</span>').join('')+'</div></div>').join('')+'</div>');
-    const coverage=(ctx.coverage||[]).map((c)=>'<div class="item"><div class="head"><strong>'+esc(c.id)+'</strong>'+badge(c.verifyStatus,c.verifyStatus)+'</div><div class="small">'+esc(c.criterion)+'</div><div class="small muted" style="margin-top:8px">Plano: '+esc(c.tasks.length?c.tasks.join(', '):'sem cobertura')+'</div><div class="small muted">Verify: '+esc(c.verifySummary||c.verifyHow||'sem evidência explícita')+'</div></div>');
-    const checkpoints=(ctx.checkpoints.parsed||[]).map((c)=>'<div class="item"><div class="head"><strong>'+esc(c.id)+'</strong>'+badge(c.status)+'</div><div class="small muted">Tipo: '+esc(c.type)+' · Fase: '+esc(c.phase||'—')+' · Escopo: '+esc(c.scope||'—')+'</div><div class="small" style="margin-top:8px">'+esc(c.notes||'—')+'</div></div>');
-    const agents=((ctx.runtime.parsed.agents&&ctx.runtime.parsed.agents.length)?ctx.runtime.parsed.agents:(ctx.blueprint&&ctx.blueprint.agents)||[]).map((a)=>'<div class="item"><div class="head"><strong>'+esc(a.id||a.name||'agent')+'</strong>'+badge(a.status||a.model_hint||'planned')+'</div><div class="small muted">'+esc(a.role||a.persona||'—')+'</div><div class="small">Tarefas: '+esc((a.tasks||[]).join(', ')||a.scope||'—')+'</div></div>');
+  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>OXE Control Room</title><style>
+  :root{
+    --bg:#090d16;--bg2:#0d1322;--sidebar:#0d1526;--panel:#121b2e;--card:#162238;--card2:#1c2b47;
+    --ink:#f8fafc;--ink2:#cbd5e1;--muted:#94a3b8;
+    --line:#22314d;--line-strong:#35507e;
+    --brand:#1d4ed8;--brand-hi:#2563eb;--brand-light:#60a5fa;--brand-soft:rgba(37,99,235,.16);--brand-glow:rgba(37,99,235,.28);
+    --ok:#34d399;--okbg:rgba(16,185,129,.15);
+    --warn:#fbbf24;--warnbg:rgba(245,158,11,.15);
+    --bad:#fb7185;--badbg:rgba(244,63,94,.16);
+    --shadow:0 14px 34px rgba(0,0,0,.35);--radius:14px
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(circle at top right,rgba(37,99,235,.16),transparent 42%),linear-gradient(180deg,var(--bg),var(--bg2));font-family:"Segoe UI",system-ui,-apple-system,sans-serif;color:var(--ink);min-height:100vh}
+  .shell{display:grid;grid-template-columns:248px minmax(0,1fr);min-height:100vh}
+  .nav{background:var(--sidebar);border-right:1px solid var(--line);padding:18px 14px;display:flex;flex-direction:column;gap:16px;position:sticky;top:0;height:100vh;overflow-y:auto}
+  .brand-box{padding:14px;border-radius:var(--radius);background:linear-gradient(135deg,rgba(29,78,216,.36),rgba(13,21,38,.95));border:1px solid var(--brand-hi);box-shadow:0 0 22px var(--brand-glow)}
+  .brand-title{font-size:17px;font-weight:900;letter-spacing:.01em;color:#fff;display:flex;align-items:center;justify-content:space-between}
+  .brand-sub{font-size:12px;color:var(--ink2);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .nav-group{display:grid;gap:5px}
+  .nav-label{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);padding:0 10px;margin:2px 0;font-weight:700}
+  .nav-btn{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:9px 11px;border-radius:10px;border:1px solid transparent;background:transparent;color:var(--ink2);font-size:13px;font-weight:600;cursor:pointer;text-align:left;transition:all .15s ease}
+  .nav-btn:hover{background:rgba(37,99,235,.12);border-color:var(--line-strong);color:#fff}
+  .nav-btn.active{background:linear-gradient(90deg,var(--brand),var(--brand-hi));border-color:var(--brand-light);color:#fff;font-weight:700;box-shadow:0 6px 16px var(--brand-glow)}
+  .nav-pill{font-size:11px;padding:2px 8px;border-radius:999px;background:rgba(255,255,255,.11);color:#fff;font-weight:700}
+  .nav-pill.alert{background:var(--badbg);color:var(--bad)}
+  .nav-pill.warn{background:var(--warnbg);color:var(--warn)}
+  .main{padding:24px 28px;max-width:1360px;width:100%;margin:0 auto}
+  .topbar{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:20px}
+  .topbar h1{margin:0;font-size:24px;font-weight:900;color:#fff;letter-spacing:-.01em}
+  .topbar-sub{font-size:13px;color:var(--muted);margin-top:4px}
+  .topbar-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .hero{border-radius:16px;padding:22px 24px;margin-bottom:18px;border:1px solid var(--line-strong);box-shadow:var(--shadow);display:grid;gap:14px}
+  .hero.done{background:linear-gradient(135deg,rgba(16,185,129,.15),rgba(29,78,216,.24));border-color:rgba(52,211,153,.45)}
+  .hero.active{background:linear-gradient(135deg,rgba(37,99,235,.26),rgba(18,27,46,.96));border-color:rgba(96,165,250,.5)}
+  .hero.warning{background:linear-gradient(135deg,rgba(245,158,11,.17),rgba(18,27,46,.96));border-color:rgba(251,191,36,.45)}
+  .hero.blocked{background:linear-gradient(135deg,rgba(244,63,94,.20),rgba(18,27,46,.96));border-color:rgba(251,113,133,.5)}
+  .hero-top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+  .hero-title{font-size:22px;font-weight:900;color:#fff;margin:6px 0 0;line-height:1.25}
+  .hero-desc{font-size:14px;color:var(--ink2);line-height:1.5;max-width:780px}
+  .cmd-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:rgba(9,13,22,.65);border:1px solid var(--line-strong);border-radius:11px;padding:10px 14px}
+  .cmd-bar code{background:transparent;padding:0;font-size:13px;color:#93c5fd;font-weight:700;flex:1;min-width:180px}
+  .signals{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:18px}
+  .signal{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:15px 16px;cursor:pointer;text-align:left;transition:all .15s ease;display:grid;gap:6px}
+  .signal:hover{border-color:var(--brand-light);transform:translateY(-1px);background:var(--card)}
+  .signal-val{font-size:18px;font-weight:800;color:#fff;display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .layout{display:grid;grid-template-columns:1.35fr 1fr;gap:16px}
+  .grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  .grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+  .stack,.list{display:grid;gap:14px;align-content:start}
+  .panel,.item,.entry{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius)}
+  .panel{padding:18px 20px;box-shadow:var(--shadow)}
+  .item,.entry{padding:13px 15px;background:var(--card)}
+  .view{display:none}.view.active{display:block}
+  .label{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700}
+  .muted{color:var(--muted)}.small{font-size:13px;color:var(--ink2);line-height:1.45}
+  .head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:12px}
+  .head h2{margin:0;font-size:16px;color:#fff;font-weight:800}
+  h3{margin:14px 0 8px;font-size:13px;color:var(--brand-light);text-transform:uppercase;letter-spacing:.06em}
+  .badge{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;padding:4px 10px;font-size:11px;text-transform:uppercase;font-weight:800;letter-spacing:.04em;white-space:nowrap}
+  .done{background:var(--okbg);color:var(--ok);border:1px solid rgba(52,211,153,.35)}
+  .active{background:var(--brand-soft);color:var(--brand-light);border:1px solid rgba(96,165,250,.4)}
+  .warning{background:var(--warnbg);color:var(--warn);border:1px solid rgba(251,191,36,.35)}
+  .blocked{background:var(--badbg);color:var(--bad);border:1px solid rgba(251,113,133,.38)}
+  .pending{background:rgba(148,163,184,.14);color:var(--ink2);border:1px solid var(--line)}
+  .progress-wrap{background:#0b1120;border:1px solid var(--line);border-radius:999px;height:10px;overflow:hidden;margin:10px 0 14px}
+  .progress-bar{height:100%;background:linear-gradient(90deg,var(--brand-hi),var(--ok));border-radius:999px;transition:width .3s ease}
+  .phase-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 14px;border-radius:12px;background:var(--card);border:1px solid var(--line)}
+  .check-row{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border-radius:10px;background:var(--card);border:1px solid var(--line);font-size:13px;color:var(--ink2)}
+  .dot{width:9px;height:9px;border-radius:999px;margin-top:5px;flex-shrink:0}
+  .dot.done{background:var(--ok)}.dot.active{background:var(--brand-light)}.dot.warning{background:var(--warn)}.dot.blocked{background:var(--bad)}
+  .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  button{border:1px solid transparent;border-radius:10px;padding:8px 13px;font-weight:700;font-size:12px;cursor:pointer;transition:all .14s ease}
+  .primary{background:var(--brand-hi);color:#fff;border-color:var(--brand-light)}.primary:hover{background:var(--brand)}
+  .secondary{background:var(--card2);color:var(--ink);border-color:var(--line-strong)}.secondary:hover{border-color:var(--brand-light)}
+  .warnbtn{background:var(--warnbg);color:var(--warn);border-color:rgba(251,191,36,.4)}
+  .danger{background:var(--badbg);color:var(--bad);border-color:rgba(251,113,133,.4)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  input,select,textarea{width:100%;background:#0c1322;color:var(--ink);border:1px solid var(--line-strong);border-radius:10px;padding:10px;font:inherit;font-size:13px}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--brand-light);box-shadow:0 0 0 3px var(--brand-glow)}
+  .form{display:grid;gap:10px;margin-top:10px}
+  .raw{white-space:pre-wrap;font-family:Consolas,"Cascadia Code",monospace;font-size:12px;background:#0a0f1c;color:var(--ink2);border:1px solid var(--line);border-radius:10px;padding:12px;max-height:260px;overflow:auto;margin-top:10px}
+  .chip{display:inline-flex;border-radius:999px;padding:3px 9px;background:var(--brand-soft);color:var(--brand-light);border:1px solid rgba(96,165,250,.3);font-size:11px;font-weight:700;margin:3px 5px 0 0}
+  code{background:#0c1322;color:#93c5fd;padding:2px 6px;border-radius:6px;font-family:Consolas,monospace;font-size:12px}
+  details{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+  details summary{cursor:pointer;font-weight:700;font-size:13px;color:var(--brand-light);list-style:none;display:flex;justify-content:space-between;align-items:center}
+  details summary::after{content:"▸";color:var(--muted)}
+  details[open] summary::after{content:"▾"}
+  @media (max-width:1180px){.signals{grid-template-columns:repeat(2,minmax(0,1fr))}.layout{grid-template-columns:1fr}}
+  @media (max-width:860px){.shell{grid-template-columns:1fr}.nav{position:static;height:auto}.signals,.grid2,.grid3{grid-template-columns:1fr}}
+  </style></head><body>
+  <div class="shell">
+    <aside class="nav">
+      <div class="brand-box">
+        <div class="brand-title"><span>OXE Control Room</span><span class="nav-pill">v2</span></div>
+        <div class="brand-sub" id="nav-project">Carregando…</div>
+      </div>
+      <div class="nav-group">
+        <div class="nav-label">Acompanhar</div>
+        <button class="nav-btn active" data-tab="overview" onclick="setTab('overview')"><span>Agora (Resumo)</span><span class="nav-pill" id="pill-go">—</span></button>
+        <button class="nav-btn" data-tab="plan" onclick="setTab('plan')"><span>Fases & Tarefas</span><span class="nav-pill" id="pill-plan">0</span></button>
+        <button class="nav-btn" data-tab="agents" onclick="setTab('agents')"><span>Agentes & Colisões</span><span class="nav-pill" id="pill-agents">0</span></button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-label">Diagnóstico</div>
+        <button class="nav-btn" data-tab="reevaluate" onclick="setTab('reevaluate')"><span>Reavaliação & Drift</span><span class="nav-pill" id="pill-drift">0</span></button>
+        <button class="nav-btn" data-tab="scorecard" onclick="setTab('scorecard')"><span>Scorecard & ROI</span><span class="nav-pill" id="pill-score">—</span></button>
+        <button class="nav-btn" data-tab="worktrees" onclick="setTab('worktrees')"><span>Worktrees & Ambiente</span><span class="nav-pill" id="pill-wt">0</span></button>
+        <button class="nav-btn" data-tab="execution" onclick="setTab('execution')"><span>Execução & Verify</span><span class="nav-pill" id="pill-gates">0</span></button>
+        <button class="nav-btn" data-tab="sessions" onclick="setTab('sessions')"><span>Sessões & Técnico</span><span class="nav-pill" id="pill-sess">0</span></button>
+      </div>
+      <div class="item" style="margin-top:auto">
+        <div class="label">Sessão Ativa</div>
+        <div class="small" id="nav-session" style="margin-top:4px;font-weight:700;color:#fff;word-break:break-word">—</div>
+        <div class="actions" style="margin-top:10px">
+          <button class="primary" onclick="refresh()">Atualizar</button>
+          <button class="secondary" id="auto-btn" onclick="toggleAuto()">Auto: ON</button>
+        </div>
+      </div>
+    </aside>
+    <main class="main">
+      <div class="topbar">
+        <div>
+          <h1 id="top-title">Resumo da Sessão</h1>
+          <div class="topbar-sub" id="top-sub">Sincronizando dados locais…</div>
+        </div>
+        <div class="topbar-meta">
+          <span class="chip" id="chip-phase">status: —</span>
+          <span class="chip" id="chip-alm">ALM: —</span>
+          <span class="chip" id="chip-ci">CI: —</span>
+        </div>
+      </div>
+      <div id="app">Carregando…</div>
+    </main>
+  </div>
+  <script>
+  const app=document.getElementById('app');let ctx=null;let tab='overview';let session=null;let autoOn=true;let timer=null;
+  const esc=(s)=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const plain=(s)=>String(s||'').replace(/\\*\\*/g,'').replace(/\`/g,'');
+  const cls=(s)=>{const v=String(s||'').toLowerCase();if(/(healthy|approved|done|closed|go|clean|well-calibrated|passed|ready|completed|no_impact|ok)/.test(v))return'done';if(/(running|in_review|active|mentioned|acceptable|controlled|replaying|planned)/.test(v))return'active';if(/(rejected|needs_revision|blocked|failed|no-go|overconfident|do_not_execute|aborted|waiting_approval|contract_drift|replan_recommended|broken)/.test(v))return'blocked';if(/(risk|warning|underconfident|needs_refinement|paused|mechanical_sync|stale)/.test(v))return'warning';return'pending';};
+  const badge=(s,l)=>'<span class="badge '+cls(s)+'">'+esc(l||s||'pendente')+'</span>';
+  const list=(items,empty)=>items&&items.length?'<div class="list">'+items.join('')+'</div>':'<div class="entry small muted">'+esc(empty)+'</div>';
+  const kv=(k,v)=>'<div class="item"><div class="label">'+esc(k)+'</div><div class="small" style="margin-top:6px;font-weight:800;color:#fff;font-size:15px">'+esc(v)+'</div></div>';
+  const phaseLabel=(p)=>{const m={verify_complete:'Verificado ✓',plan_ready:'Plano pronto',executing:'Em execução',verify_failed:'Falha no verify',spec_ready:'Spec pronta'};return m[String(p||'').toLowerCase()]||(p||'—');};
+  const tabMeta={
+    overview:{title:'Agora — Resumo da Sessão',sub:'O que está pronto, o que precisa da sua atenção e qual o próximo comando recomendado.'},
+    plan:{title:'Fases, Tarefas & Critérios',sub:'Progresso real do programa (F1–F4), tarefas da fase atual e cobertura dos critérios de aceite A*.'},
+    agents:{title:'Agentes & Colisões ao Vivo',sub:'Use esta aba quando houver vários agentes em paralelo para evitar edição simultânea dos mesmos arquivos.'},
+    reevaluate:{title:'Reavaliação & Drift contra a Base',sub:'Verifica se commits novos na branch base afetam tarefas pendentes do plano atual.'},
+    scorecard:{title:'Scorecard & Roteamento de Modelos',sub:'Distribuição de tarefas por tier (fast / balanced / powerful) e resumo de evidências.'},
+    worktrees:{title:'Worktrees & Ambiente Local',sub:'Higiene das worktrees git do projeto e configuração detectada de stack, CI, ALM e MCP.'},
+    execution:{title:'Execução, Gates & Verify',sub:'Status do run atual, aprovações pendentes, checks executados e trilha de eventos.'},
+    sessions:{title:'Sessões & Detalhes Técnicos',sub:'Alterne entre sessões do projeto ou inspecione os artefatos internos de .oxe/ sob demanda.'},
+  };
+  const runtimeDisabled=()=>ctx&&ctx.dashboard&&ctx.dashboard.readOnly;
+  async function api(url,opts={}){const res=await fetch(url,{headers:{'Content-Type':'application/json'},...opts});if(!res.ok)throw new Error(await res.text());return res.json();}
+  async function refresh(){ctx=await api('/api/state'+(session?'?session='+encodeURIComponent(session):''));render();}
+  function copyCmd(cmd,btn){if(!cmd)return;if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(cmd).then(()=>{const old=btn.textContent;btn.textContent='Copiado ✓';setTimeout(()=>{btn.textContent=old;},1400);}).catch(()=>{prompt('Copie o comando:',cmd);});}else{prompt('Copie o comando:',cmd);}}
+  function numCount(v){return typeof v==='number'?v:Array.isArray(v)?v.length:0;}
+  function updateNav(){
+    document.querySelectorAll('.nav-btn').forEach((b)=>b.classList.toggle('active',b.dataset.tab===tab));
+    const meta=tabMeta[tab]||tabMeta.overview;
+    const sessShort=(ctx.activeSession||'raiz').replace(/^sessions\\//,'');
+    document.getElementById('nav-project').textContent=(ctx.projectName||'Projeto')+' · '+sessShort;
+    document.getElementById('nav-session').textContent=sessShort;
+    document.getElementById('top-title').textContent=meta.title;
+    document.getElementById('top-sub').textContent=meta.sub;
+    document.getElementById('chip-phase').textContent=phaseLabel(ctx.phase);
+    document.getElementById('chip-alm').textContent='ALM: '+((ctx.onboard_summary&&ctx.onboard_summary.alm_provider)||'none');
+    document.getElementById('chip-ci').textContent='CI: '+((ctx.onboard_summary&&ctx.onboard_summary.ci_providers&&ctx.onboard_summary.ci_providers.join(', '))||'local');
+    const g=ctx.guidance||{tone:'active',badgeLabel:'—'};
+    document.getElementById('pill-go').textContent=g.tone==='done'?'OK':g.tone==='blocked'?'!':'•';
+    const prog=ctx.program;
+    document.getElementById('pill-plan').textContent=prog&&prog.totalCount?prog.closedCount+'/'+prog.totalCount:String((ctx.plan&&ctx.plan.totalTasks)||0);
+    const agPill=document.getElementById('pill-agents');
+    const colCount=(ctx.agent_collisions||[]).length;
+    agPill.textContent=colCount?colCount+'!':String((ctx.active_agents||[]).length);
+    agPill.className='nav-pill'+(colCount?' alert':'');
+    const drCount=(ctx.reevaluate&&ctx.reevaluate.summary&&ctx.reevaluate.summary.contract_drift)||0;
+    const drPill=document.getElementById('pill-drift');
+    drPill.textContent=String(drCount);
+    drPill.className='nav-pill'+(drCount?' warn':'');
+    document.getElementById('pill-score').textContent=ctx.scorecard_routing&&ctx.scorecard_routing.auto_route?'AUTO':'STD';
+    document.getElementById('pill-wt').textContent=String((ctx.worktree_hygiene&&ctx.worktree_hygiene.total)||0);
+    document.getElementById('pill-gates').textContent=String((ctx.enterprise&&ctx.enterprise.gateQueue&&ctx.enterprise.gateQueue.pending&&ctx.enterprise.gateQueue.pending.length)||0);
+    document.getElementById('pill-sess').textContent=String((ctx.sessions&&ctx.sessions.items&&ctx.sessions.items.length)||0);
+  }
+  function render(){
+    updateNav();
+    const g=ctx.guidance||{tone:'active',badgeLabel:'Status',headline:'Sessão carregada',explanation:'',command:'oxe-cc status',ctaLabel:'Ver Fases',ctaTab:'plan',checklist:[]};
+    const prog=ctx.program||null;
+    const agentsLive=ctx.active_agents||[];
+    const collisions=ctx.agent_collisions||[];
+    const messages=ctx.agent_messages||[];
+    const wt=ctx.worktree_hygiene||{total:0,secondary:0,dirty:0,clean_merged:0,prunable:0,nested_agent:0,protected_junction_targets:0,warnings:[]};
+    const wtDirty=numCount(wt.dirty);
+    const wtOrphans=numCount(wt.prunable)+numCount(wt.clean_merged)+numCount(wt.orphans);
+    const reev=ctx.reevaluate||{overall_status:'unavailable',summary:{no_impact:0,mechanical_sync:0,contract_drift:0},tasks:[]};
+    const scr=ctx.scorecard_routing||{auto_route:false,tiers:{fast:0,balanced:0,powerful:0},scorecard:null};
+    const ob=ctx.onboard_summary||{stacks:[],ci_providers:[],alm_provider:'none',env_ok:true};
+    const gateQueue=(ctx.enterprise&&ctx.enterprise.gateQueue)||{pending:[],stalePending:[],resolvedRecent:[]};
+    const pendingGateCount=(gateQueue.pending||[]).length;
+    const blockerCount=(ctx.readiness&&ctx.readiness.blockers?ctx.readiness.blockers.length:0)+pendingGateCount;
+    const driftCount=(reev.summary&&reev.summary.contract_drift)||0;
+    const syncCount=(reev.summary&&reev.summary.mechanical_sync)||0;
+    const driftLabel=driftCount?driftCount+' drift(s)':syncCount?syncCount+' sync':reev.overall_status==='clean'?'Alinhado':'Sem pendências';
+    const driftTone=driftCount?'blocked':syncCount?'warning':'done';
+    const wtTone=wtDirty>0||wt.needs_gc?'warning':'done';
+    const verifyManifest=(ctx.verify&&ctx.verify.parsed&&ctx.verify.parsed.manifest)||null;
+    const deliv=ctx.delivery&&ctx.delivery.state?ctx.delivery:null;
+    const delivCard=(()=>{
+      if(!deliv)return '';
+      const ds=deliv.state;
+      const dh=deliv.handoff;
+      if(ds.status==='DELIVERED'){
+        const cmds=(dh&&Array.isArray(dh.how_to_run)&&dh.how_to_run.length?dh.how_to_run:(ds.handoff&&ds.handoff.run_commands)||['npm test']);
+        return '<div class="panel" style="margin-bottom:18px;border-color:rgba(52,211,153,.45);background:linear-gradient(135deg,rgba(16,185,129,.12),rgba(18,27,46,.96))">'
+          +'<div class="head"><div><h2>Entrega Pronta — '+esc(ds.title||'Solução entregue')+'</h2><div class="small muted">Todas as fases verificadas + FINAL_SMOKE aprovado. Use os comandos abaixo para rodar agora:</div></div>'+badge('done','DELIVERED')+'</div>'
+          +'<div class="list">'+cmds.map((c)=>'<div class="cmd-bar"><code>'+esc(c)+'</code><button class="secondary" onclick="copyCmd(\\''+esc(c)+'\\',this)">Copiar</button></div>').join('')+'</div>'
+          +(deliv.deliveryMd?'<details style="margin-top:12px"><summary>Ver DELIVERY.md completo</summary><div class="raw">'+esc(deliv.deliveryMd)+'</div></details>':'')
+        +'</div>';
+      }
+      const needsDecision=ds.status==='DESIGN_REVIEW'||ds.approval_mode==='pending_choice';
+      return '<div class="panel" style="margin-bottom:18px;border-color:rgba(96,165,250,.45)">'
+        +'<div class="head"><div><h2>Entrega Autônoma em Curso — '+esc(ds.title||ds.deliver_id)+'</h2><div class="small muted">Estado: <code>'+esc(ds.status)+'</code> · Modo: <code>'+esc(ds.approval_mode)+'</code> · Orçamento: $'+esc(((ds.budget&&ds.budget.spent_usd)||0).toFixed(2))+' / $'+esc(((ds.budget&&ds.budget.max_usd)||0).toFixed(2))+'</div></div>'+badge(ds.status,ds.status)+'</div>'
+        +(needsDecision?'<div class="actions"><button class="secondary" '+(runtimeDisabled()?'disabled':'')+' onclick="deliverSetMode(\\'single-ok\\')">Modo: Aprovação única (single-ok)</button><button class="secondary" '+(runtimeDisabled()?'disabled':'')+' onclick="deliverSetMode(\\'auto\\')">Modo: 100% Automático (auto)</button>'+(ds.status==='DESIGN_REVIEW'?'<button class="primary" '+(runtimeDisabled()?'disabled':'')+' onclick="deliverApprove()">Aprovar e Iniciar Execução</button>':'')+'</div>':'')
+      +'</div>';
+    })();
+
+    const phaseRows=prog&&prog.phases&&prog.phases.length?prog.phases.map((ph)=>{
+      const st=String(ph.status||'pending').toLowerCase();
+      const stText=st==='closed'?'Concluída':st==='active'?'Ativa':'Pendente';
+      return '<div class="phase-row"><div><div style="font-weight:800;color:#fff">'+esc(ph.id)+' — '+esc(plain(ph.title))+'</div><div class="small muted" style="margin-top:3px">'+esc(plain(ph.scope||''))+'</div><div style="margin-top:6px">'+(ph.acceptance||[]).map((a)=>'<span class="chip">'+esc(a)+'</span>').join('')+'</div></div>'+badge(st,stText)+'</div>';
+    }):[];
+
+    const checklistHtml=(g.checklist||[]).map((c)=>'<div class="check-row"><span class="dot '+esc(c.status)+'"></span><span>'+esc(c.text)+'</span></div>');
+    const waves=(ctx.plan.waves||[]).map((w)=>'<div class="item"><div class="head"><div><strong>Onda '+esc(w.wave)+'</strong><div class="small muted">'+esc(w.taskIds.length)+' tarefa(s)</div></div>'+badge(String(ctx.runtime.parsed.currentWave)===String(w.wave)?'running':'done',String(ctx.runtime.parsed.currentWave)===String(w.wave)?'em execução':'registrada')+'</div>'+w.tasks.map((t)=>'<div class="entry" style="margin-top:8px"><div style="font-weight:700;color:#fff">'+esc(t.id)+' — '+esc(plain(t.title))+'</div><div class="small muted" style="margin-top:4px">Verify: <code>'+esc(t.verifyCommand||'—')+'</code></div><div style="margin-top:6px">'+(t.aceite||[]).map((x)=>'<span class="chip">'+esc(x)+'</span>').join('')+'</div></div>').join('')+'</div>');
+    const coverage=(ctx.coverage||[]).map((c)=>{
+      const stText=c.verifyStatus==='passed'?'Validado':c.verifyStatus==='failed'?'Falhou':c.verifyStatus==='mentioned'?'Citado':'Pendente';
+      return '<div class="item"><div class="head"><div><strong>'+esc(c.id)+'</strong>'+(c.phase?' <span class="chip">'+esc(c.phase)+'</span>':'')+'</div>'+badge(c.verifyStatus,stText)+'</div><div class="small">'+esc(plain(c.criterion))+'</div><div class="small muted" style="margin-top:6px">'+(c.verifySummary?esc(plain(c.verifySummary)):'Verificação: '+esc(plain(c.verifyHow||'pendente')))+'</div></div>';
+    });
     const comments=(ctx.review.comments||[]).map((c)=>'<div class="item"><div class="small muted">'+esc(c.target)+' · '+esc(c.type)+' · '+esc(c.status)+' · '+esc(c.author)+'</div><div style="margin-top:6px">'+esc(c.text)+'</div>'+(c.status!=='resolved'?'<div class="actions"><button class="secondary" onclick="resolveComment(\\''+esc(c.id)+'\\')">Resolver</button></div>':'')+'</div>');
-    const sessions=(ctx.sessions.items||[]).map((s)=>'<div class="item"><div class="head"><div><strong>'+esc(s.id)+' · '+esc(s.name)+'</strong><div class="small muted">Criada: '+esc(s.createdAt)+' · Última atividade: '+esc(s.lastActivity)+'</div></div>'+badge(s.status)+'</div><div class="small">'+esc(s.summary||'—')+'</div><div class="small muted" style="margin-top:8px">'+esc(s.path||'—')+'</div><div class="actions"><button class="secondary" onclick="openSession(\\''+esc(s.path)+'\\')">Abrir sessão</button></div></div>');
-    const repo=Object.entries(ctx.repositoryContext||{}).map(([k,v])=>'<div class="item"><strong>'+esc(k.toUpperCase())+'</strong><div class="small" style="margin-top:8px">'+esc(v.summary||'Sem resumo disponível.')+'</div><div class="small muted" style="margin-top:8px">'+esc(v.path||'—')+'</div></div>');
-    const contextSelected=((ctx.context&&ctx.context.pack&&ctx.context.pack.selected_artifacts)||[]).map((artifact)=>'<div class="item"><div class="head"><strong>'+esc(artifact.alias)+'</strong>'+badge(artifact.exists?(artifact.using_fallback?'fallback':'selected'):'missing',artifact.exists?(artifact.using_fallback?'fallback':'selected'):'missing')+'</div><div class="small">'+esc(artifact.summary||'—')+'</div><div class="small muted" style="margin-top:8px">'+esc(artifact.path||'—')+'</div></div>');
-    const contextGaps=((ctx.context&&ctx.context.pack&&ctx.context.pack.gaps)||[]).map((gap)=>'<div class="entry small">['+esc(gap.severity)+'] '+esc(gap.alias)+': '+esc(gap.reason)+'</div>');
-    const contextConflicts=((ctx.context&&ctx.context.pack&&ctx.context.pack.conflicts)||[]).map((conflict)=>'<div class="entry small">'+esc(conflict.alias)+': '+esc(conflict.reason)+'</div>');
-    const semanticsWarnings=((ctx.context&&ctx.context.semantics&&ctx.context.semantics.audit&&ctx.context.semantics.audit.warnings)||[]).map((warning)=>'<div class="entry small">'+esc(warning)+'</div>');
-  const blockers=(ctx.readiness.blockers||[]).map((x)=>'<div class="entry small">'+esc(x)+'</div>'); const warnings=(ctx.readiness.warnings||[]).concat((ctx.diagnostics.enterpriseWarnings||[])).slice(0,10).map((x)=>'<div class="entry small">'+esc(x)+'</div>'); const evidence=(ctx.runtime.parsed.evidence||[]).map((x)=>'<div class="entry small">'+esc(x)+'</div>'); const blockages=(ctx.runtime.parsed.blockages||[]).map((x)=>'<div class="entry small">'+esc(x)+'</div>'); const history=((ctx.sessions.current&&ctx.sessions.current.history)||[]).map((x)=>'<div class="entry small">'+esc(x.date)+' · '+esc(x.event)+'</div>');
-  const enterpriseGates=((ctx.enterprise&&ctx.enterprise.pendingGates&&ctx.enterprise.pendingGates.pending)||[]).map((gate)=>'<div class="entry small">'+esc(gate.gate_id)+' · '+esc(gate.scope)+' · '+esc(gate.work_item_id||'run')+'</div>');
-    app.innerHTML='<div class="stats"><div class="metric"><div class="label">Saúde lógica</div><div class="value">'+badge(ctx.healthStatus)+'</div></div><div class="metric"><div class="label">Go / No-Go</div><div class="value">'+badge(ctx.readiness.decision,ctx.readiness.decision)+'</div></div><div class="metric"><div class="label">Review</div><div class="value">'+badge(ctx.planReviewStatus)+'</div></div><div class="metric"><div class="label">Checkpoints</div><div class="value">'+badge(ctx.readiness.checkpointPending?'pending_approval':'clear',ctx.readiness.checkpointPending?'pendente':'ok')+'</div></div><div class="metric"><div class="label">Runtime</div><div class="value">'+badge(ctx.runtime.parsed.status||ctx.state.parsed.runtimeStatus||'pending')+'</div></div></div>'
-    +'<div class="tabs">'+['decision','plan','execution','evidence','sessions','context','repository'].map((t)=>'<button class="tab'+(tab===t?' active':'')+'" onclick="setTab(\\''+t+'\\')">'+(t==='repository'?'repository context':t)+'</button>').join('')+'</div>'
-    +'<div class="view'+(tab==='decision'?' active':'')+'"><div class="layout"><div class="stack"><div class="panel"><div class="head"><div><h2 style="margin:0">Decision Control</h2><div class="muted">A pergunta principal: podemos executar agora?</div></div></div><div class="'+(ctx.readiness.go?'panel go':'panel nogo')+'" style="padding:18px"><div class="label">Decisão operacional</div><div style="font-size:38px;font-weight:900;margin-top:8px">'+(ctx.readiness.go?'GO':'NO-GO')+'</div><div class="small muted" style="margin-top:8px">'+esc(ctx.nextStep.reason||'—')+'</div><div class="actions">'+badge(ctx.planReviewStatus,'review:'+ctx.planReviewStatus)+badge(ctx.readiness.confidenceBand,'confiança:'+ctx.readiness.confidenceBand)+(ctx.readiness.checkpointPending?badge('pending_approval','checkpoint pendente'):'')+'</div></div></div><div class="panel"><div class="head"><div><h2 style="margin:0">Decision Rail</h2><div class="muted">Spec → Plan → Review → Execute → Verify → Lessons.</div></div></div><div class="rail">'+flow.join('')+'</div></div><div class="panel"><div class="head"><div><h2 style="margin:0">Readiness Map</h2><div class="muted">Bloqueios e sinais ativos antes do execute.</div></div></div><div class="grid2"><div><h3>Bloqueios</h3>'+list(blockers,'Sem bloqueios formais para executar.')+'</div><div><h3>Warnings</h3>'+list(warnings,'Sem warnings relevantes.')+'</div></div></div><div class="panel"><div class="head"><div><h2 style="margin:0">Review e aprovação</h2><div class="muted">Persistida em STATE.md, PLAN-REVIEW.md e comentários.</div></div></div><div class="grid2"><div><div class="actions"><button class="primary" onclick="changeReview(\\'approved\\')">Aprovar</button><button class="warnbtn" onclick="changeReview(\\'needs_revision\\')">Pedir revisão</button><button class="secondary" onclick="changeReview(\\'in_review\\')">Marcar em revisão</button><button class="danger" onclick="changeReview(\\'rejected\\')">Rejeitar</button></div><div class="form"><input id="comment-target" placeholder="target ex.: wave:1, T2, checkpoint:CP-01"/><select id="comment-type"><option value="note">note</option><option value="risk">risk</option><option value="question">question</option><option value="approval">approval</option></select><textarea id="comment-text" rows="6" placeholder="Comentário de revisão"></textarea><button class="primary" onclick="addComment()">Adicionar comentário</button></div></div><div><h3>Comentários</h3>'+list(comments,'Nenhum comentário de revisão.')+'</div></div></div></div><div class="stack"><div class="panel"><div class="head"><div><h2 style="margin:0">Mapa de artefatos</h2><div class="muted">Fonte de verdade visual do ciclo atual.</div></div></div><div class="grid3">'+graph.join('')+'</div></div><div class="panel"><div class="head"><div><h2 style="margin:0">Calibração do plano</h2><div class="muted">Confiança prevista versus resultado real.</div></div>'+badge(ctx.calibration.status)+'</div><div class="small">'+esc(ctx.calibration.summary)+'</div></div></div></div></div>'
-    +'<div class="view'+(tab==='plan'?' active':'')+'"><div class="layout"><div class="stack"><div class="panel"><div class="head"><div><h2 style="margin:0">Trilha do plano</h2><div class="muted">Ondas, dependências e vínculos com aceite e decisões.</div></div>'+badge(ctx.planReviewStatus)+'</div>'+list(waves,'PLAN.md ausente ou sem tarefas estruturadas.')+'</div><div class="panel"><div class="head"><div><h2 style="margin:0">Matriz de cobertura</h2><div class="muted">SPEC → PLAN → VERIFY em um único quadro.</div></div></div><div class="grid2">'+coverage.join('')+'</div></div></div><div class="stack"><div class="panel"><div class="head"><div><h2 style="margin:0">Autoavaliação do plano</h2><div class="muted">Melhor plano atual e faixa de confiança.</div></div></div><div class="grid3"><div class="item"><strong>Melhor plano atual</strong><div class="small muted" style="margin-top:8px">'+esc((ctx.plan.selfEvaluation&&ctx.plan.selfEvaluation.bestPlan)||'—')+'</div></div><div class="item"><strong>Confiança</strong><div class="small muted" style="margin-top:8px">'+esc(ctx.readiness.confidence!=null?ctx.readiness.confidence+'%':'—')+'</div></div><div class="item"><strong>Faixa</strong><div class="small muted" style="margin-top:8px">'+esc(ctx.readiness.confidenceBand)+'</div></div></div></div><div class="panel"><div class="head"><div><h2 style="margin:0">Lacunas da SPEC</h2><div class="muted">Critérios sem cobertura explícita no plano.</div></div></div>'+list((ctx.spec.uncoveredCriteria||[]).map((c)=>'<div class="entry small">'+esc(c.id)+' · '+esc(c.criterion)+'</div>'),'Sem lacunas detectadas.')+'</div></div></div></div>'
-  +'<div class="view'+(tab==='execution'?' active':'')+'"><div class="layout"><div class="stack"><div class="panel"><div class="head"><div><h2 style="margin:0">Runtime operacional</h2><div class="muted">Estado tático da execução.</div></div>'+badge(ctx.runtime.parsed.status||'pending')+'</div><div class="grid3"><div class="item"><strong>Onda atual</strong><div class="small muted" style="margin-top:8px">'+esc(ctx.runtime.parsed.currentWave||'—')+'</div></div><div class="item"><strong>Tarefas ativas</strong><div class="small muted" style="margin-top:8px">'+esc((ctx.runtime.parsed.activeTasks||[]).join(', ')||'—')+'</div></div><div class="item"><strong>Próxima ação</strong><div class="small muted" style="margin-top:8px">'+esc(ctx.runtime.parsed.nextAction||'—')+'</div></div><div class="item"><strong>Motivo</strong><div class="small muted" style="margin-top:8px">'+esc(ctx.runtime.parsed.nextReason||'—')+'</div></div><div class="item"><strong>Modo runtime</strong><div class="small muted" style="margin-top:8px">'+esc((ctx.enterprise&&ctx.enterprise.runtimeMode&&ctx.enterprise.runtimeMode.runtime_mode)||'—')+'</div></div><div class="item"><strong>Fallback</strong><div class="small muted" style="margin-top:8px">'+esc((ctx.enterprise&&ctx.enterprise.fallbackMode)||'—')+'</div></div></div></div><div class="panel"><div class="head"><div><h2 style="margin:0">Checkpoints</h2><div class="muted">Gates humanos formais.</div></div></div>'+list(checkpoints,'CHECKPOINTS.md ausente ou sem gates formais.')+'</div><div class="panel"><div class="head"><div><h2 style="margin:0">Gates pendentes</h2><div class="muted">Fila operacional persistida por run/work item.</div></div></div>'+list(enterpriseGates,'Sem gates pendentes no runtime.')+'</div><div class="panel"><div class="head"><div><h2 style="margin:0">Agentes</h2><div class="muted">Blueprint e runtime multiagente.</div></div></div>'+list(agents,'Sem blueprint de agentes ou runtime multiagente ativo.')+'</div></div><div class="stack"><div class="panel"><div class="head"><div><h2 style="margin:0">Evidências</h2><div class="muted">Artefatos e sinais da execução atual.</div></div></div>'+list(evidence,'Sem evidência operacional registrada.')+'</div><div class="panel"><div class="head"><div><h2 style="margin:0">Enterprise verify</h2><div class="muted">Manifest, risco residual, governança e promoção.</div></div></div><div class="grid3">'+kvItem('Checks',(ctx.enterprise&&ctx.enterprise.verificationSummary&&ctx.enterprise.verificationSummary.total)||'—')+kvItem('Fail',(ctx.enterprise&&ctx.enterprise.verificationSummary&&ctx.enterprise.verificationSummary.fail)||0)+kvItem('Coverage',(ctx.enterprise&&ctx.enterprise.evidenceCoverage&&String(ctx.enterprise.evidenceCoverage.coverage_percent)+'%')||'—')+kvItem('Residual risks',(ctx.enterprise&&ctx.enterprise.residualRiskSummary&&ctx.enterprise.residualRiskSummary.total)||0)+kvItem('High/Critical',(ctx.enterprise&&ctx.enterprise.residualRiskSummary&&ctx.enterprise.residualRiskSummary.highOrCritical)||0)+kvItem('Policy decisions',(ctx.enterprise&&ctx.enterprise.policyDecisionSummary&&ctx.enterprise.policyDecisionSummary.total)||0)+kvItem('Policy coverage',(ctx.enterprise&&ctx.enterprise.policyCoverage&&String(ctx.enterprise.policyCoverage.coveragePercent)+'%')||'—')+kvItem('Quota retries',(ctx.enterprise&&ctx.enterprise.quotaSummary&&ctx.enterprise.quotaSummary.consumed&&String(ctx.enterprise.quotaSummary.consumed.retries)+'/'+((ctx.enterprise.quotaSummary.limits&&ctx.enterprise.quotaSummary.limits.maxRetriesPerRun)!=null?ctx.enterprise.quotaSummary.limits.maxRetriesPerRun:'∞'))||'—')+kvItem('Audit critical',(ctx.enterprise&&ctx.enterprise.auditSummary&&ctx.enterprise.auditSummary.critical)||0)+kvItem('Promotion',(ctx.enterprise&&ctx.enterprise.promotionSummary&&ctx.enterprise.promotionSummary.status)||'—')+kvItem('Promotion readiness',(ctx.enterprise&&ctx.enterprise.promotionReadiness&&ctx.enterprise.promotionReadiness.status)||'—')+kvItem('Recovery',(ctx.enterprise&&ctx.enterprise.recoveryState&&ctx.enterprise.recoveryState.status)||'—')+kvItem('Providers',((ctx.enterprise&&ctx.enterprise.providerCatalog&&ctx.enterprise.providerCatalog.summary&&((ctx.enterprise.providerCatalog.summary.pluginsCount!=null?ctx.enterprise.providerCatalog.summary.pluginsCount:ctx.enterprise.providerCatalog.summary.total_plugins)!=null?(ctx.enterprise.providerCatalog.summary.pluginsCount!=null?ctx.enterprise.providerCatalog.summary.pluginsCount:ctx.enterprise.providerCatalog.summary.total_plugins):Array.isArray(ctx.enterprise.providerCatalog.summary.plugins)?ctx.enterprise.providerCatalog.summary.plugins.length:0)))||0)+'</div></div><div class="panel"><div class="head"><div><h2 style="margin:0">Bloqueios</h2><div class="muted">O que impede avanço agora.</div></div></div>'+list(blockages,'Sem bloqueios explícitos.')+'</div><div class="panel"><div class="head"><div><h2 style="margin:0">Runtime bruto</h2><div class="muted">Leitura direta do artefato operacional.</div></div></div><div class="raw">'+esc(ctx.runtime.summary||'EXECUTION-RUNTIME.md ausente.')+'</div></div></div></div></div>'
-    +'<div class="view'+(tab==='evidence'?' active':'')+'"><div class="layout"><div class="stack"><div class="panel"><div class="head"><div><h2 style="margin:0">Verify</h2><div class="muted">Evidência final e validação.</div></div>'+badge(ctx.calibration.status)+'</div><div class="raw">'+esc(ctx.verify.summary||'VERIFY.md ausente.')+'</div></div><div class="panel"><div class="head"><div><h2 style="margin:0">Critérios no verify</h2><div class="muted">Evidências detectadas por critério A*.</div></div></div><div class="grid2">'+coverage.join('')+'</div></div></div><div class="stack"><div class="panel"><div class="head"><div><h2 style="margin:0">Investigações</h2><div class="muted">Base de evidência antes do plano.</div></div></div><div class="raw">'+esc(ctx.support.investigationsSummary||'INVESTIGATIONS.md ausente.')+'</div></div><div class="panel"><div class="head"><div><h2 style="margin:0">Capabilities</h2><div class="muted">Recursos nativos do projeto.</div></div></div><div class="raw">'+esc(ctx.support.capabilitiesSummary||'CAPABILITIES.md ausente.')+'</div></div></div></div></div>'
-    +'<div class="view'+(tab==='sessions'?' active':'')+'"><div class="layout"><div class="stack"><div class="panel"><div class="head"><div><h2 style="margin:0">Sessão ativa</h2><div class="muted">Contexto atual resolvido pelo STATE global.</div></div></div><div class="grid2"><div class="item"><strong>ID</strong><div class="small muted" style="margin-top:8px">'+esc((ctx.sessions.current&&ctx.sessions.current.id)||'—')+'</div></div><div class="item"><strong>Nome</strong><div class="small muted" style="margin-top:8px">'+esc((ctx.sessions.current&&ctx.sessions.current.name)||ctx.activeSession||'—')+'</div></div><div class="item"><strong>Status</strong><div class="small muted" style="margin-top:8px">'+esc((ctx.sessions.current&&ctx.sessions.current.status)||'—')+'</div></div><div class="item"><strong>Última atividade</strong><div class="small muted" style="margin-top:8px">'+esc((ctx.sessions.current&&ctx.sessions.current.lastActivity)||'—')+'</div></div></div><div class="item" style="margin-top:14px"><strong>Resumo</strong><div class="small muted" style="margin-top:8px">'+esc((ctx.sessions.current&&ctx.sessions.current.summary)||'Sem SESSION.md ativo ou modo legado.')+'</div><div class="small muted" style="margin-top:8px">'+esc(ctx.sessions.currentPath||'—')+'</div></div><div class="item" style="margin-top:14px"><strong>Tags</strong><div class="small" style="margin-top:8px">'+((ctx.sessions.current&&ctx.sessions.current.tags)||[]).map((x)=>'<span class="chip">'+esc(x)+'</span>').join('')+'</div></div><h3>Histórico</h3>'+list(history,'Sem histórico de sessão disponível.')+'</div></div><div class="stack"><div class="panel"><div class="head"><div><h2 style="margin:0">Lista de sessões</h2><div class="muted">Índice real lido de .oxe/SESSIONS.md.</div></div></div>'+list(sessions,'SESSIONS.md ausente ou sem sessões registradas.')+'</div><div class="panel"><div class="head"><div><h2 style="margin:0">Índice bruto</h2><div class="muted">Leitura direta do artefato global.</div></div></div><div class="raw">'+esc(ctx.sessions.raw||'SESSIONS.md ausente.')+'</div></div></div></div></div>'
-    +'<div class="view'+(tab==='context'?' active':'')+'"><div class="layout"><div class="stack"><div class="panel"><div class="head"><div><h2 style="margin:0">Context Pack</h2><div class="muted">Seleção determinística de artefatos para este estado do OXE.</div></div>'+badge((ctx.context&&ctx.context.quality&&ctx.context.quality.primaryStatus)||((ctx.context&&ctx.context.pack&&ctx.context.pack.context_quality&&ctx.context.pack.context_quality.status)||'pending'))+'</div><div class="grid3"><div class="item"><strong>Workflow primário</strong><div class="small muted" style="margin-top:8px">'+esc((ctx.context&&ctx.context.quality&&ctx.context.quality.primaryWorkflow)||'dashboard')+'</div></div><div class="item"><strong>Score</strong><div class="small muted" style="margin-top:8px">'+esc((ctx.context&&ctx.context.quality&&ctx.context.quality.primaryScore)!=null?String(ctx.context.quality.primaryScore):'—')+'</div></div><div class="item"><strong>Freshness</strong><div class="small muted" style="margin-top:8px">'+esc((ctx.context&&ctx.context.pack&&ctx.context.pack.freshness&&ctx.context.pack.freshness.reason)||'—')+'</div></div></div><div class="small muted" style="margin-top:12px">Pack: '+esc((ctx.context&&ctx.context.pack&&ctx.context.pack.path)||'—')+' · semantics hash: '+esc((ctx.context&&ctx.context.pack&&ctx.context.pack.semantics_hash)||'—')+'</div></div><div class="panel"><div class="head"><div><h2 style="margin:0">Artefatos selecionados</h2><div class="muted">Contexto efetivamente priorizado pelo pack.</div></div></div><div class="grid2">'+contextSelected.join('')+'</div></div></div><div class="stack"><div class="panel"><div class="head"><div><h2 style="margin:0">Gaps e conflitos</h2><div class="muted">Lacunas e divergências entre raiz e sessão.</div></div></div><h3>Gaps</h3>'+list(contextGaps,'Sem gaps no pack atual.')+'<h3>Conflitos</h3>'+list(contextConflicts,'Sem conflitos detectados.')+'</div><div class="panel"><div class="head"><div><h2 style="margin:0">Summaries ativos</h2><div class="muted">Referências persistidas para compressão de contexto.</div></div></div><div class="grid2">'+kvItem('Project summary',(ctx.context&&ctx.context.summaries&&ctx.context.summaries.project)||'—')+kvItem('Session summary',(ctx.context&&ctx.context.summaries&&ctx.context.summaries.session)||'—')+kvItem('Phase summary',(ctx.context&&ctx.context.summaries&&ctx.context.summaries.phase)||'—')+'</div></div><div class="panel"><div class="head"><div><h2 style="margin:0">Semântica multi-runtime</h2><div class="muted">Drift auditável entre workflow, wrapper e prompt renderizado.</div></div>'+badge(ctx.context&&ctx.context.semantics&&ctx.context.semantics.ok?'healthy':'warning',ctx.context&&ctx.context.semantics&&ctx.context.semantics.ok?'ok':'drift')+'</div><div class="small muted">Manifest: '+esc((ctx.context&&ctx.context.semantics&&ctx.context.semantics.manifestPath)||'—')+' · mismatch count: '+esc((ctx.context&&ctx.context.semantics&&ctx.context.semantics.audit&&ctx.context.semantics.audit.mismatchCount)||0)+'</div>'+list(semanticsWarnings,'Sem warnings semânticos ativos.')+'</div></div></div></div>'
-    +'<div class="view'+(tab==='repository'?' active':'')+'"><div class="panel"><div class="head"><div><h2 style="margin:0">Repository Context</h2><div class="muted">Contexto de repositório como suporte de decisão.</div></div></div><div class="grid3">'+repo.join('')+'</div></div></div>'; enhanceExecutionView();}
-  function executionViewElement(){return Array.from(app.querySelectorAll('.view')).find((view)=>view.textContent.includes('Runtime operacional'));}
-    function panel(title,body){return '<div class="panel"><div class="head"><div><h2 style="margin:0">'+esc(title)+'</h2></div></div>'+body+'</div>';}
-    function kvItem(label,value){return '<div class="item"><strong>'+esc(label)+'</strong><div class="small muted" style="margin-top:8px">'+esc(value)+'</div></div>';}
-    function actionButton(label,action,klass){return '<button class="'+klass+'" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeAction(\\''+action+'\\')">'+label+'</button>';}
-    function enhanceExecutionView(){
-      const view=executionViewElement();
-    if(!view||!ctx)return;
-    const stacks=view.querySelectorAll('.stack');
-    if(stacks.length<2)return;
+    const reviewBody='<div class="grid2"><div><div class="actions"><button class="primary" onclick="changeReview(\\'approved\\')">Aprovar plano</button><button class="warnbtn" onclick="changeReview(\\'needs_revision\\')">Pedir revisão</button><button class="secondary" onclick="changeReview(\\'in_review\\')">Em revisão</button><button class="danger" onclick="changeReview(\\'rejected\\')">Rejeitar</button></div><div class="form"><input id="comment-target" placeholder="Alvo (ex.: F2, T1)"/><select id="comment-type"><option value="note">Nota</option><option value="risk">Risco</option><option value="question">Dúvida</option><option value="approval">Aprovação</option></select><textarea id="comment-text" rows="3" placeholder="Escreva um comentário para o time…"></textarea><button class="primary" onclick="addComment()">Adicionar comentário</button></div></div><div><h3>Comentários</h3>'+list(comments,'Sem comentários registrados.')+'</div></div>';
+    const reviewNeedsFocus=!ctx.isLean&&ctx.phase==='plan_ready'&&ctx.planReviewStatus!=='approved';
+
+    const activeAgentsCards=agentsLive.map((a)=>'<div class="item"><div class="head"><div><strong>'+esc(a.agent_id)+'</strong><div class="small muted">'+esc(a.provider||'—')+' · '+esc(a.role||'executor')+' · branch: '+esc(a.branch||'—')+'</div></div>'+badge('active',a.task||'ativo')+'</div><div class="small">Worktree: <code>'+esc(a.worktree||'—')+'</code></div><div style="margin-top:6px">'+((a.write_set||[]).length?(a.write_set||[]).map((f)=>'<span class="chip">'+esc(f)+'</span>').join(''):'<span class="small muted">write_set vazio</span>')+'</div></div>');
+    const collisionCards=collisions.map((c)=>'<div class="item" style="border-color:rgba(251,113,133,.55)"><div class="head"><strong>'+esc(c.file)+'</strong>'+badge('blocked','colisão')+'</div><div class="small">Agentes: <strong>'+esc((c.agents||[]).join(' × '))+'</strong></div><div class="small muted" style="margin-top:4px">Tarefas: '+esc((c.tasks||[]).filter(Boolean).join(', ')||'—')+'</div></div>');
+    const inboxCards=messages.slice().reverse().map((m)=>'<div class="entry"><div class="head"><strong>'+esc(m.from)+' → '+esc(m.to)+'</strong>'+badge('active',m.topic||'geral')+'</div><div class="small">'+esc(m.body)+'</div><div class="small muted" style="margin-top:4px">'+esc(m.at||'')+'</div></div>');
+    const reevTasks=(reev.tasks||[]).map((t)=>'<div class="item"><div class="head"><strong>'+esc(t.id)+' — '+esc(plain(t.title||''))+'</strong>'+badge(t.classification,t.classification)+'</div><div class="small">Ação sugerida: <code>'+esc(t.recommended_action||'—')+'</code></div>'+((t.overlapping_files&&t.overlapping_files.length)?'<div style="margin-top:6px">'+t.overlapping_files.map((f)=>'<span class="chip">'+esc(f)+'</span>').join('')+'</div>':'')+'</div>');
+    const pendingGates=(gateQueue.pending||[]).map((gItem)=>'<div class="entry"><div class="head"><strong>'+esc(gItem.gate_id)+'</strong>'+badge(gItem.status||'pending')+'</div><div class="small muted">Escopo: '+esc(gItem.scope||'—')+' · Tarefa: '+esc(gItem.work_item_id||'—')+'</div><div class="actions"><button class="primary" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeGateResolve(\\''+esc(gItem.gate_id)+'\\',\\'approve\\')">Aprovar</button><button class="warnbtn" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeGateResolve(\\''+esc(gItem.gate_id)+'\\',\\'waive\\')">Dispensar</button><button class="danger" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeGateResolve(\\''+esc(gItem.gate_id)+'\\',\\'reject\\')">Rejeitar</button></div></div>');
+    const checkpoints=(ctx.checkpoints.parsed||[]).map((c)=>'<div class="item"><div class="head"><strong>'+esc(c.id)+'</strong>'+badge(c.status)+'</div><div class="small muted">'+esc(c.type)+' · '+esc(c.phase||'—')+' · '+esc(c.scope||'—')+'</div><div class="small" style="margin-top:4px">'+esc(c.notes||'—')+'</div></div>');
+    const trace=((ctx.tracing&&ctx.tracing.events)||[]).slice(-10).reverse().map((e)=>'<div class="entry"><div class="head"><strong>'+esc(e.type)+'</strong>'+badge('active',e.timestamp?e.timestamp.slice(11,19):'—')+'</div><div class="small muted">run='+esc(e.run_id||'—')+(e.work_item_id||e.task_id?' · task='+esc(e.work_item_id||e.task_id):'')+'</div></div>');
+    const sessions=(ctx.sessions.items||[]).map((s)=>'<div class="item"><div class="head"><div><strong>'+esc(s.id)+' · '+esc(s.name)+'</strong><div class="small muted">'+esc(s.lastActivity)+'</div></div>'+badge(s.status)+'</div><div class="small">'+esc(plain(s.summary||'—'))+'</div><div class="actions"><button class="secondary" onclick="openSession(\\''+esc(s.path)+'\\')">Abrir esta sessão</button></div></div>');
+    const graph=(ctx.visual.artifactGraph||[]).map((n)=>'<div class="item"><div class="head"><strong>'+esc(n.label)+'</strong>'+badge(n.status)+'</div><div class="small">'+esc(plain(n.detail||'—'))+'</div></div>');
+    const repo=Object.entries(ctx.repositoryContext||{}).map(([k,v])=>'<div class="item"><strong>'+esc(k.toUpperCase())+'</strong><div class="small" style="margin-top:6px">'+esc(plain(v.summary||'Sem resumo.'))+'</div></div>');
     const activeRun=ctx.activeRun||{};
-    const graph=ctx.operationalGraph||{nodes:[],edges:[]};
-    const trace=((ctx.tracing&&ctx.tracing.events)||[]).slice(-8).reverse().map((event)=>'<div class="entry"><div class="head"><strong>'+esc(event.type)+'</strong>'+badge(event.timestamp?event.timestamp.slice(11,19):'—',event.timestamp?event.timestamp.slice(11,19):'—')+'</div><div class="small muted">run='+esc(event.run_id||'—')+' · wave='+esc(event.wave_id||'—')+' · task='+esc(event.task_id||'—')+'</div><div class="small" style="margin-top:8px">'+esc(JSON.stringify(event.payload||{}))+'</div></div>').join('')||'<div class="entry small">Sem eventos registrados.</div>';
-    const nodes=(graph.nodes||[]).map((node)=>'<div class="item"><div class="head"><strong>'+esc(node.label||node.id)+'</strong>'+badge(node.status||'pending')+'</div><div class="small muted">'+esc(node.kind||'node')+'</div><div class="small" style="margin-top:8px">'+esc(node.detail||'—')+'</div></div>').join('')||'<div class="entry small">Sem nós operacionais.</div>';
-    const edges=(graph.edges||[]).map((edge)=>'<div class="entry"><div class="small"><strong>'+esc(edge.from)+'</strong> → <strong>'+esc(edge.to)+'</strong></div><div class="small muted" style="margin-top:6px">'+esc(edge.type||'link')+' · '+esc(edge.status||'—')+'</div><div class="small" style="margin-top:6px">'+esc(edge.reason||edge.label||'—')+'</div></div>').join('')||'<div class="entry small">Sem handoffs ou dependências registradas.</div>';
-      const memory=Object.entries(ctx.memoryLayers||{}).filter(([key])=>key!=='readOrder').map(([key,val])=>kvItem(key,Array.isArray(val.source)?val.source.join(' | '):val.source||'—')).join('')||'<div class="entry small">Sem contrato de memória disponível.</div>';
-      const enterprise=ctx.enterprise||{};
-      const gateQueue=enterprise.gateQueue||{pending:[],stalePending:[],resolvedRecent:[],gateSlaHours:24};
-      const pendingGates=(gateQueue.pending||[]).map((gate)=>'<div class="entry"><div class="head"><strong>'+esc(gate.gate_id)+'</strong>'+badge(gate.status||'pending')+'</div><div class="small muted">scope='+esc(gate.scope||'—')+' · task='+esc(gate.work_item_id||'—')+' · actor='+(gate.actor?esc(gate.actor):'—')+'</div><div class="small" style="margin-top:8px">'+esc((gate.context&&gate.context.description)||gate.action||'Sem descrição')+'</div><div class="actions" style="margin-top:12px"><button class="primary" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeGateResolve(\\''+esc(gate.gate_id)+'\\',\\'approve\\')">Approve</button><button class="warnbtn" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeGateResolve(\\''+esc(gate.gate_id)+'\\',\\'waive\\')">Waive</button><button class="danger" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeGateResolve(\\''+esc(gate.gate_id)+'\\',\\'reject\\')">Reject</button></div></div>').join('')||'<div class="entry small">Sem gates pendentes.</div>';
-      const staleGates=(gateQueue.stalePending||[]).map((gate)=>'<div class="entry"><div class="head"><strong>'+esc(gate.gate_id)+'</strong>'+badge('stale','warning')+'</div><div class="small muted">requested_at='+esc(gate.requested_at||'—')+' · scope='+esc(gate.scope||'—')+'</div></div>').join('')||'<div class="entry small">Sem gates stale.</div>';
-      const recentResolved=(gateQueue.resolvedRecent||[]).map((gate)=>'<div class="entry"><div class="head"><strong>'+esc(gate.gate_id)+'</strong>'+badge(gate.decision||'resolved','ok')+'</div><div class="small muted">actor='+esc(gate.actor||'—')+' · reason='+esc(gate.reason||'—')+'</div></div>').join('')||'<div class="entry small">Sem resoluções recentes.</div>';
-      const gatePanel=panel('Runtime gates','<div class="grid3">'+kvItem('Pending',String((gateQueue.pending||[]).length))+kvItem('Stale',String(gateQueue.staleCount||0))+kvItem('SLA (h)',String(gateQueue.gateSlaHours||24))+'</div><h3>Pendentes</h3>'+pendingGates+'<h3>Stale</h3>'+staleGates+'<h3>Resolvidos nas últimas 24h</h3>'+recentResolved);
-      const multiAgent=enterprise.multiAgent||null;
-      const multiAgentPanel=multiAgent&&multiAgent.enabled?panel('Multi-agent','<div class="grid3">'+kvItem('Mode',multiAgent.mode||'—')+kvItem('Isolation',multiAgent.workspaceIsolationEnforced?'isolated':'shared')+kvItem('Agents',String((multiAgent.agents||[]).length))+'</div><h3>Ownership</h3>'+((multiAgent.ownership||[]).map((item)=>'<div class="entry"><div class="head"><strong>'+esc(item.work_item_id||'—')+'</strong>'+badge(item.owner_agent_id||'unassigned')+'</div></div>').join('')||'<div class="entry small">Sem ownership ativo.</div>')+'<h3>Handoffs</h3>'+((multiAgent.handoffs||[]).map((handoff)=>'<div class="entry"><div class="small"><strong>'+esc(handoff.from_agent_id||'—')+'</strong> → <strong>'+esc(handoff.to_agent_id||'—')+'</strong></div><div class="small muted" style="margin-top:6px">'+esc(handoff.work_item_id||'—')+'</div></div>').join('')||'<div class="entry small">Sem handoffs registrados.</div>')):'';
-      const recovery=enterprise.recoveryState||null;
-      const recoveryPanel=recovery?panel('Recovery','<div class="grid3">'+kvItem('Status',recovery.status||'—')+kvItem('Last recovery',recovery.lastRecoveredAt||'—')+kvItem('Issues',String((recovery.issues||[]).length))+'</div><h3>Issues</h3>'+((recovery.issues||[]).map((issue)=>'<div class="entry"><div class="small"><strong>'+esc(issue.code||'issue')+'</strong></div><div class="small muted" style="margin-top:6px">'+esc(issue.message||issue.reason||'—')+'</div></div>').join('')||'<div class="entry small">Sem inconsistências abertas.</div>')):'';
-      const promotion=enterprise.promotionReadiness||null;
-      const promotionPanel=promotion?panel('Promotion readiness','<div class="grid3">'+kvItem('Status',promotion.status||'—')+kvItem('Coverage',String(promotion.coveragePercent==null?'—':promotion.coveragePercent+'%'))+kvItem('Policy',String(promotion.policyCoveragePercent==null?'—':promotion.policyCoveragePercent+'%'))+'</div><h3>Blockers</h3>'+((promotion.reasons||promotion.blockers||[]).map((reason)=>'<div class="entry small">'+esc(reason)+'</div>').join('')||'<div class="entry small">Sem blockers ativos.</div>')):'';
-      const azure=ctx.azure||null;
-    const azureInventory=azure&&azure.inventorySummary?azure.inventorySummary:{total:0,servicebus:0,eventgrid:0,sql:0,other:0};
-      const azurePanel=azure?panel('Azure context operacional','<div class="grid3">'+kvItem('Login',azure.authStatus&&azure.authStatus.login_active?'ativo':'ausente')+kvItem('Subscription',azure.profile&&(azure.profile.subscription_name||azure.profile.subscription_id)||'—')+kvItem('Último sync',azure.inventorySyncedAt||'—')+kvItem('Service Bus',String(azureInventory.servicebus||0))+kvItem('Event Grid',String(azureInventory.eventgrid||0))+kvItem('Azure SQL',String(azureInventory.sql||0))+'</div><div class="small muted" style="margin-top:12px">Inventário: total '+esc(azureInventory.total||0)+' · pending operations: '+esc(azure.pendingOperations||0)+' · '+esc(azure.inventoryStale&&azure.inventoryStale.stale?'stale':'fresh')+'</div>'+(azure.lastOperation?'<div class="entry" style="margin-top:12px"><div class="head"><strong>Última operação</strong>'+badge(azure.lastOperation.phase||'pending')+'</div><div class="small">'+esc(azure.lastOperation.summary||azure.lastOperation.operation_id||'—')+'</div><div class="small muted" style="margin-top:8px">'+esc(azure.lastOperation.operation_id||'—')+'</div></div>':'')):'';
-      stacks[0].insertAdjacentHTML('afterbegin',panel('Run control','<div class="grid3">'+kvItem('Run ID',activeRun.run_id||'—')+kvItem('Status',activeRun.status||'pending')+kvItem('Cursor',(activeRun.cursor&&((activeRun.cursor.wave!=null?'wave '+activeRun.cursor.wave:'')+(activeRun.cursor.task?' · '+activeRun.cursor.task:'')+(activeRun.cursor.mode?' · '+activeRun.cursor.mode:'')))||'—')+'</div><div class="actions">'+actionButton('Start','start','primary')+actionButton('Pause','pause','warnbtn')+actionButton('Resume','resume','secondary')+actionButton('Replay','replay','danger')+'</div><div class="small muted" style="margin-top:12px">Transitions: '+esc((activeRun.metrics&&activeRun.metrics.transitions)||0)+' · pause_count: '+esc((activeRun.metrics&&activeRun.metrics.pause_count)||0)+' · replay_count: '+esc((activeRun.metrics&&activeRun.metrics.replay_count)||0)+'</div>'));
-      stacks[0].insertAdjacentHTML('beforeend',panel('Mapa operacional','<div class="grid3">'+nodes+'</div><h3>Handoffs e dependências</h3>'+edges)+(gatePanel||'')+(multiAgentPanel||'')+(azurePanel||''));
-      stacks[1].insertAdjacentHTML('afterbegin',panel('Trace operacional','<div class="small muted" style="margin-bottom:12px">Arquivo: '+esc((ctx.tracing&&ctx.tracing.path)||'—')+' · total: '+esc((ctx.tracing&&ctx.tracing.summary&&ctx.tracing.summary.total)||0)+' evento(s)</div>'+trace));
-      stacks[1].insertAdjacentHTML('beforeend',panel('Camadas de memória','<div class="small muted" style="margin-bottom:12px">'+esc(((ctx.memoryLayers&&ctx.memoryLayers.readOrder)||[]).join(' → ')||'—')+'</div><div class="grid2">'+memory+'</div>')+(recoveryPanel||'')+(promotionPanel||''));
-    }
-  function setTab(next){tab=next;render();}
-  async function openSession(path){session=path||null;await refresh();tab='sessions';render();}
+
+    app.innerHTML=''
+    +'<div class="view'+(tab==='overview'?' active':'')+'">'
+      +delivCard
+      +'<div class="hero '+esc(g.tone)+'">'
+        +'<div class="hero-top"><div><div class="label">O que fazer agora</div><div class="hero-title">'+esc(g.headline)+'</div></div>'+badge(g.tone,g.badgeLabel)+'</div>'
+        +'<div class="hero-desc">'+esc(g.explanation)+'</div>'
+        +'<div class="cmd-bar"><code>'+esc(g.command)+'</code><button class="secondary" onclick="copyCmd(\\''+esc(g.command)+'\\',this)">Copiar comando</button><button class="primary" onclick="setTab(\\''+esc(g.ctaTab)+'\\')">'+esc(g.ctaLabel)+'</button></div>'
+      +'</div>'
+      +'<div class="signals">'
+        +'<button class="signal" onclick="setTab(\\'execution\\')"><div class="label">Bloqueios & Gates</div><div class="signal-val"><span>'+esc(blockerCount===0?'Nenhum':blockerCount+' pendente(s)')+'</span>'+badge(blockerCount?'blocked':'done',blockerCount?'atenção':'OK')+'</div><div class="small muted">'+(verifyManifest?esc(verifyManifest.pass+'/'+verifyManifest.total+' checks verdes'):'Clique para abrir Execução')+'</div></button>'
+        +'<button class="signal" onclick="setTab(\\'agents\\')"><div class="label">Agentes & Colisões</div><div class="signal-val"><span>'+esc(agentsLive.length+' ativo(s)')+'</span>'+badge(collisions.length?'blocked':'done',collisions.length?collisions.length+' colisão':'0 colisões')+'</div><div class="small muted">'+(messages.length?esc(messages.length+' mensagem(ns) no inbox'):'Nenhum conflito de arquivo')+'</div></button>'
+        +'<button class="signal" onclick="setTab(\\'reevaluate\\')"><div class="label">Drift na Base</div><div class="signal-val"><span>'+esc(driftLabel)+'</span>'+badge(driftTone,driftTone==='done'?'OK':'revisar')+'</div><div class="small muted">Base: '+esc(reev.base||'—')+'</div></button>'
+        +'<button class="signal" onclick="setTab(\\'worktrees\\')"><div class="label">Worktrees</div><div class="signal-val"><span>'+esc(wt.total||0)+' total</span>'+badge(wtTone,wtDirty?wtDirty+' suja(s)':'limpas')+'</div><div class="small muted">'+(wtDirty?'Clique para ver higiene':'Nenhuma pendência')+'</div></button>'
+      +'</div>'
+      +'<div class="layout">'
+        +'<div class="panel"><div class="head"><div><h2>Progresso da Entrega</h2><div class="small muted">'+esc(plain(ctx.spec&&ctx.spec.objective||'Objetivo não encontrado na SPEC.'))+'</div></div>'+(prog&&prog.totalCount?badge(prog.allClosed?'done':'active',prog.pct+'%'):'')+'</div>'
+          +(prog&&prog.totalCount?'<div class="progress-wrap"><div class="progress-bar" style="width:'+esc(prog.pct)+'%"></div></div><div class="list">'+phaseRows.join('')+'</div>':list(waves,'Nenhum plano carregado nesta sessão.'))
+        +'</div>'
+        +'<div class="panel"><div class="head"><div><h2>Checklist da Sessão</h2><div class="small muted">Leitura rápida de saúde e prontidão</div></div></div><div class="list">'+checklistHtml.join('')+'</div></div>'
+      +'</div>'
+    +'</div>'
+
+    +'<div class="view'+(tab==='plan'?' active':'')+'"><div class="stack">'
+      +(prog&&prog.totalCount?'<div class="panel"><div class="head"><div><h2>Fases do Programa</h2><div class="small muted">'+esc(prog.closedCount)+' de '+esc(prog.totalCount)+' fases concluídas</div></div>'+badge(prog.allClosed?'done':'active',prog.pct+'%')+'</div><div class="list">'+phaseRows.join('')+'</div></div>':'')
+      +'<div class="layout">'
+        +'<div class="panel"><div class="head"><div><h2>Critérios de Aceite (SPEC → Verify)</h2><div class="small muted">'+esc((ctx.coverage||[]).length)+' critério(s) rastreados</div></div></div><div class="list">'+(coverage.length?coverage.join(''):'<div class="entry small muted">Nenhum critério A* encontrado na SPEC.</div>')+'</div></div>'
+        +'<div class="stack">'
+          +'<div class="panel"><div class="head"><div><h2>Tarefas da Fase Atual (PLAN.md)</h2><div class="small muted">'+esc(ctx.plan.totalTasks)+' tarefa(s) registradas</div></div></div>'+list(waves,'PLAN.md ausente ou sem tarefas.')+'</div>'
+          +(reviewNeedsFocus?'<div class="panel"><div class="head"><div><h2>Revisão & Aprovação do Plano</h2></div>'+badge(ctx.planReviewStatus)+'</div>'+reviewBody+'</div>':'<details><summary>Revisão manual e comentários do plano ('+esc((ctx.review.comments||[]).length)+')</summary><div style="margin-top:12px">'+reviewBody+'</div></details>')
+        +'</div>'
+      +'</div>'
+    +'</div></div>'
+
+    +'<div class="view'+(tab==='agents'?' active':'')+'"><div class="layout"><div class="stack">'
+      +'<div class="panel"><div class="head"><div><h2>Agentes Ativos Agora</h2><div class="small muted">Leases registrados automaticamente em execuções paralelas</div></div>'+badge(agentsLive.length?'active':'pending',agentsLive.length+' ativo(s)')+'</div>'+list(activeAgentsCards,'Nenhum agente em execução paralela neste momento.')+'</div>'
+      +'<div class="panel"><div class="head"><div><h2>Colisões de Arquivos (Write-Set)</h2><div class="small muted">Alerta imediato se dois agentes editarem o mesmo arquivo</div></div>'+badge(collisions.length?'blocked':'done',collisions.length?collisions.length+' colisão':'sem colisões')+'</div>'+list(collisionCards,'Zero colisões detectadas.')+'</div>'
+    +'</div><div class="stack">'
+      +'<div class="panel"><div class="head"><div><h2>Inbox entre Worktrees</h2><div class="small muted">Mensagens trocadas via oxe-cc agents send / inbox</div></div>'+badge('active',messages.length+' msg(s)')+'</div>'+list(inboxCards,'Nenhuma mensagem registrada no inbox.')+'</div>'
+    +'</div></div></div>'
+
+    +'<div class="view'+(tab==='reevaluate'?' active':'')+'"><div class="panel"><div class="head"><div><h2>Reavaliação contra a Branch Base</h2><div class="small muted">Base: '+esc(reev.base||'—')+' · Commits upstream: '+esc(reev.upstream_commits_count||0)+'</div></div>'+badge(driftTone,driftLabel)+'</div><div class="grid3" style="margin-bottom:14px">'+kv('Sem impacto',String((reev.summary&&reev.summary.no_impact)||0))+kv('Sync mecânico',String(syncCount))+kv('Drift de contrato',String(driftCount))+'</div>'+list(reevTasks,'Nenhuma tarefa pendente sofreu drift contra a branch base.')+'</div></div>'
+
+    +'<div class="view'+(tab==='scorecard'?' active':'')+'"><div class="layout"><div class="stack">'
+      +'<div class="panel"><div class="head"><div><h2>Distribuição de Modelos & Roteamento</h2><div class="small muted">Tier atribuído às tarefas do plano atual</div></div>'+badge(scr.auto_route?'done':'active',scr.auto_route?'auto_route ON':'auto_route OFF')+'</div><div class="grid3">'+kv('Fast',String((scr.tiers&&scr.tiers.fast)||0))+kv('Balanced',String((scr.tiers&&scr.tiers.balanced)||0))+kv('Powerful',String((scr.tiers&&scr.tiers.powerful)||0))+'</div><details style="margin-top:14px"><summary>Ver JSON técnico do scorecard</summary><div class="raw">'+esc(JSON.stringify(scr.scorecard||{note:'Sem telemetria de scorecard acumulada ainda.'},null,2))+'</div></details></div>'
+    +'</div><div class="stack">'
+      +'<div class="panel"><div class="head"><div><h2>Qualidade & Evidências</h2><div class="small muted">Resumo da última verificação</div></div></div><div class="grid2">'+kv('Checks executados',String((verifyManifest&&verifyManifest.total)||(ctx.enterprise&&ctx.enterprise.verificationSummary&&ctx.enterprise.verificationSummary.total)||0))+kv('Cobertura de evidência',verifyManifest&&verifyManifest.coveragePercent!=null?verifyManifest.coveragePercent+'%':(ctx.enterprise&&ctx.enterprise.evidenceCoverage&&ctx.enterprise.evidenceCoverage.coverage_percent!=null?ctx.enterprise.evidenceCoverage.coverage_percent+'%':'—'))+kv('Riscos residuais',String((ctx.enterprise&&ctx.enterprise.residualRiskSummary&&ctx.enterprise.residualRiskSummary.total)||0))+kv('Promoção',(ctx.enterprise&&ctx.enterprise.promotionSummary&&ctx.enterprise.promotionSummary.status)||'—')+'</div></div>'
+    +'</div></div></div>'
+
+    +'<div class="view'+(tab==='worktrees'?' active':'')+'"><div class="layout"><div class="stack">'
+      +'<div class="panel"><div class="head"><div><h2>Higiene de Worktrees</h2><div class="small muted">Para inspecionar ou limpar: <code>oxe-cc gc-worktrees --dry-run</code></div></div>'+badge(wtTone,wtDirty?wtDirty+' com alterações':'saudável')+'</div><div class="grid3">'+kv('Total',String(wt.total||0))+kv('Com alterações (sujas)',String(wtDirty))+kv('Limpáveis / órfãs',String(wtOrphans))+'</div>'+(wt.nested_agent?'<div class="small muted" style="margin-top:10px">Nota: '+esc(wt.nested_agent)+' worktree(s) aninhada(s) de agente detectada(s) (ex.: <code>.claude/worktrees</code>).</div>':'')+'</div>'
+      +'<div class="panel"><div class="head"><div><h2>Ambiente Detectado (Onboard & MCP)</h2><div class="small muted">Configuração local-first sem acoplamento a provedor único</div></div></div><div class="grid2">'+kv('Stacks',(ob.stacks||[]).join(', ')||'—')+kv('CI',(ob.ci_providers||[]).join(', ')||'local')+kv('ALM',ob.alm_provider||'none')+kv('MCP nativo','oxe-cc mcp')+'</div></div>'
+    +'</div><div class="stack">'
+      +'<div class="panel"><div class="head"><div><h2>Resumo do Repositório</h2><div class="small muted">Base de conhecimento em .oxe/codebase/</div></div></div><div class="list">'+(repo.length?repo.join(''):'<div class="entry small muted">Nenhum mapa de codebase encontrado.</div>')+'</div></div>'
+    +'</div></div></div>'
+
+    +'<div class="view'+(tab==='execution'?' active':'')+'"><div class="layout"><div class="stack">'
+      +'<div class="panel"><div class="head"><div><h2>Execução & Run Atual</h2><div class="small muted">Controle direto do runtime quando uma execução está em curso</div></div>'+badge(activeRun.status||'pending')+'</div><div class="grid3">'+kv('Run ID',activeRun.run_id||'—')+kv('Status',activeRun.status||'sem run')+kv('Checks Verify',verifyManifest?verifyManifest.pass+'/'+verifyManifest.total+' OK':'—')+'</div><div class="actions"><button class="primary" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeAction(\\'start\\')">Start</button><button class="warnbtn" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeAction(\\'pause\\')">Pause</button><button class="secondary" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeAction(\\'resume\\')">Resume</button><button class="danger" '+(runtimeDisabled()?'disabled':'')+' onclick="runtimeAction(\\'replay\\')">Replay</button></div></div>'
+      +'<div class="panel"><div class="head"><div><h2>Gates Pendentes & Checkpoints</h2></div></div>'+list(pendingGates,'Nenhum gate aguardando aprovação.')+'<h3>Checkpoints</h3>'+list(checkpoints,'Nenhum checkpoint registrado.')+'</div>'
+    +'</div><div class="stack">'
+      +'<div class="panel"><div class="head"><div><h2>Últimos Eventos</h2><div class="small muted">Trilha recente em OXE-EVENTS.ndjson</div></div></div>'+list(trace,'Nenhum evento registrado.')+'</div>'
+      +'<details><summary>Ver relatório bruto VERIFY.md</summary><div class="raw">'+esc(ctx.verify.summary||'VERIFY.md ausente.')+'</div></details>'
+    +'</div></div></div>'
+
+    +'<div class="view'+(tab==='sessions'?' active':'')+'"><div class="stack">'
+      +'<div class="layout">'
+        +'<div class="panel"><div class="head"><div><h2>Sessão Atual</h2></div></div><div class="grid2">'+kv('ID',(ctx.sessions.current&&ctx.sessions.current.id)||'—')+kv('Nome',(ctx.sessions.current&&ctx.sessions.current.name)||ctx.activeSession||'—')+kv('Status',(ctx.sessions.current&&ctx.sessions.current.status)||'—')+kv('Perfil',ctx.isLean?'lean':'standard')+'</div></div>'
+        +'<div class="panel"><div class="head"><div><h2>Trocar de Sessão</h2><div class="small muted">Selecione outra entrega registrada no projeto</div></div></div>'+list(sessions,'Nenhuma sessão registrada em SESSIONS.md.')+'</div>'
+      +'</div>'
+      +'<details><summary>Mapa técnico de artefatos (.oxe/) — '+esc(graph.length)+' itens</summary><div class="grid3" style="margin-top:12px">'+graph.join('')+'</div></details>'
+    +'</div></div>';
+  }
+  function setTab(next){tab=next;if(ctx)render();}
+  function toggleAuto(){autoOn=!autoOn;document.getElementById('auto-btn').textContent='Auto: '+(autoOn?'ON':'OFF');if(timer){clearInterval(timer);timer=null;}if(autoOn)timer=setInterval(()=>{refresh().catch(()=>{});},10000);}
+  async function openSession(p){session=p||null;tab='overview';await refresh();}
   async function changeReview(status){const note=prompt('Justificativa curta para o novo estado do plano:',status==='approved'?'Plano aprovado para execução.':'');if(note==null)return;await api('/api/review/status',{method:'POST',body:JSON.stringify({status,note,author:'user',activeSession:session})});await refresh();}
   async function addComment(){const target=document.getElementById('comment-target').value||'plan';const type=document.getElementById('comment-type').value||'note';const text=document.getElementById('comment-text').value.trim();if(!text)return alert('Escreva um comentário.');await api('/api/review/comment',{method:'POST',body:JSON.stringify({target,type,text,author:'user',activeSession:session})});document.getElementById('comment-text').value='';await refresh();}
-    async function resolveComment(id){await api('/api/review/comment-status',{method:'POST',body:JSON.stringify({commentId:id,status:'resolved',activeSession:session})});await refresh();}
-    async function runtimeAction(action){if(runtimeDisabled())return;const reason=prompt('Motivo da transição de runtime:',action==='start'?'iniciar execução':'');if(reason==null)return;const wave=prompt('Onda atual (opcional):',ctx.activeRun&&ctx.activeRun.current_wave!=null?String(ctx.activeRun.current_wave):'');if(wave===null)return;const task=prompt('Tarefa atual (opcional):',ctx.activeRun&&ctx.activeRun.cursor&&ctx.activeRun.cursor.task?String(ctx.activeRun.cursor.task):'');if(task===null)return;await api('/api/runtime/action',{method:'POST',body:JSON.stringify({action,reason,activeSession:session,wave:wave?Number(wave):null,task:task||null})});await refresh();}
-    async function runtimeGateResolve(gateId,decision){if(runtimeDisabled())return;const needsReason=decision==='reject'||decision==='waive';const reason=needsReason?prompt('Justificativa obrigatória para '+decision+':',''):'';if(needsReason&&(!reason||!reason.trim()))return alert('Justificativa é obrigatória para '+decision+'.');await api('/api/runtime/gates/resolve',{method:'POST',body:JSON.stringify({gateId,decision,actor:'dashboard',reason:reason&&reason.trim()?reason.trim():undefined,activeSession:session})});await refresh();}
-    window.setTab=setTab;window.openSession=openSession;window.changeReview=changeReview;window.addComment=addComment;window.resolveComment=resolveComment;window.runtimeAction=runtimeAction;window.runtimeGateResolve=runtimeGateResolve;refresh().catch((err)=>{app.innerHTML='<div class="panel"><h2>Erro</h2><div class="muted">'+esc(err.message)+'</div></div>';});
+  async function resolveComment(id){await api('/api/review/comment-status',{method:'POST',body:JSON.stringify({commentId:id,status:'resolved',activeSession:session})});await refresh();}
+  async function runtimeAction(action){if(runtimeDisabled())return;const reason=prompt('Motivo da transição:',action==='start'?'iniciar execução':'');if(reason==null)return;await api('/api/runtime/action',{method:'POST',body:JSON.stringify({action,reason,activeSession:session})});await refresh();}
+  async function runtimeGateResolve(gateId,decision){if(runtimeDisabled())return;const needsReason=decision==='reject'||decision==='waive';const reason=needsReason?prompt('Justificativa obrigatória para '+decision+':',''):'';if(needsReason&&(!reason||!reason.trim()))return alert('Justificativa obrigatória.');await api('/api/runtime/gates/resolve',{method:'POST',body:JSON.stringify({gateId,decision,actor:'dashboard',reason:reason&&reason.trim()?reason.trim():undefined,activeSession:session})});await refresh();}
+  async function deliverSetMode(mode){if(runtimeDisabled())return;await api('/api/deliver/mode',{method:'POST',body:JSON.stringify({mode,activeSession:session})});await refresh();}
+  async function deliverApprove(){if(runtimeDisabled())return;await api('/api/deliver/approve',{method:'POST',body:JSON.stringify({by:'dashboard',activeSession:session})});await refresh();}
+  window.setTab=setTab;window.toggleAuto=toggleAuto;window.refresh=refresh;window.openSession=openSession;window.copyCmd=copyCmd;window.changeReview=changeReview;window.addComment=addComment;window.resolveComment=resolveComment;window.runtimeAction=runtimeAction;window.runtimeGateResolve=runtimeGateResolve;window.deliverSetMode=deliverSetMode;window.deliverApprove=deliverApprove;
+  refresh().then(()=>{if(autoOn)timer=setInterval(()=>{refresh().catch(()=>{});},10000);}).catch((err)=>{app.innerHTML='<div class="panel"><h2>Erro</h2><div class="small">'+esc(err.message)+'</div></div>';});
   </script></body></html>`;
 }
 
@@ -659,14 +1333,38 @@ function createDashboardServer(projectRoot, opts = {}) {
         return;
       }
 
-      if (req.method === 'GET' && reqUrl.pathname === '/api/context') {
+      if (req.method === 'GET' && (reqUrl.pathname === '/api/context' || reqUrl.pathname === '/api/state')) {
         const activeSession = reqUrl.searchParams.get('session') || opts.activeSession || null;
-        sendJson(res, 200, { ...loadDashboardContext(root, { activeSession }), dashboard: { readOnly: Boolean(opts.readOnly) } });
+        sendJson(res, 200, {
+          oxeDashboardStateSchema: 2,
+          generated_at: new Date().toISOString(),
+          ...loadDashboardContext(root, { activeSession }),
+          dashboard: { readOnly: Boolean(opts.readOnly), version: 'v2' },
+        });
         return;
       }
 
-      if (opts.readOnly && req.method === 'POST' && (reqUrl.pathname.startsWith('/api/review/') || reqUrl.pathname.startsWith('/api/runtime/'))) {
+      if (opts.readOnly && req.method === 'POST' && (reqUrl.pathname.startsWith('/api/review/') || reqUrl.pathname.startsWith('/api/runtime/') || reqUrl.pathname.startsWith('/api/deliver/'))) {
         sendJson(res, 403, { error: 'Dashboard em modo read-only.' });
+        return;
+      }
+
+      if (req.method === 'POST' && reqUrl.pathname === '/api/deliver/mode') {
+        const body = await readJsonBody(req);
+        const result = require('./oxe-deliver-engine.cjs').setApprovalMode(root, body && body.mode, {
+          session: (body && body.activeSession) || opts.activeSession || null,
+        });
+        sendJson(res, 200, result);
+        return;
+      }
+
+      if (req.method === 'POST' && reqUrl.pathname === '/api/deliver/approve') {
+        const body = await readJsonBody(req);
+        const result = require('./oxe-deliver-engine.cjs').approveDelivery(root, {
+          session: (body && body.activeSession) || opts.activeSession || null,
+          by: (body && body.by) || 'dashboard',
+        });
+        sendJson(res, 200, result);
         return;
       }
 

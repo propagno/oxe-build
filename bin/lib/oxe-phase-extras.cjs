@@ -140,7 +140,7 @@ function rehearseRollback(root, base) {
   if (!base) return { ok: true, skipped: 'sem base_commit' };
   const commits = (git(root, ['rev-list', `${base}..HEAD`]).stdout || '').split(/\r?\n/).filter(Boolean);
   if (!commits.length) return { ok: true, commits: 0 };
-  const wsDir = path.join(root, '.oxe', 'rollback-ws');
+  const wsDir = path.join(root, '.oxe', '.cache', 'rollback-ws');
   fs.mkdirSync(wsDir, { recursive: true });
   const stamp = Date.now().toString(36);
   let wt = path.join(wsDir, `r-${stamp}`);
@@ -159,6 +159,7 @@ function rehearseRollback(root, base) {
     git(wt, ['revert', '--abort']);
     git(root, ['worktree', 'remove', '--force', wt]); // no links inside: a plain checkout of HEAD
     try { fs.rmSync(wt, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { if (fs.existsSync(wsDir) && fs.readdirSync(wsDir).length === 0) fs.rmdirSync(wsDir); } catch { /* ignore */ }
     git(root, ['worktree', 'prune']);
   }
 }

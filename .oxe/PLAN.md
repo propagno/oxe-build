@@ -1,60 +1,14 @@
-# OXE — Plano
+# PLAN
 
-> Gerado a partir de `.oxe/SPEC.md`. Cada tarefa deve ter bloco **Verificar**.
+> Gerado por `oxe-cc plan build` a partir de role.json. A fonte é o PLAN.json; este arquivo é a leitura humana.
 
-## Resumo
+## Onda 1
 
-- **Spec vinculada:** `.oxe/SPEC.md` — cobertura e qualidade `oxe-cc` (critérios A1–A5)
-- **Ondas:** 4 (ondas 1–3 concluídas ao nível de comandos; onda 4 fecha gap A3)
-- **Tarefas ativas:** 3 (T6–T8); histórico T1–T5 em **Replanejamento**
+### T1 — OXB-230-23: Layout core (.oxe/core/), resolução .oxe/core -> .oxe -> oxe, doctor --migrate-layout e docs finais 1.23.0
 
-## Dependências globais
-
-- Manter `tests/isolated-home-env.cjs` em novos spawns que simulem `HOME` (A1).
-- Não alterar `prepublishOnly` de forma a retirar sync antes dos testes (A2).
-
-## Replanejamento
-
-> Após **verify_failed** (`.oxe/VERIFY.md`, 2026-03-31).
-
-- **Data / motivo:** 2026-03-31 — c8 e `npm test` verdes, mas **A3** falha: limiar em `package.json` é `--lines 80` (SPEC ≥82%); cobertura medida **80,73%**; `scripts/oxe-assets-scan.cjs` a **89,09%** linhas (ramos de match + `exit(1)` não cobertos).
-- **Lições de VERIFY / SUMMARY:** Fechar A3 por implementação (testes + limiar) mantém a SPEC atual; alternativa seria baixar exigências na SPEC (não é objeto deste replano).
-- **Alterações ao plano anterior:** T1–T5 consideradas **entregues** para A1, A2, A4, A5 e para a infraestrutura de A3 (c8, subprocessos). **Novas** tarefas T6–T8 substituem a “onda 3” como trabalho restante para A3 literal.
-- **T1–T5 (arquivo):** Ambiente isolado + Cursor sync; scripts npm/c8; testes `bin/lib`, SDK, CLI e scripts; STATE/verify documentados. Evidência: `.oxe/VERIFY.md`.
-
-## Tarefas
-
-### T6 — Cobertura total de `oxe-assets-scan.cjs` (ramos de falha)
-
-- **Arquivos prováveis:** `scripts/oxe-assets-scan.cjs`, `tests/oxe-scripts.test.cjs`
+- **Arquivos prováveis:** `bin/lib/oxe-layout.cjs`, `bin/lib/oxe-workflows.cjs`, `bin/lib/oxe-project-health.cjs`, `bin/lib/oxe-install-resolve.cjs`, `bin/lib/oxe-runtime-semantics.cjs`, `bin/lib/oxe-customize.cjs`, `bin/lib/oxe-agent-coord.cjs`, `bin/lib/commands/status-doctor-commands.cjs`, `bin/oxe-cc.js`, `lib/sdk/index.cjs`, `.github/prompts/`, `.github/prompts/oxe-alm.prompt.md`, `.github/prompts/oxe-ask.prompt.md`, `.github/prompts/oxe-capabilities.prompt.md`, `.github/prompts/oxe-checkpoint.prompt.md`, `.github/prompts/oxe-compact.prompt.md`, `.github/prompts/oxe-dashboard.prompt.md`, `.github/prompts/oxe-debug.prompt.md`, `.github/prompts/oxe-deliver.prompt.md`, `.github/prompts/oxe-discuss.prompt.md`, `.github/prompts/oxe-execute.prompt.md`, `.github/prompts/oxe-forensics.prompt.md`, `.github/prompts/oxe-help.prompt.md`, `.github/prompts/oxe-loop.prompt.md`, `.github/prompts/oxe-milestone.prompt.md`, `.github/prompts/oxe-next.prompt.md`, `.github/prompts/oxe-obs.prompt.md`, `.github/prompts/oxe-plan-agent.prompt.md`, `.github/prompts/oxe-plan.prompt.md`, `.github/prompts/oxe-project.prompt.md`, `.github/prompts/oxe-quick.prompt.md`, `.github/prompts/oxe-research.prompt.md`, `.github/prompts/oxe-retro.prompt.md`, `.github/prompts/oxe-review-pr.prompt.md`, `.github/prompts/oxe-route.prompt.md`, `.github/prompts/oxe-scan.prompt.md`, `.github/prompts/oxe-security.prompt.md`, `.github/prompts/oxe-session.prompt.md`, `.github/prompts/oxe-ship.prompt.md`, `.github/prompts/oxe-skill.prompt.md`, `.github/prompts/oxe-spec.prompt.md`, `.github/prompts/oxe-ui-review.prompt.md`, `.github/prompts/oxe-ui-spec.prompt.md`, `.github/prompts/oxe-update.prompt.md`, `.github/prompts/oxe-validate-gaps.prompt.md`, `.github/prompts/oxe-verify.prompt.md`, `.github/prompts/oxe-workstream.prompt.md`, `.github/prompts/oxe.prompt.md`, `.cursor/commands/`, `.cursor/commands/oxe-discuss.md`, `.cursor/commands/oxe-execute.md`, `.cursor/commands/oxe-help.md`, `.cursor/commands/oxe-next.md`, `.cursor/commands/oxe-plan.md`, `.cursor/commands/oxe-quick.md`, `.cursor/commands/oxe-review-pr.md`, `.cursor/commands/oxe-scan.md`, `.cursor/commands/oxe-ship.md`, `.cursor/commands/oxe-spec.md`, `.cursor/commands/oxe-verify.md`, `.cursor/commands/oxe.md`, `commands/oxe/`, `commands/oxe/alm.md`, `commands/oxe/ask.md`, `commands/oxe/capabilities.md`, `commands/oxe/checkpoint.md`, `commands/oxe/compact.md`, `commands/oxe/dashboard.md`, `commands/oxe/debug.md`, `commands/oxe/deliver.md`, `commands/oxe/discuss.md`, `commands/oxe/execute.md`, `commands/oxe/forensics.md`, `commands/oxe/help.md`, `commands/oxe/loop.md`, `commands/oxe/milestone.md`, `commands/oxe/next.md`, `commands/oxe/obs.md`, `commands/oxe/oxe.md`, `commands/oxe/plan-agent.md`, `commands/oxe/plan.md`, `commands/oxe/project.md`, `commands/oxe/quick.md`, `commands/oxe/research.md`, `commands/oxe/retro.md`, `commands/oxe/review-pr.md`, `commands/oxe/route.md`, `commands/oxe/scan.md`, `commands/oxe/security.md`, `commands/oxe/session.md`, `commands/oxe/ship.md`, `commands/oxe/skill.md`, `commands/oxe/spec.md`, `commands/oxe/ui-review.md`, `commands/oxe/ui-spec.md`, `commands/oxe/update.md`, `commands/oxe/validate-gaps.md`, `commands/oxe/verify-audit.md`, `commands/oxe/verify.md`, `commands/oxe/workflow-authoring.md`, `commands/oxe/workstream.md`, `.oxe/install/`, `.oxe/install/copilot-vscode.json`, `.oxe/install/runtime-semantics.json`, `oxe/templates/CONFIG.md`, `CHANGELOG.md`, `README.md`, `AGENTS.md`, `lib/sdk/README.md`, `docs/adr/D-8-ecossistema-aberto-mcp-alm-vcs-dashboard-v2-e-paridade-ci.md`
 - **Depende de:** —
-- **Onda:** 4
-- **Implementação:** Cobrir linhas que reportam match de padrão e `process.exit(1)` quando `failures > 0`. Se o script só ler `ROOT` fixo ao pacote, expor raiz configurável por variável de ambiente (padrão: comportamento atual), replicando o padrão de `OXE_SYNC_REPO_ROOT` no sync — criar árvore mínima sob `tmpdir` (`oxe/`, `.github/`, `commands/`, `bin/lib/` conforme `DIRS`) com um `.md` que dispare um padrão de teste seguro (ex. sequência estilo `sk-` com comprimento válido para o regex, ou outro padrão da lista); assert `status === 1`, `stderr` com `[oxe-assets-scan]` e mensagem de findings.
+- **Onda:** 1
 - **Verificar:**
-  - Comando: `npm test`
-  - Manual: `npx c8 --reporter=text npm test` — ficheiro `scripts/oxe-assets-scan.cjs` a **100%** linhas
-- **Aceite vinculado:** A3, A4
-
-### T7 — Limiar global c8 linhas ≥ 82%
-
-- **Arquivos prováveis:** `package.json`
-- **Depende de:** T6
-- **Onda:** 4
-- **Implementação:** No script npm `test:coverage` em `package.json`, alterar `--lines 80` para `--lines 82` (e rever `--statements` se o projeto alinhar statements ao mesmo alvo). Garantir que `npm run test:coverage` continua a passar após T6; se falhar por margem global, registar resultado para T8.
-- **Verificar:**
-  - Comando: `npm run test:coverage`
-- **Aceite vinculado:** A3, A5
-
-### T8 — Cobertura global até passar o limiar (se necessário)
-
-- **Arquivos prováveis:** `tests/*.test.cjs`, `bin/oxe-cc.js`, `bin/lib/*.cjs` (conforme relatório)
-- **Depende de:** T7
-- **Onda:** 4
-- **Implementação:** Só se `npm run test:coverage` falhar após T7: usar `npx c8 --reporter=text npm test` para identificar ficheiros abaixo do limiar com mais linhas não cobertas; acrescentar testes de subprocesso ou unitários estáveis (com `isolatedHomeEnv` quando aplicável) até o resumo **Lines** ≥ 82%. Prioridade típica: ramos em `bin/lib/oxe-agent-install.cjs` ou `bin/oxe-cc.js` conforme impacto.
-- **Verificar:**
-  - Comando: `npm run test:coverage` e `npm test`
-- **Aceite vinculado:** A3
-
----
-
-**Mapeamento SPEC (replan):** **A1, A2, A4, A5** — satisfeitos pelas entregas T1–T5 documentadas em `.oxe/VERIFY.md` (sem tarefas ativas). **A3** — T6–T8. **A5** — scripts `test`, `test:coverage`, `sync:cursor` mantidos; T7 pode ajustar apenas argumentos do script `test:coverage`.
+  - Comando: `node --test tests/acceptance/oxe-1230-a23-core-layout-migrate.test.cjs tests/acceptance/oxe-1230-a20-lazy-dirs-no-empty.test.cjs && npm run test:sdk-types`
+- **Aceite vinculado:** A23

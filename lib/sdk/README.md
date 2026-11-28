@@ -10,6 +10,34 @@ npm install oxe-cc
 
 ## Uso
 
+### Facade ergonômica (`createClient` — CJS ou ESM nativo, v1.23.0)
+
+```javascript
+// CommonJS
+const { createClient } = require('oxe-cc');
+
+// ou ESM nativo (Node 18+)
+// import { createClient } from 'oxe-cc';
+
+const oxe = createClient(process.cwd());
+
+const health = oxe.status();
+const primer = oxe.primer();
+const parity = oxe.ciParity();
+const agents = oxe.agents.list();
+const delivery = oxe.deliver.status();
+```
+
+Higiene e retomada (`v1.23.0`): `client.gc()` ensaia o que `oxe-cc gc` limparia em `.oxe/.cache/` e nas pastas opcionais vazias, e `client.gc({ apply: true })` limpa; `client.resume()` devolve o mesmo resumo de `oxe-cc resume --json` (sessão ativa, fase, CRs abertos e o próximo comando).
+
+```javascript
+const client = createClient(process.cwd());
+const brief = client.resume();
+console.log(brief.next_command);
+```
+
+### API funcional direta (compatibilidade completa)
+
 ```javascript
 const oxe = require('oxe-cc');
 
@@ -43,6 +71,7 @@ const { options, warnings: w } = oxe.install.resolveOptionsFromConfig(dir, {
 
 | Área | Funções |
 |------|---------|
+| **Facade** | `createClient(projectRoot, options?)` — cliente vinculado ao projeto (`.status()`, `.doctor()`, `.primer()`, `.onboard()`, `.ciParity()`, `.reevaluate()`, `.agents.*`, `.deliver.*`, `.dashboard.*`, `.operational.*`) com suporte a CJS (`require('oxe-cc')`) e ESM nativo (`import { createClient } from 'oxe-cc'`) |
 | **Meta** | `version`, `name`, `PACKAGE_ROOT`, `readPackageMeta`, `readMinNode` |
 | **health** | `loadOxeConfigMerged`, `validateConfigShape`, `buildHealthReport`, `suggestNextStep`, `oxePaths`, constantes de config |
 | **workflows** | `resolveWorkflowsDir`, `listWorkflowMdFiles`, `diffWorkflows`, `validateWorkflowShapes` (avisos `WORKFLOW_SHAPE`) |
@@ -50,7 +79,7 @@ const { options, warnings: w } = oxe.install.resolveOptionsFromConfig(dir, {
 | **manifest** | `loadFileManifest`, `writeFileManifest`, `sha256File`, `collectFilesRecursive` |
 | **agents** | `adjustWorkflowPathsForNestedLayout`, `parseCursorCommandFrontmatter` |
 | **azure** | `azurePaths`, `detectAzureCli`, `loadAzureProfile`, `syncAzureInventory`, `planAzureOperation`, `applyAzureOperation`, `azureDoctor` |
-| **runtime / operational** | `buildRuntimePluginRegistry`, `readRuntimeGates`, `resolveRuntimeGate`, `runRuntimeVerify`, `runRuntimePromotion`, `recoverRuntimeState`, `replayRuntimeState`, `readRuntimeMultiAgentStatus`, `multiAgentStatus` |
+| **runtime / operational** | `buildRuntimePluginRegistry`, `readRuntimeGates`, `resolveRuntimeGate`, `runRuntimeVerify`, `runRuntimePromotion`, `recoverRuntimeState`, `replayRuntimeState`, `readRuntimeMultiAgentStatus`, `multiAgentStatus`, `runtimeOnboard`, `runtimeWorktreeHygiene`, `runtimeAgentsCoord`, `runtimeReevaluate`, `runtimeCiParity`, `runtimeMcpServer`, `runtimePrimer`, `runtimeDeliverInit`, `runtimeDeliverStatus`, `runtimeDeliverNext`, `runtimeDeliverAdvance`, `runtimeDeliverRun` |
 | **doctor** | `runDoctorChecks` — resultado estruturado (erros + avisos + diff de workflows + `workflowShape` com lint leve dos `.md`) |
 
 TypeScript: ver `index.d.ts` junto deste ficheiro.

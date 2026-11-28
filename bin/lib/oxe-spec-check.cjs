@@ -246,4 +246,40 @@ function checkSpec(input) {
   };
 }
 
-module.exports = { checkSpec, criteria, requirements, tables };
+/**
+ * 1.23.0 (OXB-230-22): Resolves SPEC.md from the active session first (`.oxe/state.json` / `STATE.md`),
+ * falling back read-only to legacy root `.oxe/SPEC.md`.
+ */
+function resolveSessionSpecPath(projectRoot, explicitSession = null) {
+  const rootAbs = path.resolve(projectRoot || process.cwd());
+  let session = explicitSession ? String(explicitSession).trim().replace(/\\/g, '/') : null;
+  if (!session) {
+    try {
+      session = require('./oxe-state.cjs').readActiveSessionPointer(rootAbs);
+    } catch { session = null; }
+  }
+  if (!session) {
+    try {
+      const stateMdPath = path.join(rootAbs, '.oxe', 'STATE.md');
+      if (fs.existsSync(stateMdPath)) {
+        const health = require('./oxe-project-health.cjs');
+        if (typeof health.parseActiveSession === 'function') {
+          session = health.parseActiveSession(fs.readFileSync(stateMdPath, 'utf8'));
+        }
+      }
+    } catch { session = null; }
+  }
+  if (session) {
+    const cleanSess = session.replace(/^\/+|\/+$/g, '');
+    const candidates = [
+      path.join(rootAbs, '.oxe', cleanSess, 'SPEC.md'),
+      path.join(rootAbs, '.oxe', cleanSess, 'spec', 'SPEC.md'),
+    ];
+    for (const c of candidates) {
+      if (fs.existsSync(c)) return c;
+    }
+  }
+  return path.join(rootAbs, '.oxe', 'SPEC.md');
+}
+
+module.exports = { checkSpec, criteria, requirements, tables, resolveSessionSpecPath };

@@ -62,6 +62,7 @@ function buildAgentInstallPaths(ideGlobal, projectRoot, options = {}) {
       codexAgentsSkillsRoot: path.join(home, '.agents', 'skills'),
       antigravitySkillsRoot: path.join(home, '.gemini', 'antigravity', 'skills'),
       claudeAgentsDir: path.join(home, '.claude', 'agents'),
+      oxeSkillsDir: path.join(home, '.oxe', 'skills'),
     };
   }
   return {
@@ -73,6 +74,7 @@ function buildAgentInstallPaths(ideGlobal, projectRoot, options = {}) {
     codexAgentsSkillsRoot: path.join(root, '.agents', 'skills'),
     antigravitySkillsRoot: path.join(root, '.gemini', 'antigravity', 'skills'),
     claudeAgentsDir: path.join(root, '.claude', 'agents'),
+    oxeSkillsDir: path.join(root, '.oxe', 'skills'),
   };
 }
 
@@ -281,6 +283,79 @@ function buildGeminiToml(description, body) {
   const desc = description.trim() || 'OXE';
   const safeBody = body.replace(/"""/g, '\\"\\"\\"');
   return `${OXE_MANAGED_TOML}\ndescription = ${JSON.stringify(desc)}\nprompt = """\n${safeBody}\n"""\n`;
+}
+
+/**
+ * Flat skill markdown for `~/.oxe/skills/<name>.md` and `<workspace>/.oxe/skills/<name>.md`
+ * (consumed by OxeChat / OxeCode and universal `.oxe/skills/` hosts).
+ * Uses `agents: []` so the skill is enabled for every provider (Claude, Codex, etc.).
+ *
+ * @param {string} skillName
+ * @param {string} description
+ * @param {string} body
+ * @param {Record<string, string>} [metadata]
+ */
+function buildOxeFlatSkillMarkdown(skillName, description, body, metadata) {
+  const desc = description.trim() || `Comando OXE — ${skillName}`;
+  const meta = metadata ? runtimeSemantics.pickRuntimeMetadata(metadata) : {};
+  const metaLines = Object.keys(meta).length
+    ? `${runtimeSemantics.renderRuntimeMetadataLines(meta).join('\n')}\n`
+    : '';
+  return (
+    `---\n` +
+    `name: ${skillName}\n` +
+    `description: ${JSON.stringify(desc)}\n` +
+    `agents: []\n` +
+    `category: oxe\n` +
+    metaLines +
+    `---\n\n` +
+    `${OXE_MANAGED_HTML}\n\n` +
+    `${body}\n`
+  );
+}
+
+/**
+ * Installs OXE commands as flat `.md` skills in `~/.oxe/skills/` (or `<project>/.oxe/skills/`).
+ *
+ * @param {string} cCmdSrc
+ * @param {string} destDir
+ * @param {{ dryRun: boolean, force: boolean }} opts
+ * @param {boolean} pathRewriteNested
+ * @param {(s: string) => void} [logOmitido]
+ * @param {(s: string) => void} [logWrite]
+ */
+function installOxeSkills(cCmdSrc, destDir, opts, pathRewriteNested, logOmitido, logWrite) {
+  if (!fs.existsSync(cCmdSrc) || !destDir) return;
+
+  const writeOne = (skillName, srcPath, descSuffix) => {
+    let raw = fs.readFileSync(srcPath, 'utf8');
+    if (pathRewriteNested) raw = adjustWorkflowPathsForNestedLayout(raw);
+    const { description, body, frontmatter } = parseCursorCommandFrontmatter(raw);
+    const desc = descSuffix ? `${description.trim()} ${descSuffix}`.trim() : description.trim();
+    const md = buildOxeFlatSkillMarkdown(skillName, desc, body, frontmatter);
+    const dest = path.join(destDir, `${skillName}.md`);
+    if (opts.dryRun) {
+      if (logWrite) logWrite(`oxe-skills ${srcPath} → ${dest}`);
+      return;
+    }
+    if (fs.existsSync(dest) && !opts.force) {
+      if (logOmitido) logOmitido(dest);
+      return;
+    }
+    fs.mkdirSync(destDir, { recursive: true });
+    fs.writeFileSync(dest, md, 'utf8');
+  };
+
+  for (const name of fs.readdirSync(cCmdSrc)) {
+    if (!name.startsWith('oxe-') || !name.endsWith('.md')) continue;
+    const skillName = name.replace(/\.md$/i, '');
+    writeOne(skillName, path.join(cCmdSrc, name));
+  }
+
+  const helpPath = path.join(cCmdSrc, 'oxe-help.md');
+  if (fs.existsSync(helpPath)) {
+    writeOne('oxe', helpPath, 'Ponto de entrada /oxe (mesmo fluxo que oxe-help).');
+  }
 }
 
 /**
@@ -651,6 +726,18 @@ function cleanupMarkedUnifiedArtifacts(u, paths) {
       }
     }
   }
+
+  if (shouldClean('oxeSkills') && p.oxeSkillsDir && fs.existsSync(p.oxeSkillsDir)) {
+    for (const name of fs.readdirSync(p.oxeSkillsDir)) {
+      if (!isOxeCommandMarkdownName(name)) continue;
+      const filePath = path.join(p.oxeSkillsDir, name);
+      try {
+        if (fs.readFileSync(filePath, 'utf8').includes(OXE_MANAGED_HTML)) unlinkQuiet(filePath);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
 }
 
 module.exports = {
@@ -660,6 +747,8 @@ module.exports = {
   adjustWorkflowPathsForNestedLayout,
   parseCursorCommandFrontmatter,
   buildAgentSkillMarkdown,
+  buildOxeFlatSkillMarkdown,
+  installOxeSkills,
   installSkillTreeFromCursorCommands,
   installOpenCodeCommands,
   installGeminiTomlCommands,

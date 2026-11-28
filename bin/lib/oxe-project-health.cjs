@@ -128,6 +128,9 @@ const ALLOWED_CONFIG_KEYS = [
   'autoresume',
   // report failure-cost: failure_cost.fixes (cause → the OXB/commit that fixed it)
   'failure_cost',
+  // 1.23.0: agents.auto_lease (OXB-230-04) & reevaluate.block_on_drift (OXB-230-05)
+  'agents',
+  'reevaluate',
 ];
 
 /**
@@ -147,7 +150,8 @@ const VERIFICATION_DEPTHS = ['standard', 'thorough', 'quick'];
 const INSTALL_PROFILES = ['recommended', 'cursor', 'copilot', 'core', 'cli', 'all_agents'];
 
 /** Layout do repositório: `nested` = só `.oxe/`; `classic` = `oxe/` na raiz + `.oxe/`. */
-const INSTALL_REPO_LAYOUTS = ['nested', 'classic'];
+/** OXB-230-23: `core` = assets estáticos do install em `.oxe/core/` (raiz `.oxe/` só com o estado do projeto). */
+const INSTALL_REPO_LAYOUTS = ['nested', 'classic', 'core'];
 
 /** @type {string[]} */
 const INSTALL_OBJECT_KEYS = ['profile', 'repo_layout', 'ide_scope', 'vscode', 'include_commands_dir', 'include_agents_md'];
@@ -490,7 +494,7 @@ function validateConfigShape(cfg) {
           typeErrors.push('install.repo_layout deve ser string');
         } else if (!INSTALL_REPO_LAYOUTS.includes(inst.repo_layout)) {
           typeErrors.push(
-            `install.repo_layout deve ser "nested" ou "classic"`
+            `install.repo_layout deve ser um de: ${INSTALL_REPO_LAYOUTS.join(', ')}`
           );
         }
       }
@@ -961,7 +965,6 @@ function detectWorkspaceMode(target) {
   const commandsTreePresent = fs.existsSync(path.join(target, 'commands', 'oxe'));
   const packageRepo =
     packageName === 'oxe-cc'
-    && fs.existsSync(path.join(target, 'bin', 'oxe-cc.js'))
     && fs.existsSync(path.join(target, 'packages', 'runtime', 'package.json'))
     && canonicalTreePresent;
   return {
@@ -973,14 +976,55 @@ function detectWorkspaceMode(target) {
 }
 
 /**
+ * Checks whether `.oxe/<activeSession>` (or `.oxe/sessions`) is ignored by `.gitignore`.
+ * Used so a clean CI checkout of `product_package` does not report `broken` when
+ * `.oxe/STATE.md` references a local gitignored development session.
+ *
+ * @param {string} target
+ * @param {string | null} activeSession
+ * @returns {boolean}
+ */
+function isSessionDirGitignored(target, activeSession) {
+  if (!activeSession) return false;
+  const giPath = path.join(target, '.gitignore');
+  if (!fs.existsSync(giPath)) return false;
+  try {
+    const lines = fs.readFileSync(giPath, 'utf8')
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith('#') && !l.startsWith('!'));
+    const normSession = String(activeSession).replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    const relPath = `.oxe/${normSession}`;
+    return lines.some((raw) => {
+      const p = raw.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+      return (
+        p === '.oxe'
+        || p === '.oxe/*'
+        || p === '.oxe/**'
+        || p === '.oxe/sessions'
+        || p === '.oxe/sessions/*'
+        || p === '.oxe/sessions/**'
+        || p === relPath
+        || p === `${relPath}/*`
+        || p === `${relPath}/**`
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
+/**
  * @param {'product_package' | 'oxe_project'} workspaceMode
  * @param {string | null} phase
  * @param {string | null} activeSession
  * @param {Record<string, unknown> | null} activeRun
+ * @param {{ gitignoredLocalSession?: boolean }} [options]
  * @returns {boolean}
  */
-function shouldSuppressExecutionWorkspaceGates(workspaceMode, phase, activeSession, activeRun) {
+function shouldSuppressExecutionWorkspaceGates(workspaceMode, phase, activeSession, activeRun, options = {}) {
   if (workspaceMode !== 'product_package') return false;
+  if (options && options.gitignoredLocalSession) return true;
   if (activeSession) return false;
   if (activeRun && typeof activeRun === 'object') return false;
   return !phase || phase === 'initial';
@@ -994,7 +1038,7 @@ function copilotWorkspacePaths(target) {
     root: path.join(target, '.github'),
     promptsDir: path.join(target, '.github', 'prompts'),
     instructions: path.join(target, '.github', 'copilot-instructions.md'),
-    manifest: path.join(target, '.oxe', 'install', 'copilot-vscode.json'),
+    manifest: require('./oxe-layout.cjs').resolveOxeAssetFile(target, 'install', 'copilot-vscode.json', { forWrite: true }),
   };
 }
 
@@ -1578,7 +1622,7 @@ function promptWorkflowPathWarnings(filePath, target) {
   const hasClassicRef = /(^|[`"'(\s])oxe\/workflows\//i.test(text);
   const hasNestedRef = /(^|[`"'(\s])\.oxe\/workflows\//i.test(text);
   const classicExists = fs.existsSync(path.join(target, 'oxe', 'workflows'));
-  const nestedExists = fs.existsSync(path.join(target, '.oxe', 'workflows'));
+  const nestedExists = fs.existsSync(path.join(target, '.oxe', 'workflows')) || fs.existsSync(path.join(target, '.oxe', 'core', 'workflows'));
   /** @type {string[]} */
   const warnings = [];
   if (nestedExists && !classicExists && hasClassicRef && !hasNestedRef) {
@@ -2928,14 +2972,19 @@ function buildHealthReport(target) {
   const p = resolvedReadableOxePaths(target, activeSession);
   const phase = parseStatePhase(stateText);
   const workspaceInfo = detectWorkspaceMode(target);
+  const gitignoredLocalSessionInPackage =
+    workspaceInfo.workspaceMode === 'product_package'
+    && Boolean(activeSession)
+    && !fs.existsSync(scopedOxePaths(target, activeSession).sessionRoot)
+    && isSessionDirGitignored(target, activeSession);
   const scanDate = parseLastScanDate(stateText);
   const stale = isStaleScan(scanDate, Number(config.scan_max_age_days) || 0);
   const compactDate = parseLastCompactDate(stateText);
   const staleCompact = isStaleScan(compactDate, Number(config.compact_max_age_days) || 0);
   const retroDate = parseLastRetroDate(stateText);
   const staleLessons = isStaleLessons(retroDate, Number(config.lessons_max_age_days) || 0);
-  const phaseWarn = phase ? phaseCoherenceWarnings(phase, p) : [];
-  const runtimeWarn = runtimeWarnings(stateText, p);
+  const phaseWarn = (phase && !gitignoredLocalSessionInPackage) ? phaseCoherenceWarnings(phase, p) : [];
+  const runtimeWarn = gitignoredLocalSessionInPackage ? [] : runtimeWarnings(stateText, p);
   const sumWarn = verifyGapsWithoutSummaryWarning(p.verify, p.summary);
   const specReq = Array.isArray(config.spec_required_sections) ? config.spec_required_sections : [];
   const specWarn = specSectionWarnings(p.spec, specReq.map(String));
@@ -2962,7 +3011,8 @@ function buildHealthReport(target) {
     workspaceInfo.workspaceMode,
     phase,
     activeSession,
-    activeRun
+    activeRun,
+    { gitignoredLocalSession: gitignoredLocalSessionInPackage }
   );
   let unrunCiWarn = [];
   try {
@@ -2980,7 +3030,7 @@ function buildHealthReport(target) {
     ...unrunCiWarn,
   ];
   const planWarn = suppressExecutionWorkspaceGates ? [] : executionPlanWarn;
-  const sessionWarn = sessionWarnings(target, activeSession);
+  const sessionWarn = gitignoredLocalSessionInPackage ? [] : sessionWarnings(target, activeSession);
   const installWarn = installationCompletenessWarnings(target);
   const copilot = copilotIntegrationReport(target);
   const copilotWarn = copilot.warnings;

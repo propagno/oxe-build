@@ -4,8 +4,8 @@ Este repositório empacota o fluxo **OXE** (spec-driven, artefatos em `.oxe/`). 
 
 - **npm:** `npx oxe-cc@latest` · pacote `oxe-cc` · [README.md](README.md)
 - **Workflows canónicos:** [oxe/workflows/](oxe/workflows/) — editar aqui primeiro; todas as integrações apontam para estes ficheiros. Referência **legado / brownfield:** [oxe/workflows/references/legacy-brownfield.md](oxe/workflows/references/legacy-brownfield.md).
-- **CLI:** `oxe-cc install | doctor | doctor --release | status | init-oxe | update | uninstall` + `oxe-cc runtime <status|compile|execute|verify|gates|replay|recover|ci|promote|agents|program|feedback|signoff|dossier|rollback|scorecard>` + `oxe-cc plan lint|done` + jornada `oxe-cc status --journey | grill … | spec check|approve | ship status` + documentos `oxe-cc prd lint | rfc new|accept|reject|list | decision add|status|import|publish | docs publish|check` + ALM `oxe-cc alm status|push|sync|move|link|defect|queue|ack` (Jira / Azure DevOps, por REST ou pelas ferramentas MCP da sessão) — ver [README.md](README.md#cli-oxe-cc).
-- **SDK:** `require('oxe-cc')` expõe `runDoctorChecks`, `health`, `workflows`, `install`, `manifest`, `agents`, `verifyRun` e bridges `operational.*` do runtime enterprise — ver [lib/sdk/README.md](lib/sdk/README.md).
+- **CLI:** `oxe-cc install | primer | deliver <init|mode|answer|approve|next|advance|run|resume|status|cancel> | workflow new <slug> | doctor [--ci-parity] | doctor --release | doctor --migrate-layout [--apply] | gc | resume | status | mcp | onboard | agents | reevaluate | init-oxe | update | uninstall` + `oxe-cc runtime <status|compile|execute|verify|gates|replay|recover|ci|promote|agents|program|feedback|signoff|dossier|rollback|scorecard>` + `oxe-cc plan lint|done` + jornada `oxe-cc status --journey | grill … | spec check|approve | ship status` + documentos `oxe-cc prd lint | rfc new|accept|reject|list | decision add|status|import|publish | docs publish|check` + ALM `oxe-cc alm status|push|sync|move|link|defect|queue|ack` (Jira, Azure DevOps, `github-issues` via `gh` ou `gitlab-issues` via `glab`) — ver [README.md](README.md#cli-oxe-cc).
+- **SDK:** `require('oxe-cc')` ou `import { createClient } from 'oxe-cc'` (CJS + ESM nativo) expõe `createClient(projectRoot)`, `runDoctorChecks`, `health`, `workflows`, `install`, `manifest`, `agents`, `verifyRun` e bridges `operational.*` do runtime enterprise — ver [lib/sdk/README.md](lib/sdk/README.md).
 
 ---
 
@@ -30,8 +30,9 @@ Este repositório empacota o fluxo **OXE** (spec-driven, artefatos em `.oxe/`). 
 ## Trilha avançada
 
 ```
+/oxe-deliver      → entrega autônoma ponta a ponta (primer → briefing → single-ok/auto → F1..Fn → FINAL_SMOKE → DELIVERY.md)
 /oxe-session      → criar, alternar, retomar, fechar ou migrar sessões OXE
-/oxe-dashboard    → visão web para revisão de equipe e aprovação do plano
+/oxe-dashboard    → visão web simplificada ao vivo para revisão, aprovação e entrega pronta
 ```
 
 ## Administrativa / plataforma

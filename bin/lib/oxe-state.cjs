@@ -19,6 +19,7 @@ function buildStateJson(src) {
   const done = new Set(w.done || []);
   return {
     contract: CONTRACT,
+    active_session: src.activeSession ? String(src.activeSession).trim().replace(/\\/g, '/') : null,
     program: src.program ? { active_phase: src.program.active_phase || null, phases: (src.program.phases || []).map((p) => ({ id: p.id, status: p.status })) } : null,
     phase: src.program && src.program.active_phase ? { id: src.program.active_phase, status: ((src.program.phases || []).find((p) => p.id === src.program.active_phase) || {}).status || null } : null,
     run: run.run_id ? { id: run.run_id, status: run.status || null, verification_status: run.verification_status || null } : null,
@@ -84,4 +85,20 @@ function validateStateMd(text, state) {
   return out;
 }
 
-module.exports = { CONTRACT, buildStateJson, writeStateJson, validateStateMd, sameState };
+/**
+ * 1.23.0 (OXB-230-22): Reads the canonical active session pointer from `.oxe/state.json`.
+ */
+function readActiveSessionPointer(projectRoot) {
+  const file = path.join(path.resolve(projectRoot || process.cwd()), '.oxe', 'state.json');
+  try {
+    if (!fs.existsSync(file)) return null;
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const val = doc && typeof doc.active_session === 'string' ? doc.active_session.trim().replace(/\\/g, '/') : '';
+    if (!val || /^(nenhuma|none|raiz|-|—)$/i.test(val)) return null;
+    return val;
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { CONTRACT, buildStateJson, writeStateJson, readActiveSessionPointer, validateStateMd, sameState };

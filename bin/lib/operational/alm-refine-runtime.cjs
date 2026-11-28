@@ -607,16 +607,47 @@ function createAlmRefineRuntime(deps) {
     if (problems.length) throw new Error(`ALM: ${problems.join('; ')}`);
     const rest = lib.jiraRest(cfg, options);
     const jql = options.jql || `project = "${cfg.p.project}" AND updated >= -90d ORDER BY created ASC`;
-    const max = Number(options.max) > 0 ? Number(options.max) : 300;
+    // oxespace 28/11: a default cap of 300 with ORDER BY created ASC dropped the newest cards (134 of 434), so the
+    // releases of the last week were missing from throughput. Every page now; --max only when asked, and then the
+    // report says "N de M".
+    const max = Number(options.max) > 0 ? Number(options.max) : Infinity;
+    let total = null;
+    try {
+      const c = await rest.request('POST', `${rest.site}/rest/api/3/search/approximate-count`, { jql: jql.replace(/\s+ORDER\s+BY\s+.*$/i, '') });
+      if (c && Number.isFinite(Number(c.count))) total = Number(c.count);
+    } catch { total = null; }
     const issues = [];
     let token = null;
+    let more = false;
     do {
       const r = await rest.request('GET', `${rest.site}/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&fields=status,created,issuetype,summary&expand=changelog&maxResults=100${token ? `&nextPageToken=${encodeURIComponent(token)}` : ''}`);
-      for (const i of (r && r.issues) || []) issues.push({ key: i.key, created: i.fields.created, status: i.fields.status ? i.fields.status.name : null, statusId: i.fields.status ? i.fields.status.id : null, summary: i.fields.summary, changes: metrics.changesFromJira(i) });
+      for (const i of (r && r.issues) || []) {
+        if (issues.length >= max) { more = true; break; }
+        // the search embeds at most a page of the changelog: a card with more history entries gets the rest, or
+        // its later status changes (the release) would be missing
+        const cl = i.changelog || {};
+        const histories = cl.histories || [];
+        if (Number(cl.total) > histories.length) {
+          const all = [];
+          let startAt = 0;
+          for (;;) {
+            const p = await rest.request('GET', `${rest.site}/rest/api/3/issue/${encodeURIComponent(i.key)}/changelog?startAt=${startAt}&maxResults=100`);
+            const vals = (p && p.values) || [];
+            all.push(...vals);
+            startAt += vals.length;
+            if (!vals.length || (p && p.isLast) || startAt >= Number((p && p.total) || 0)) break;
+          }
+          i.changelog = { histories: all, total: all.length };
+        }
+        issues.push({ key: i.key, created: i.fields.created, status: i.fields.status ? i.fields.status.name : null, statusId: i.fields.status ? i.fields.status.id : null, summary: i.fields.summary, changes: metrics.changesFromJira(i) });
+      }
       token = r && !r.isLast ? r.nextPageToken : null;
-    } while (token && issues.length < max);
+      if (token && issues.length >= max) more = true;
+    } while (token && !more);
     metrics.renameByStatusId(issues);
-    const out = metrics.compute(issues.slice(0, max), { states: cfg.states, wip: cfg.wip, stages: lib.STAGES }, { now: options.now });
+    const out = metrics.compute(issues, { states: cfg.states, wip: cfg.wip, stages: lib.STAGES }, { now: options.now });
+    out.total = total != null ? Math.max(total, issues.length) : issues.length;
+    out.truncated = more || (total != null && total > issues.length);
     const dir = path.join(projectRoot, '.oxe', 'alm');
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'metrics.json'), JSON.stringify({ jql, at: new Date().toISOString(), ...out }, null, 2));
