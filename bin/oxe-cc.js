@@ -7388,7 +7388,7 @@ async function main() {
       move: ['oxe-cc alm move <US-n|Tn|chave> <etapa> [--comment "…"] [--apply]', 'move um item à mão (etapas: intake grooming refinement ready in_progress review verified queued integrated staging accepted released)', 'oxe-cc alm move OXE-20 review --comment "PR #801"'],
       label: ['oxe-cc alm label <chave> [--add <rótulo>[,<rótulo>]] [--remove <rótulo>[,<rótulo>]] --apply', 'acrescenta ou tira rótulos de um card (ex.: guarda-chuva, needs-info respondido), sem repetir', 'oxe-cc alm label OXE-189 --remove needs-info --apply'],
       link: ['oxe-cc alm link <US-n|Tn> <chave> · oxe-cc alm link <chave> --pr <n> [--repo <url>] --apply · oxe-cc alm link <chave> --relates <chave>[,<chave>] --apply', 'liga um ref do OXE a um item que já existe; com --pr, liga o card ao PR que o entregou (link remoto no Jira, hyperlink no Azure; repositório de alm.docs.repo)', 'oxe-cc alm link OXE-11 --pr 771 --apply'],
-      comment: ['oxe-cc alm comment <ref|chave> --text "…"', 'comenta num item (vale também para sessões que só leem)', 'oxe-cc alm comment OXE-20 --text "visto na revisão"'],
+      comment: ['oxe-cc alm comment <ref|chave> (--text "…" | --text-file <arquivo.md>) [--apply | --dry-run]', 'comenta num item (vale também para sessões que só leem; numa sessão leitora vira pedido para o escritor). --text-file lê o texto em UTF-8, sem depender das aspas e da página de código do shell', 'oxe-cc alm comment OXE-20 --text "visto na revisão" --apply'],
       defect: ['oxe-cc alm defect --title "…" --origin <US-n|Fn-Tn> [--cr CR-n] [--ref BUG-n]', 'defeito depois do deploy, ligado à origem e ao CR', 'oxe-cc alm defect --title "não chega offline" --origin US-1 --cr CR-4'],
       queue: ['oxe-cc alm queue [--json]', 'transporte MCP: a fila de operações que o agente executa', 'oxe-cc alm queue --json'],
       ack: ['oxe-cc alm ack <id> [--key <chave>] [--error "…"]', 'transporte MCP: confirma (ou registra a falha de) uma operação da fila', 'oxe-cc alm ack ensure:US-1 --key OXE-48'],
@@ -7403,7 +7403,18 @@ async function main() {
     const sub = argv[0] && !argv[0].startsWith('-') ? argv[0] : null;
     if (sub && H[sub]) {
       const [u, what, ex] = H[sub];
-      console.log(`\n  ${u}\n\n  ${what}\n\n  Exemplo: ${ex}\n  Todos aceitam --dir <projeto> e --json; escrita no ALM só com OXE_ALM_WRITER (alm.writer). Config: oxe/templates/CONFIG.md, seção ALM.\n`);
+      // the write mode of THIS project, said in every subcommand's help (oxespace 28/11: the example wrote nothing)
+      let mode = '';
+      try {
+        const hd = argv.indexOf('--dir');
+        const proj = hd >= 0 && argv[hd + 1] ? path.resolve(argv[hd + 1]) : process.cwd();
+        const almCfg = (oxeHealth.loadOxeConfigMerged(proj).config || {}).alm || {};
+        if (almCfg.dry_run === true) mode = 'Escrita neste projeto: desligada (alm.dry_run: true) — tudo é simulação.';
+        else if (almCfg.require_apply === true) mode = 'Escrita neste projeto: simulação por padrão (alm.require_apply: true) — grave com --apply; --dry-run só simula.';
+        else mode = 'Escrita neste projeto: grava direto (alm.require_apply ausente ou false) — --dry-run simula; --apply é aceito.';
+      } catch { mode = 'Escrita: com alm.require_apply: true é simulação até passar --apply; --dry-run sempre simula.'; }
+      const readOnlySub = ['status', 'doctor', 'queue', 'metrics', 'usage'].includes(sub);
+      console.log(`\n  ${u}\n\n  ${what}\n\n  Exemplo: ${ex}\n${readOnlySub ? '' : `  ${mode}\n`}  Todos aceitam --dir <projeto> e --json; escrita no ALM só com OXE_ALM_WRITER (alm.writer). Config: oxe/templates/CONFIG.md, seção ALM.\n`);
     } else {
       console.log('\n  oxe-cc alm <subcomando> — Jira / Azure DevOps (REST ou MCP)\n');
       for (const [k, [, what]] of Object.entries(H)) console.log(`    ${k.padEnd(9)} ${what}`);
@@ -7574,6 +7585,8 @@ async function main() {
       else if (a === '--by' && sub === 'supersede' && argv[i + 1]) o.newKeys = String(argv[++i]);
       else if (a === '--close-to' && sub === 'supersede' && argv[i + 1]) o.closeTo = String(argv[++i]);
       else if (a === '--no-close' && sub === 'supersede') o.noClose = true;
+      // the comment text from a UTF-8 file: no shell quoting, no code page in the way (oxespace 28/11: "›" arrived as ">")
+      else if (a === '--text-file' && argv[i + 1]) o.text = fs.readFileSync(path.resolve(argv[++i]), 'utf8').replace(/^﻿/, '').replace(/\r\n/g, '\n').trimEnd();
       else if (['--title', '--origin', '--comment', '--description', '--ref', '--key', '--url', '--error', '--adopted', '--text', '--cr', '--pr', '--repo', '--relates', '--add', '--remove', '--kind'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
       else if (!a.startsWith('-')) positional.push(a);
       else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
