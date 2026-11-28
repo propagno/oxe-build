@@ -12,6 +12,124 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const intake = require('./oxe-deliver-intake.cjs');
 const engine = require('./oxe-deliver-engine.cjs');
+const agentCoord = require('./oxe-agent-coord.cjs');
+
+function normTaskFile(f) {
+  return String(f || '').trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+}
+
+function filesOverlap(setA, listB) {
+  if (setA.size === 0 || listB.length === 0) return true;
+  for (const b of listB) {
+    for (const a of setA) {
+      if (a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 1.23.0 (OXB-230-17): Partitions phase tasks into parallel execution batches whose file write-sets
+ * are mutually disjoint, avoiding merge conflicts and write races.
+ */
+function partitionDisjointTasks(tasks = []) {
+  const list = Array.isArray(tasks) ? tasks : [];
+  const batches = [];
+  const batchFileSets = [];
+
+  for (const task of list) {
+    const files = [...new Set((Array.isArray(task && task.files) ? task.files : []).map(normTaskFile).filter(Boolean))];
+    let placed = false;
+    for (let i = 0; i < batches.length; i += 1) {
+      if (!filesOverlap(batchFileSets[i], files)) {
+        batches[i].push(task);
+        for (const f of files) batchFileSets[i].add(f);
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      batches.push([task]);
+      batchFileSets.push(new Set(files));
+    }
+  }
+  return batches;
+}
+
+function slugifyBranchSegment(text) {
+  const slug = String(text || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+  return slug || 'auto';
+}
+
+function isGitRepo(projectRoot) {
+  const res = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], {
+    cwd: path.resolve(projectRoot),
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  return res.status === 0 && String(res.stdout || '').trim() === 'true';
+}
+
+/**
+ * Ensures local branch `deliver/<slug>` exists and is checked out. Never pushes to any remote.
+ */
+function ensureDeliveryBranch(projectRoot, slug) {
+  const rootAbs = path.resolve(projectRoot);
+  if (!isGitRepo(rootAbs)) return { ok: false, skipped: true, branch: null };
+  const cur = spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+    cwd: rootAbs,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  const currentBranch = cur.status === 0 ? String(cur.stdout || '').trim() : '';
+  if (currentBranch.startsWith('deliver/')) {
+    return { ok: true, branch: currentBranch, created: false };
+  }
+  const branch = `deliver/${slugifyBranchSegment(slug)}`;
+  const co = spawnSync('git', ['checkout', '-B', branch], {
+    cwd: rootAbs,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (co.status !== 0) {
+    return { ok: false, branch, error: String(co.stderr || co.stdout || '').trim() };
+  }
+  return { ok: true, branch, created: true };
+}
+
+/**
+ * Commits local phase outputs with `OXE-Deliver: <deliver_id>/<phaseId>` trailer. Never pushes.
+ */
+function commitPhaseResult(projectRoot, deliverId, phaseId, title) {
+  const rootAbs = path.resolve(projectRoot);
+  if (!isGitRepo(rootAbs)) return { ok: false, skipped: true, committed: false };
+  const status = spawnSync('git', ['status', '--porcelain'], {
+    cwd: rootAbs,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (status.status !== 0 || !String(status.stdout || '').trim()) {
+    return { ok: true, committed: false };
+  }
+  const add = spawnSync('git', ['add', '-A'], { cwd: rootAbs, encoding: 'utf8', windowsHide: true });
+  if (add.status !== 0) {
+    return { ok: false, committed: false, error: String(add.stderr || '').trim() };
+  }
+  const summary = `feat(${phaseId}): ${String(title || 'phase verified').slice(0, 72)}`;
+  const msg = `${summary}\n\nOXE-Deliver: ${deliverId}/${phaseId}`;
+  const commit = spawnSync('git', ['commit', '-m', msg], { cwd: rootAbs, encoding: 'utf8', windowsHide: true });
+  if (commit.status !== 0) {
+    return { ok: false, committed: false, error: String(commit.stderr || commit.stdout || '').trim() };
+  }
+  const rev = spawnSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: rootAbs, encoding: 'utf8', windowsHide: true });
+  return { ok: true, committed: true, sha: rev.status === 0 ? String(rev.stdout || '').trim() : null };
+}
 
 function buildExecutorPrompt(step) {
   const lines = [
@@ -106,10 +224,16 @@ async function runAutonomousDelivery(projectRoot, opts = {}) {
 
   const maxIterations = Number.isInteger(opts.maxIterations) && opts.maxIterations > 0 ? opts.maxIterations : 50;
   let stepsExecuted = 0;
+  let gitBranchInfo = null;
+  const gitCommits = [];
 
   for (let iter = 0; iter < maxIterations; iter += 1) {
     const step = engine.getNextDeliveryStep(rootAbs, sessionOpt);
     const currentStatus = step.state;
+
+    if (opts.autoGit && !gitBranchInfo && !['CLARIFY', 'DESIGN_REVIEW', 'PAUSED_BLOCKED', 'CANCELLED'].includes(currentStatus)) {
+      gitBranchInfo = ensureDeliveryBranch(rootAbs, step.deliver_id || step.title);
+    }
 
     if (currentStatus === 'DELIVERED') {
       const latest = engine.readDeliveryState(rootAbs, sessionOpt);
@@ -117,6 +241,8 @@ async function runAutonomousDelivery(projectRoot, opts = {}) {
         ok: true,
         deliver_id: step.deliver_id,
         steps_executed: stepsExecuted,
+        git_branch: gitBranchInfo ? gitBranchInfo.branch : null,
+        git_commits: gitCommits,
         state: latest.state,
         handoff: latest.state.handoff || null,
       };
@@ -182,13 +308,54 @@ async function runAutonomousDelivery(projectRoot, opts = {}) {
       if (!adv.ok && adv.state && adv.state.status === 'PAUSED_BLOCKED') {
         return { ok: false, deliver_id: step.deliver_id, blocked: true, steps_executed: stepsExecuted, error: adv.error, state: adv.state };
       }
+      if (adv.ok && opts.autoGit) {
+        const c = commitPhaseResult(rootAbs, step.deliver_id, 'FINAL_SMOKE', 'delivery handoff');
+        if (c.committed) gitCommits.push({ phase: 'FINAL_SMOKE', sha: c.sha });
+      }
       continue;
     }
 
-    // Execute one atomic slice via injected executorFn or CLI executor
+    // Execute one atomic slice (or parallel disjoint task batches during PHASE_IMPLEMENT)
     stepsExecuted += 1;
     let execResult = {};
-    if (typeof opts.executorFn === 'function') {
+    const canParallelize = currentStatus === 'PHASE_IMPLEMENT'
+      && opts.parallel !== false
+      && Array.isArray(step.tasks)
+      && step.tasks.length > 1;
+
+    if (canParallelize) {
+      const batches = partitionDisjointTasks(step.tasks);
+      let totalCost = 0;
+      for (const batch of batches) {
+        const batchResults = await Promise.all(batch.map(async (task) => {
+          const leaseId = `deliver-${step.deliver_id}-${(step.phase && step.phase.id) || 'F'}-${task.id}`;
+          agentCoord.tryAutoLease(rootAbs, 'register', {
+            agent_id: leaseId,
+            provider: opts.executor || 'deliver-runner',
+            role: 'executor',
+            task: `${(step.phase && step.phase.id) || 'F'}/${task.id}`,
+            write_set: task.files || [],
+          });
+          const taskStep = {
+            ...step,
+            task,
+            allowed_files: task.files && task.files.length ? task.files : step.allowed_files,
+          };
+          try {
+            if (typeof opts.executorFn === 'function') {
+              return (await opts.executorFn(taskStep, { projectRoot: rootAbs, iteration: iter, task })) || {};
+            }
+            return invokeCliExecutor(rootAbs, taskStep, opts);
+          } finally {
+            agentCoord.tryAutoLease(rootAbs, 'release', { agent_id: leaseId });
+          }
+        }));
+        for (const r of batchResults) {
+          if (r && Number.isFinite(Number(r.costUsd))) totalCost += Number(r.costUsd);
+        }
+      }
+      execResult = { costUsd: totalCost };
+    } else if (typeof opts.executorFn === 'function') {
       execResult = (await opts.executorFn(step, { projectRoot: rootAbs, iteration: iter })) || {};
     } else {
       execResult = invokeCliExecutor(rootAbs, step, opts);
@@ -203,6 +370,12 @@ async function runAutonomousDelivery(projectRoot, opts = {}) {
       costUsd: execResult.costUsd || 0,
       runCommand: opts.runCommand,
     });
+
+    if (adv.ok && adv.closed_phase && opts.autoGit) {
+      const closedObj = (adv.state && adv.state.phases || []).find((p) => p.id === adv.closed_phase);
+      const c = commitPhaseResult(rootAbs, step.deliver_id, adv.closed_phase, closedObj && closedObj.title);
+      if (c.committed) gitCommits.push({ phase: adv.closed_phase, sha: c.sha });
+    }
 
     if (!adv.ok && adv.state && adv.state.status === 'PAUSED_BLOCKED') {
       return {
@@ -238,5 +411,8 @@ async function runAutonomousDelivery(projectRoot, opts = {}) {
 module.exports = {
   buildExecutorPrompt,
   invokeCliExecutor,
+  partitionDisjointTasks,
+  ensureDeliveryBranch,
+  commitPhaseResult,
   runAutonomousDelivery,
 };

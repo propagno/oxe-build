@@ -9,7 +9,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const http = require('http');
+const net = require('net');
+const { spawn, spawnSync } = require('child_process');
 
 function readJsonIfExists(file) {
   try {
@@ -275,8 +277,164 @@ function generateDeliveryHandoff(projectRoot, state, smokeResult, opts = {}) {
   };
 }
 
+function findFreePort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.unref();
+    srv.on('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const addr = srv.address();
+      const port = addr && typeof addr === 'object' ? addr.port : 0;
+      srv.close((err) => (err ? reject(err) : resolve(port)));
+    });
+  });
+}
+
+function httpGetOnce(port, reqPath, timeoutMs = 1500) {
+  return new Promise((resolve) => {
+    const req = http.get(
+      { hostname: '127.0.0.1', port, path: reqPath, timeout: timeoutMs },
+      (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => {
+          if (body.length < 2048) body += chunk;
+        });
+        res.on('end', () => {
+          resolve({
+            ok: res.statusCode >= 200 && res.statusCode < 400,
+            statusCode: res.statusCode,
+            body,
+          });
+        });
+      }
+    );
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ ok: false, statusCode: null, body: '', error: 'timeout' });
+    });
+    req.on('error', (err) => {
+      resolve({ ok: false, statusCode: null, body: '', error: err.message });
+    });
+  });
+}
+
+function killChildTree(child) {
+  if (!child || !child.pid) return;
+  try {
+    if (process.platform === 'win32') {
+      spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+        timeout: 4000,
+      });
+    } else {
+      try { process.kill(-child.pid, 'SIGTERM'); } catch { /* ignore */ }
+      try { child.kill('SIGKILL'); } catch { /* ignore */ }
+    }
+  } catch { /* ignore */ }
+}
+
+/**
+ * 1.23.0 (OXB-230-17): Boots a web/API project on an ephemeral localhost port, polls `/health` and `/`
+ * until HTTP < 400 or timeout, and deterministically tears down the child process tree.
+ */
+async function probeHttpServerSmoke(projectRoot, opts = {}) {
+  const rootAbs = path.resolve(projectRoot || process.cwd());
+  const started = Date.now();
+  const pkg = readJsonIfExists(path.join(rootAbs, 'package.json'));
+  const startCommand = opts.startCommand
+    || (pkg && pkg.scripts && pkg.scripts.start ? 'npm start' : null);
+
+  if (!startCommand) {
+    return {
+      ok: false,
+      port: null,
+      statusCode: null,
+      error: 'Nenhum comando de start encontrado para probe HTTP.',
+      duration_ms: Date.now() - started,
+    };
+  }
+
+  const port = await findFreePort();
+  const childEnv = { ...process.env, PORT: String(port), HOST: '127.0.0.1' };
+  delete childEnv.NODE_TEST_CONTEXT;
+
+  const child = spawn(startCommand, {
+    cwd: rootAbs,
+    shell: true,
+    env: childEnv,
+    windowsHide: true,
+    detached: process.platform !== 'win32',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  let stdout = '';
+  let stderr = '';
+  let exited = false;
+  let exitCode = null;
+  if (child.stdout) {
+    child.stdout.on('data', (d) => { if (stdout.length < 4096) stdout += String(d); });
+  }
+  if (child.stderr) {
+    child.stderr.on('data', (d) => { if (stderr.length < 4096) stderr += String(d); });
+  }
+  child.on('exit', (code) => {
+    exited = true;
+    exitCode = code;
+  });
+
+  const probePaths = Array.isArray(opts.paths) && opts.paths.length ? opts.paths : ['/health', '/'];
+  const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : 8000;
+  const pollIntervalMs = Number(opts.pollIntervalMs) > 0 ? Number(opts.pollIntervalMs) : 120;
+  const deadline = Date.now() + timeoutMs;
+
+  try {
+    while (Date.now() < deadline) {
+      if (exited) {
+        return {
+          ok: false,
+          port,
+          statusCode: null,
+          error: `Servidor encerrou prematuramente (exit=${exitCode})`,
+          stdout_tail: stdout.trim().slice(-400),
+          stderr_tail: stderr.trim().slice(-400),
+          duration_ms: Date.now() - started,
+        };
+      }
+      for (const reqPath of probePaths) {
+        const res = await httpGetOnce(port, reqPath, Math.min(1200, Math.max(200, deadline - Date.now())));
+        if (res.ok) {
+          return {
+            ok: true,
+            port,
+            path: reqPath,
+            statusCode: res.statusCode,
+            body_excerpt: String(res.body || '').trim().slice(0, 300),
+            duration_ms: Date.now() - started,
+          };
+        }
+      }
+      await new Promise((r) => setTimeout(r, pollIntervalMs));
+    }
+
+    return {
+      ok: false,
+      port,
+      statusCode: null,
+      error: `Timeout (${timeoutMs}ms) aguardando resposta HTTP < 400 na porta ${port}.`,
+      stdout_tail: stdout.trim().slice(-400),
+      stderr_tail: stderr.trim().slice(-400),
+      duration_ms: Date.now() - started,
+    };
+  } finally {
+    killChildTree(child);
+  }
+}
+
 module.exports = {
   detectSmokeStrategy,
   runFinalSmoke,
+  probeHttpServerSmoke,
   generateDeliveryHandoff,
 };
