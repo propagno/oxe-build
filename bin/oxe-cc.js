@@ -6389,9 +6389,7 @@ function runCapabilities(opts) {
     console.error(`${yellow}Diretório não encontrado: ${opts.dir}${reset}`);
     process.exit(1);
   }
-  bootstrapOxe(opts.dir, { dryRun: false, force: false });
   const capsDir = path.join(opts.dir, '.oxe', 'capabilities');
-  ensureDir(capsDir);
   if (opts.action === 'list') {
     const ids = listLocalCapabilities(opts.dir);
     console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${opts.dir}${c ? reset : ''}`);
@@ -6402,6 +6400,7 @@ function runCapabilities(opts) {
     }
     return;
   }
+  bootstrapOxe(opts.dir, { dryRun: false, force: false });
   if (!opts.id && (opts.action === 'install' || opts.action === 'remove')) {
     console.error(`${red}Informe o ID da capability.${reset}`);
     process.exit(1);
@@ -6412,6 +6411,7 @@ function runCapabilities(opts) {
       console.error(`${red}ID inválido para capability:${reset} ${opts.id}`);
       process.exit(1);
     }
+    ensureDir(capsDir);
     const dir = path.join(capsDir, safeId);
     ensureDir(dir);
     const manifest = capabilityManifestPath(opts.dir, safeId);

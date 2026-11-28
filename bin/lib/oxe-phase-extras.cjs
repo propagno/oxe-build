@@ -159,6 +159,7 @@ function rehearseRollback(root, base) {
     git(wt, ['revert', '--abort']);
     git(root, ['worktree', 'remove', '--force', wt]); // no links inside: a plain checkout of HEAD
     try { fs.rmSync(wt, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { if (fs.existsSync(wsDir) && fs.readdirSync(wsDir).length === 0) fs.rmdirSync(wsDir); } catch { /* ignore */ }
     git(root, ['worktree', 'prune']);
   }
 }
