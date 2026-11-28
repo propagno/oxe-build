@@ -677,6 +677,8 @@ interface OxeClient {
     primer: (opts?: Record<string, unknown>) => Record<string, unknown>;
     onboard: (opts?: Record<string, unknown>) => Record<string, unknown>;
     ciParity: (opts?: Record<string, unknown>) => Record<string, unknown>;
+    gc: (opts?: Record<string, unknown>) => Record<string, unknown>;
+    resume: (opts?: Record<string, unknown>) => Record<string, unknown>;
     reevaluate: (opts?: Record<string, unknown>) => Record<string, unknown>;
     agents: {
         list: (opts?: Record<string, unknown>) => Array<Record<string, unknown>>;

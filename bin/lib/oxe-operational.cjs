@@ -271,6 +271,10 @@ function preferExistingPath(primaryPath, fallbackPath) {
 function resolveEffectiveSession(projectRoot, explicitSession) {
   if (explicitSession) return String(explicitSession).trim().replace(/\\/g, '/');
   try {
+    const ptr = require('./oxe-state.cjs').readActiveSessionPointer(projectRoot);
+    if (ptr) return ptr;
+  } catch { /* ignore */ }
+  try {
     const health = loadProjectHealth();
     if (health && typeof health.resolveActiveSession === 'function') {
       const active = health.resolveActiveSession(projectRoot);
@@ -6785,7 +6789,8 @@ function stateSnapshot(projectRoot, activeSession) {
   let doc = null;
   try { doc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { doc = null; }
   const checkpointFailed = ((doc && doc.tasks) || []).filter((t) => t && !t.done && t.checkpoint_failed).map((t) => t.id);
-  return require('./oxe-state.cjs').buildStateJson({ program, run: readRunState(projectRoot, activeSession) || {}, work, changes, checkpointFailed });
+  const effSession = resolveEffectiveSession(projectRoot, activeSession);
+  return require('./oxe-state.cjs').buildStateJson({ activeSession: effSession, program, run: readRunState(projectRoot, activeSession) || {}, work, changes, checkpointFailed });
 }
 
 /** OXB-121: `oxe-cc state validate [--strict]` and `state sync [--dry-run]`. */
@@ -13366,6 +13371,105 @@ function runtimeOxeGc(projectRoot, options = {}) {
   return require('./oxe-gc.cjs').runOxeGc(projectRoot, options);
 }
 
+/**
+ * 1.23.0 (OXB-230-22): Concise single-screen resume brief reading canonical sources
+ * (state.json / STATE.md, PROGRAM.json, DELIVER.json, git status) without stale root drift.
+ */
+function buildResumeBrief(projectRoot, options = {}) {
+  const rootAbs = path.resolve(projectRoot || process.cwd());
+  const activeSession = resolveEffectiveSession(rootAbs, options.session || null);
+  const paths = resolveRuntimeArtifactPaths(rootAbs, activeSession);
+  const programDir = paths.programDir || path.join(rootAbs, '.oxe', 'program');
+  let program = null;
+  try { program = require('./oxe-program.cjs').readProgram(programDir); } catch { program = null; }
+  const phases = (program && Array.isArray(program.phases)) ? program.phases : [];
+  const closedPhases = phases.filter((p) => p && p.status === 'closed').length;
+  const activePhaseObj = program && program.active_phase
+    ? phases.find((p) => p && p.id === program.active_phase) || null
+    : null;
+  const pendingPhaseObj = phases.find((p) => p && p.status === 'pending') || null;
+
+  let deliver = null;
+  try {
+    const ds = require('./oxe-deliver-engine.cjs').getDeliveryStatus(rootAbs, { session: activeSession });
+    if (ds && ds.exists && ds.state) {
+      deliver = {
+        deliver_id: ds.deliver_id,
+        status: ds.state.status,
+        approval_mode: ds.state.approval_mode,
+        progress: ds.progress,
+      };
+    }
+  } catch { deliver = null; }
+
+  let branch = null;
+  let dirtyFiles = 0;
+  try {
+    const b = spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: rootAbs, encoding: 'utf8', windowsHide: true });
+    if (b.status === 0) branch = String(b.stdout || '').trim() || null;
+    const st = spawnSync('git', ['status', '--porcelain'], { cwd: rootAbs, encoding: 'utf8', windowsHide: true });
+    if (st.status === 0) dirtyFiles = String(st.stdout || '').split(/\r?\n/).filter(Boolean).length;
+  } catch { /* non-git */ }
+
+  let openCrs = 0;
+  try {
+    openCrs = require('./oxe-change.cjs').listChanges(programDir).filter((c) => c && c.status === 'open').length;
+  } catch { openCrs = 0; }
+
+  let nextCommand = 'oxe-cc status';
+  let nextReason = 'Verificar status do projeto';
+  if (deliver && deliver.status !== 'DELIVERED' && deliver.status !== 'CANCELLED') {
+    nextCommand = deliver.status === 'DESIGN_REVIEW' ? 'oxe-cc deliver approve' : 'oxe-cc deliver next --json';
+    nextReason = `Entrega autônoma ${deliver.deliver_id} em ${deliver.status}`;
+  } else if (activePhaseObj) {
+    nextCommand = `oxe-cc phase close ${activePhaseObj.id}`;
+    nextReason = `Fase ${activePhaseObj.id} ativa (${activePhaseObj.status}): ${activePhaseObj.title}`;
+  } else if (pendingPhaseObj) {
+    nextCommand = `oxe-cc program start ${pendingPhaseObj.id}`;
+    nextReason = `Iniciar próxima fase ${pendingPhaseObj.id}: ${pendingPhaseObj.title}`;
+  } else if (phases.length > 0 && closedPhases === phases.length) {
+    nextCommand = 'oxe-cc doctor --ci-parity --json';
+    nextReason = `Todas as ${phases.length}/${phases.length} fases fechadas — pronto para validação pré-push`;
+  }
+
+  return {
+    oxeResumeSchema: 1,
+    ok: true,
+    projectRoot: rootAbs,
+    active_session: activeSession,
+    branch,
+    dirty_files: dirtyFiles,
+    program: phases.length
+      ? {
+        active_phase: activePhaseObj ? activePhaseObj.id : null,
+        active_phase_title: activePhaseObj ? activePhaseObj.title : null,
+        closed: closedPhases,
+        total: phases.length,
+      }
+      : null,
+    deliver,
+    open_crs: openCrs,
+    next_command: nextCommand,
+    next_reason: nextReason,
+  };
+}
+
+function formatResumeText(brief) {
+  const lines = [
+    `OXE Resume — ${path.basename(brief.projectRoot)}`,
+    `Sessão ativa: ${brief.active_session || '(raiz)'} · Branch: ${brief.branch || 'sem git'} (${brief.dirty_files} alteração(ões) local(is))`,
+  ];
+  if (brief.program) {
+    lines.push(`Programa: ${brief.program.closed}/${brief.program.total} fases fechadas${brief.program.active_phase ? ` · Ativa: ${brief.program.active_phase} (${brief.program.active_phase_title || ''})` : ''}`);
+  }
+  if (brief.deliver) {
+    lines.push(`Deliver: ${brief.deliver.deliver_id} · ${brief.deliver.status} (${brief.deliver.progress.closed}/${brief.deliver.progress.total} fases, modo ${brief.deliver.approval_mode})`);
+  }
+  if (brief.open_crs > 0) lines.push(`Pendências: ${brief.open_crs} CR(s) aberto(s)`);
+  lines.push(`Próximo passo: ${brief.next_command}  # ${brief.next_reason}`);
+  return `${lines.join('\n')}\n`;
+}
+
 module.exports = {
   relatedTestsCommand,
   relatedRedsOfTask,
@@ -13590,5 +13694,7 @@ module.exports = {
   runtimeDeliverAdvance,
   runtimeDeliverRun,
   runtimeOxeGc,
+  buildResumeBrief,
+  formatResumeText,
   resolveEffectiveSession,
 };

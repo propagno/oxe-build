@@ -961,6 +961,30 @@ function createOpsCommandRegistry(deps = {}) {
         }
       },
     },
+    {
+      name: 'resume',
+      handler(argv) {
+        if (argv.includes('--help') || argv.includes('-h')) {
+          console.log(`\n  oxe-cc resume [--session <id>] [--dir <pasta>] [--json]
+  Resumo de retomada em < 20 linhas a partir das fontes canônicas (state.json, PROGRAM.json, DELIVER.json e git).\n`);
+          return;
+        }
+        const o = { dir: process.cwd(), session: null, json: false };
+        for (let i = 0; i < argv.length; i += 1) {
+          const a = argv[i];
+          if (a === '--json') o.json = true;
+          else if (a === '--session' && argv[i + 1]) o.session = String(argv[++i]);
+          else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+          else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+        }
+        const brief = oxeOperational.buildResumeBrief(o.dir, { session: o.session });
+        if (o.json) {
+          console.log(JSON.stringify(brief, null, 2));
+        } else {
+          process.stdout.write(oxeOperational.formatResumeText(brief));
+        }
+      },
+    },
   ]);
 }
 
