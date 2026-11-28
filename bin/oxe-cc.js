@@ -2050,6 +2050,15 @@ function runInstall(opts) {
     if (fs.existsSync(cRules)) copyDir(cRules, path.join(cursorBase, 'rules'), copyOpts, idePathRewrite);
   }
 
+  // Always mirror flat OXE skills (~/.oxe/skills/*.md or <project>/.oxe/skills/*.md with --ide-local)
+  // on any non-oxeOnly install so OxeChat and universal `.oxe/skills/` hosts expose `/oxe-*` commands automatically.
+  if (!opts.oxeOnly) {
+    const cCmdOxeSkills = path.join(PKG_ROOT, '.cursor', 'commands');
+    if (fs.existsSync(cCmdOxeSkills)) {
+      oxeAgentInstall.installOxeSkills(cCmdOxeSkills, agentPaths.oxeSkillsDir, copyOpts, idePathRewrite);
+    }
+  }
+
   const doAgentClis = opts.copilotCli || opts.allAgents;
   if (doAgentClis) {
     const cCmd = path.join(PKG_ROOT, '.cursor', 'commands');
@@ -2074,7 +2083,6 @@ function runInstall(opts) {
           copyOpts
         );
       }
-      oxeAgentInstall.installOxeSkills(cCmd, agentPaths.oxeSkillsDir, copyOpts, idePathRewrite);
     } else {
       console.warn(`${yellow}aviso:${reset} pasta ausente ${cCmd} — ignorando comandos CLI`);
     }
@@ -2133,7 +2141,6 @@ function runInstall(opts) {
         logO,
         logW
       );
-      oxeAgentInstall.installOxeSkills(cCmdAgents, agentPaths.oxeSkillsDir, copyOpts, idePathRewrite, logO, logW);
     }
   }
 
